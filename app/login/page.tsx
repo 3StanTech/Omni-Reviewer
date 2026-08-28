@@ -12,17 +12,22 @@ async function loginAction(
 ): Promise<string | null> {
   "use server";
 
-  if (!process.env.APP_PASSWORD || !process.env.AUTH_SECRET) {
+  if (!process.env.AUTH_SECRET || !process.env.DATABASE_URL) {
     return "Server is misconfigured. Try again later.";
   }
 
+  const emailRaw = formData.get("email");
   const password = formData.get("password");
+  if (typeof emailRaw !== "string" || emailRaw.trim().length === 0) {
+    return "Email is required.";
+  }
   if (typeof password !== "string" || password.length === 0) {
     return "Password is required.";
   }
 
   try {
     await signIn("credentials", {
+      email: emailRaw.trim().toLowerCase(),
       password,
       redirectTo: "/",
     });
@@ -35,7 +40,7 @@ async function loginAction(
       ) {
         return "Server is misconfigured. Try again later.";
       }
-      return "Invalid password.";
+      return "Invalid email or password.";
     }
     throw error;
   }
@@ -54,7 +59,7 @@ export default function LoginPage() {
               Omni-Reviewer
             </h1>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Late-night study desk. Enter the app password to continue.
+              Late-night study desk. Sign in with your invite email and password.
             </p>
           </div>
         </div>

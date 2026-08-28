@@ -1,16 +1,19 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { CredentialsSignin } from "next-auth";
+import { eq } from "drizzle-orm";
 
 import { authConfig } from "./auth.config";
-import { safeEqualPassword } from "./lib/auth-utils";
+import { verifyPassword } from "./lib/auth-utils";
+import { db } from "./lib/db";
+import { users } from "./lib/schema";
 
 class ServerMisconfigured extends CredentialsSignin {
   code = "server_misconfigured";
 }
 
-class InvalidPassword extends CredentialsSignin {
-  code = "invalid_password";
+class InvalidCredentials extends CredentialsSignin {
+  code = "invalid_credentials";
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -18,30 +21,45 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Credentials({
       id: "credentials",
-      name: "Password",
+      name: "Email and password",
       credentials: {
+        email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        const appPassword = process.env.APP_PASSWORD;
         const authSecret = process.env.AUTH_SECRET;
+        const databaseUrl = process.env.DATABASE_URL;
 
-        if (!appPassword || !authSecret) {
+        if (!authSecret || !databaseUrl) {
           throw new ServerMisconfigured();
         }
 
+        const emailRaw =
+          typeof credentials?.email === "string" ? credentials.email : "";
         const password =
           typeof credentials?.password === "string"
             ? credentials.password
             : "";
+        const email = emailRaw.trim().toLowerCase();
 
-        if (!password || !safeEqualPassword(password, appPassword)) {
-          throw new InvalidPassword();
+        if (!email || !password) {
+          throw new InvalidCredentials();
+        }
+
+        const [user] = await db
+          .select()
+          .from(users)
+          .where(eq(users.email, email))
+          .limit(1);
+
+        if (!user || !(await verifyPassword(password, user.passwordHash))) {
+          throw new InvalidCredentials();
         }
 
         return {
-          id: "tristan",
-          name: "tristan",
+          id: user.id,
+          email: user.email,
+          name: user.name,
         };
       },
     }),

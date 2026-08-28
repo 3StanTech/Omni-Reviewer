@@ -36,7 +36,8 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, context: RouteContext) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -63,12 +64,12 @@ export async function PATCH(request: Request, context: RouteContext) {
     );
   }
 
-  const existing = await getReviewer(id);
+  const existing = await getReviewer(id, userId);
   if (!existing) {
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }
 
-  const row = await renameReviewer(id, parsed.data.name);
+  const row = await renameReviewer(id, userId, parsed.data.name);
   if (!row) {
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }
@@ -78,12 +79,13 @@ export async function PATCH(request: Request, context: RouteContext) {
 
 export async function DELETE(_request: Request, context: RouteContext) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await context.params;
-  const row = await deleteReviewer(id);
+  const row = await deleteReviewer(id, userId);
   if (!row) {
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }

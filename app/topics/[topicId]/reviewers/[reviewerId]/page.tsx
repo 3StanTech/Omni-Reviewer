@@ -1,5 +1,6 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
+import { auth } from "@/auth";
 import { AppShell } from "@/components/app-shell";
 import type { ViewsPayload } from "@/components/generate-button";
 import { ReviewerWorkspace } from "@/components/reviewer-workspace";
@@ -19,18 +20,23 @@ type PageProps = {
 };
 
 export default async function ReviewerPage({ params }: PageProps) {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) {
+    redirect("/login");
+  }
+
   const { topicId, reviewerId } = await params;
 
-  const [topic, reviewer] = await Promise.all([
-    getTopic(topicId),
-    getReviewer(reviewerId),
-  ]);
+  const topic = await getTopic(topicId, userId);
   if (!topic) notFound();
+
+  const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer || reviewer.topicId !== topicId) notFound();
 
   const [sourceRows, viewMeta] = await Promise.all([
-    listSourcesForUi(reviewerId),
-    listViewMetaByReviewer(reviewerId),
+    listSourcesForUi(reviewerId, userId),
+    listViewMetaByReviewer(reviewerId, userId),
   ]);
   const initialSources: SourceListItem[] = sourceRows.map((s) => ({
     id: s.id,
@@ -59,6 +65,7 @@ export default async function ReviewerPage({ params }: PageProps) {
       kind: row.kind,
       content: "",
       contentJson: null,
+      modelId: row.modelId ?? null,
       generatedAt: row.generatedAt.toISOString(),
     };
     if (row.kind === "locked_in") initialViews.locked_in = placeholder;
@@ -70,6 +77,7 @@ export default async function ReviewerPage({ params }: PageProps) {
   return (
     <AppShell>
       <ReviewerWorkspace
+        userId={userId}
         topicId={topic.id}
         topicName={topic.name}
         reviewerId={reviewer.id}

@@ -58,28 +58,30 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, context: RouteContext) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: reviewerId } = await context.params;
-  const reviewer = await getReviewer(reviewerId);
+  const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer) {
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }
 
-  const rows = await listSourcesForUi(reviewerId);
+  const rows = await listSourcesForUi(reviewerId, userId);
   return NextResponse.json(rows.map(serializeSource));
 }
 
 export async function POST(request: Request, context: RouteContext) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: reviewerId } = await context.params;
-  const reviewer = await getReviewer(reviewerId);
+  const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer) {
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }
@@ -121,7 +123,7 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  const expectedPrefix = `reviewers/${reviewerId}/`;
+  const expectedPrefix = `users/${userId}/reviewers/${reviewerId}/`;
   if (!parsed.data.blob_pathname.startsWith(expectedPrefix)) {
     return NextResponse.json(
       {

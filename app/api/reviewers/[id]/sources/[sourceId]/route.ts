@@ -16,18 +16,19 @@ type RouteContext = {
 
 export async function DELETE(_request: Request, context: RouteContext) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: reviewerId, sourceId } = await context.params;
 
-  const reviewer = await getReviewer(reviewerId);
+  const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer) {
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }
 
-  const source = await getSourceForReviewer(reviewerId, sourceId);
+  const source = await getSourceForReviewer(reviewerId, sourceId, userId);
   if (!source) {
     return NextResponse.json({ error: "Source not found" }, { status: 404 });
   }

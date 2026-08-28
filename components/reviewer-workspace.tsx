@@ -19,6 +19,7 @@ import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
 
 type ReviewerWorkspaceProps = {
+  userId: string;
   topicId: string;
   topicName: string;
   reviewerId: string;
@@ -53,6 +54,7 @@ function stampFromViews(views: ViewsPayload): string | null {
 }
 
 export function ReviewerWorkspace({
+  userId,
   topicId,
   topicName,
   reviewerId,
@@ -158,7 +160,45 @@ export function ReviewerWorkspace({
         setRedoError(await readApiError(res));
         return;
       }
-      const data = (await res.json()) as ViewsPayload;
+      const data = (await res.json()) as ViewsPayload & {
+        jobId?: string;
+        views?: ViewsPayload;
+      };
+      if (data.jobId) {
+        const maxAttempts = 180;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const poll = await fetch(
+            `/api/reviewers/${reviewerId}/generation/${data.jobId}`,
+          );
+          if (!poll.ok) {
+            setRedoError(await readApiError(poll));
+            return;
+          }
+          const job = (await poll.json()) as {
+            status: string;
+            views?: ViewsPayload;
+            error?: { message?: string } | string | null;
+          };
+          if (
+            job.status === "succeeded" ||
+            job.status === "failed" ||
+            job.status === "partial"
+          ) {
+            if (job.views) applyGenerated(job.views);
+            if (job.status !== "succeeded") {
+              const msg =
+                typeof job.error === "string"
+                  ? job.error
+                  : job.error?.message;
+              if (msg) setRedoError(msg);
+            }
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        setRedoError("Generation is taking too long. Refresh and check views.");
+        return;
+      }
       applyGenerated(data);
     } catch {
       setRedoError("Generation failed. Try again in a moment.");
@@ -189,6 +229,7 @@ export function ReviewerWorkspace({
       </div>
 
       <SourcePanel
+        userId={userId}
         reviewerId={reviewerId}
         initialSources={initialSources}
         onSourcesChange={setSources}

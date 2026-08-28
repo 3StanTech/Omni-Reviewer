@@ -31,8 +31,36 @@ export const viewKindEnum = pgEnum("view_kind", [
   "carded",
 ]);
 
+export const generationJobStatusEnum = pgEnum("generation_job_status", [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "partial",
+]);
+
+export const generationJobStepEnum = pgEnum("generation_job_step", [
+  "locked_in",
+  "summary",
+  "test_me",
+  "carded",
+]);
+
+export const users = pgTable("users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  name: text("name"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const topics = pgTable("topics", {
   id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -80,6 +108,7 @@ export const views = pgTable(
     kind: viewKindEnum("kind").notNull(),
     content: text("content").notNull().default(""),
     contentJson: jsonb("content_json"),
+    modelId: text("model_id"),
     generatedAt: timestamp("generated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -87,7 +116,38 @@ export const views = pgTable(
   (table) => [unique("views_reviewer_id_kind_unique").on(table.reviewerId, table.kind)],
 );
 
-export const topicsRelations = relations(topics, ({ many }) => ({
+export const generationJobs = pgTable("generation_jobs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  reviewerId: uuid("reviewer_id")
+    .notNull()
+    .references(() => reviewers.id, { onDelete: "cascade" }),
+  status: generationJobStatusEnum("status").notNull(),
+  step: generationJobStepEnum("step"),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  modelUsed: text("model_used"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export const usersRelations = relations(users, ({ many }) => ({
+  topics: many(topics),
+  generationJobs: many(generationJobs),
+}));
+
+export const topicsRelations = relations(topics, ({ one, many }) => ({
+  user: one(users, {
+    fields: [topics.userId],
+    references: [users.id],
+  }),
   reviewers: many(reviewers),
 }));
 
@@ -98,6 +158,7 @@ export const reviewersRelations = relations(reviewers, ({ one, many }) => ({
   }),
   sources: many(sources),
   views: many(views),
+  generationJobs: many(generationJobs),
 }));
 
 export const sourcesRelations = relations(sources, ({ one }) => ({
@@ -114,6 +175,19 @@ export const viewsRelations = relations(views, ({ one }) => ({
   }),
 }));
 
+export const generationJobsRelations = relations(generationJobs, ({ one }) => ({
+  user: one(users, {
+    fields: [generationJobs.userId],
+    references: [users.id],
+  }),
+  reviewer: one(reviewers, {
+    fields: [generationJobs.reviewerId],
+    references: [reviewers.id],
+  }),
+}));
+
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
 export type Topic = typeof topics.$inferSelect;
 export type NewTopic = typeof topics.$inferInsert;
 export type Reviewer = typeof reviewers.$inferSelect;
@@ -122,3 +196,5 @@ export type Source = typeof sources.$inferSelect;
 export type NewSource = typeof sources.$inferInsert;
 export type StudyView = typeof views.$inferSelect;
 export type NewStudyView = typeof views.$inferInsert;
+export type GenerationJob = typeof generationJobs.$inferSelect;
+export type NewGenerationJob = typeof generationJobs.$inferInsert;

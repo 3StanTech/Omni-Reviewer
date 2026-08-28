@@ -4,6 +4,7 @@ export type SerializedView = {
   kind: string;
   content: string;
   contentJson: unknown | null;
+  modelId?: string | null;
   generatedAt: string;
 };
 
@@ -20,6 +21,7 @@ export function serializeView(row: {
   kind: string;
   content: string;
   contentJson: unknown | null;
+  modelId?: string | null;
   generatedAt: Date;
 }): SerializedView {
   return {
@@ -28,6 +30,7 @@ export function serializeView(row: {
     kind: row.kind,
     content: row.content,
     contentJson: row.contentJson ?? null,
+    modelId: row.modelId ?? null,
     generatedAt: row.generatedAt.toISOString(),
   };
 }
@@ -48,6 +51,7 @@ export function viewsPayloadFromRows(
     kind: string;
     content: string;
     contentJson: unknown | null;
+    modelId?: string | null;
     generatedAt: Date;
   }>,
 ): ViewsPayload {

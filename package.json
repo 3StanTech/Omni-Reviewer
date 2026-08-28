@@ -9,12 +9,13 @@
     "lint": "eslint",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
+    "user:create": "tsx scripts/create-user.ts",
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-sdk/google": "^4.0.44",
     "@base-ui/react": "^1.7.0",
     "@neondatabase/serverless": "^1.1.0",
+    "@openrouter/ai-sdk-provider": "^3.0.0",
     "@phosphor-icons/react": "^2.1.10",
     "@vercel/blob": "^2.8.0",
     "ai": "^7.0.64",
@@ -41,6 +42,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.12",
     "typescript": "^5",
     "vitest": "^4.1.10"
   }

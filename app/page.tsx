@@ -1,3 +1,6 @@
+import { redirect } from "next/navigation";
+
+import { auth } from "@/auth";
 import { AppShell } from "@/components/app-shell";
 import type { ReviewerListItem } from "@/components/reviewer-list";
 import { StudyHome } from "@/components/study-home";
@@ -11,8 +14,14 @@ type HomeProps = {
 };
 
 export default async function HomePage({ searchParams }: HomeProps) {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) {
+    redirect("/login");
+  }
+
   const sp = await searchParams;
-  const topics = await listTopics();
+  const topics = await listTopics(userId);
 
   const serializedTopics: TopicListItem[] = topics.map((t) => ({
     id: t.id,
@@ -30,7 +39,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
     topics.find((t) => t.id === selectedId) ?? null;
 
   const reviewers = selectedId
-    ? await listReviewersByTopic(selectedId)
+    ? await listReviewersByTopic(selectedId, userId)
     : [];
 
   const serializedReviewers: ReviewerListItem[] = reviewers.map((r) => ({

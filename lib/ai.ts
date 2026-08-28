@@ -1,17 +1,26 @@
 import "server-only";
 
-import { createGoogle } from "@ai-sdk/google";
-import { generateText } from "ai";
+import { generateObject, generateText, NoObjectGeneratedError } from "ai";
+import { z } from "zod";
 
+import {
+  GenerationError,
+  toGenerationError,
+} from "@/lib/generation-errors";
+import { getOpenRouterModel } from "@/lib/openrouter";
 import {
   cardedPrompt,
   lockedInPrompt,
-  repairJsonPrompt,
   summaryPrompt,
   testMePrompt,
 } from "@/lib/prompts";
+import type { CardedItem, TestMeItem } from "@/lib/types";
 
-/** Thrown when structured JSON from the model cannot be parsed after one repair attempt. */
+export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision";
+
+export type StudyPackStep = "locked_in" | "summary" | "test_me" | "carded";
+
+/** Thrown when structured JSON from the model cannot be parsed after fallbacks. */
 export class StudyPackJsonError extends Error {
   readonly kind: "test_me" | "carded";
   readonly raw: string;
@@ -24,29 +33,117 @@ export class StudyPackJsonError extends Error {
   }
 }
 
-export function getModelId(): string {
-  return process.env.AI_MODEL || "gemini-3.7-flash";
-}
+const testMeItemSchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  choices: z.array(z.string()).optional(),
+  answer: z.string(),
+  explanation: z.string(),
+});
 
-// Unpaid Gemini Developer API traffic (prompts, files, outputs) may be used to improve Google products.
-function getGoogle() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not set");
+const cardedItemSchema = z.object({
+  id: z.string(),
+  front: z.string(),
+  back: z.string(),
+});
+
+const MAX_ATTEMPTS = 3;
+
+function modelIdForPurpose(purpose: GenerationPurpose): string {
+  switch (purpose) {
+    case "locked_in":
+      return (
+        process.env.AI_MODEL_LOCKED_IN ||
+        process.env.AI_MODEL ||
+        "z-ai/glm-5.2:free"
+      );
+    case "summary":
+      return (
+        process.env.AI_MODEL_SUMMARY ||
+        process.env.AI_MODEL ||
+        "z-ai/glm-5.2:free"
+      );
+    case "json":
+      return (
+        process.env.AI_MODEL_JSON ||
+        process.env.AI_MODEL ||
+        "z-ai/glm-5.2:free"
+      );
+    case "vision":
+      return (
+        process.env.AI_MODEL_VISION ||
+        process.env.AI_MODEL ||
+        "minimax/minimax-m3:free"
+      );
   }
-  return createGoogle({ apiKey });
 }
 
-function getModel() {
-  return getGoogle()(getModelId());
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function generateTextFromPrompt(prompt: string): Promise<string> {
-  const { text } = await generateText({
-    model: getModel(),
-    prompt,
+function jitterDelay(attempt: number): number {
+  const base = 400 * 2 ** (attempt - 1);
+  const jitter = Math.floor(Math.random() * 250);
+  return base + jitter;
+}
+
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const classified = toGenerationError(err);
+      if (!classified.retryable || attempt === MAX_ATTEMPTS) {
+        throw classified;
+      }
+      await sleep(jitterDelay(attempt));
+    }
+  }
+  throw toGenerationError(lastError);
+}
+
+function extractModelUsed(
+  result: { response?: { modelId?: string }; providerMetadata?: unknown },
+  requested: string,
+): string {
+  const fromResponse = result.response?.modelId;
+  if (typeof fromResponse === "string" && fromResponse.trim()) {
+    return fromResponse;
+  }
+  const meta = result.providerMetadata as
+    | { openrouter?: { model?: string } }
+    | undefined;
+  const fromMeta = meta?.openrouter?.model;
+  if (typeof fromMeta === "string" && fromMeta.trim()) {
+    return fromMeta;
+  }
+  return requested;
+}
+
+export function getModelId(purpose: GenerationPurpose = "locked_in"): string {
+  return modelIdForPurpose(purpose);
+}
+
+export async function generateTextFromPrompt(
+  prompt: string,
+  options: { purpose: GenerationPurpose } = { purpose: "locked_in" },
+): Promise<{ text: string; modelUsed: string }> {
+  const modelId = modelIdForPurpose(options.purpose);
+  const healJson = options.purpose === "json";
+
+  return withRetry(async () => {
+    const { text, response, providerMetadata } = await generateText({
+      model: getOpenRouterModel(modelId, { healJson }),
+      prompt,
+    });
+    return {
+      text: text.trim(),
+      modelUsed: extractModelUsed({ response, providerMetadata }, modelId),
+    };
   });
-  return text.trim();
 }
 
 export async function visionReadImages(
@@ -57,24 +154,29 @@ export async function visionReadImages(
     throw new Error("visionReadImages requires at least one image");
   }
 
-  const { text } = await generateText({
-    model: getModel(),
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: instruction },
-          ...images.map((img) => ({
-            type: "image" as const,
-            image: img.bytes,
-            mediaType: img.mime,
-          })),
-        ],
-      },
-    ],
+  const modelId = modelIdForPurpose("vision");
+
+  const result = await withRetry(async () => {
+    const { text } = await generateText({
+      model: getOpenRouterModel(modelId),
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: instruction },
+            ...images.map((img) => ({
+              type: "image" as const,
+              image: img.bytes,
+              mediaType: img.mime,
+            })),
+          ],
+        },
+      ],
+    });
+    return text.trim();
   });
 
-  return text.trim();
+  return result;
 }
 
 function stripJsonFences(raw: string): string {
@@ -82,7 +184,6 @@ function stripJsonFences(raw: string): string {
   const fenced = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i);
   if (fenced?.[1]) return fenced[1].trim();
 
-  // Model sometimes adds prose around a JSON array — extract outermost array.
   const start = trimmed.indexOf("[");
   const end = trimmed.lastIndexOf("]");
   if (start !== -1 && end > start) {
@@ -100,139 +201,228 @@ function parseJsonArray(raw: string): unknown[] {
   return parsed;
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function validateTestMeItems(items: unknown[]): void {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new SyntaxError(`test_me[${i}] must be an object`);
-    }
-    const obj = item as Record<string, unknown>;
-    if (typeof obj.id !== "string") {
-      throw new SyntaxError(`test_me[${i}].id must be a string`);
-    }
-    if (typeof obj.question !== "string") {
-      throw new SyntaxError(`test_me[${i}].question must be a string`);
-    }
-    if (typeof obj.answer !== "string") {
-      throw new SyntaxError(`test_me[${i}].answer must be a string`);
-    }
-    if (typeof obj.explanation !== "string") {
-      throw new SyntaxError(`test_me[${i}].explanation must be a string`);
-    }
-    if (obj.choices !== undefined && !isStringArray(obj.choices)) {
-      throw new SyntaxError(`test_me[${i}].choices must be a string[] when present`);
-    }
-  }
-}
-
-function validateCardedItems(items: unknown[]): void {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new SyntaxError(`carded[${i}] must be an object`);
-    }
-    const obj = item as Record<string, unknown>;
-    if (typeof obj.id !== "string") {
-      throw new SyntaxError(`carded[${i}].id must be a string`);
-    }
-    if (typeof obj.front !== "string") {
-      throw new SyntaxError(`carded[${i}].front must be a string`);
-    }
-    if (typeof obj.back !== "string") {
-      throw new SyntaxError(`carded[${i}].back must be a string`);
-    }
-  }
-}
-
-function parseAndValidateArray(
-  kind: "test_me" | "carded",
+function tryParseJsonArrayLocally<T>(
+  elementSchema: z.ZodType<T>,
   raw: string,
-): unknown[] {
-  const items = parseJsonArray(raw);
-  if (kind === "test_me") {
-    validateTestMeItems(items);
-  } else {
-    validateCardedItems(items);
-  }
-  return items;
-}
-
-async function parseJsonWithRepair(
-  kind: "test_me" | "carded",
-  raw: string,
-): Promise<unknown> {
+): T[] | null {
+  if (!raw.trim()) return null;
   try {
-    return parseAndValidateArray(kind, raw);
-  } catch (firstError) {
-    const repaired = await generateTextFromPrompt(repairJsonPrompt(kind, raw));
-    try {
-      return parseAndValidateArray(kind, repaired);
-    } catch (secondError) {
-      const detail =
-        secondError instanceof Error
-          ? secondError.message
-          : firstError instanceof Error
-            ? firstError.message
-            : "unknown parse error";
-      throw new StudyPackJsonError(
-        kind,
-        `Failed to parse ${kind} JSON after repair: ${detail}`,
-        repaired,
-      );
-    }
+    return elementSchema.array().parse(parseJsonArray(raw));
+  } catch {
+    return null;
   }
 }
 
-export async function generateLockedIn(
-  extractedTexts: { filename: string; text: string }[],
-): Promise<string> {
-  return generateTextFromPrompt(lockedInPrompt(extractedTexts));
+async function generateJsonArray<T>(args: {
+  kind: "test_me" | "carded";
+  prompt: string;
+  elementSchema: z.ZodType<T>;
+}): Promise<{ items: T[]; modelUsed: string; raw: string }> {
+  const modelId = modelIdForPurpose("json");
+  let lastRaw = "";
+
+  try {
+    return await withRetry(async () => {
+      try {
+        const result = await generateObject({
+          model: getOpenRouterModel(modelId, { healJson: true }),
+          output: "array",
+          schema: args.elementSchema,
+          prompt: args.prompt,
+        });
+        return {
+          items: result.object as T[],
+          modelUsed: extractModelUsed(result, modelId),
+          raw: JSON.stringify(result.object),
+        };
+      } catch (err) {
+        // Last resort local parse (no extra model call) when healing still fails.
+        if (NoObjectGeneratedError.isInstance(err) && err.text) {
+          lastRaw = err.text;
+          const parsed = tryParseJsonArrayLocally(args.elementSchema, err.text);
+          if (parsed) {
+            return {
+              items: parsed,
+              modelUsed: extractModelUsed(
+                { response: err.response },
+                modelId,
+              ),
+              raw: err.text,
+            };
+          }
+        }
+        throw err;
+      }
+    });
+  } catch (objectError) {
+    const parsed = tryParseJsonArrayLocally(args.elementSchema, lastRaw);
+    if (parsed) {
+      return { items: parsed, modelUsed: modelId, raw: lastRaw };
+    }
+    const detail =
+      objectError instanceof Error ? objectError.message : "unknown parse error";
+    throw new StudyPackJsonError(
+      args.kind,
+      `Failed to parse ${args.kind} JSON: ${detail}`,
+      lastRaw,
+    );
+  }
 }
 
-export async function generateSummary(
-  lockedInMarkdown: string,
-): Promise<string> {
-  return generateTextFromPrompt(summaryPrompt(lockedInMarkdown));
-}
-
-export async function generateTestMe(
-  lockedInMarkdown: string,
-): Promise<unknown> {
-  const testMeRaw = await generateTextFromPrompt(testMePrompt(lockedInMarkdown));
-  return parseJsonWithRepair("test_me", testMeRaw);
-}
-
-export async function generateCarded(
-  summaryMarkdown: string,
-): Promise<unknown> {
-  const cardedRaw = await generateTextFromPrompt(cardedPrompt(summaryMarkdown));
-  return parseJsonWithRepair("carded", cardedRaw);
-}
+export type StudyPackStepPayload =
+  | { kind: "locked_in"; content: string }
+  | { kind: "summary"; content: string }
+  | { kind: "test_me"; content: TestMeItem[] }
+  | { kind: "carded"; content: CardedItem[] };
 
 /**
  * Sequential study-pack pipeline:
  * Locked In (sources) → Summary (Locked In) → Test Me (Locked In) → Carded (Summary).
+ * Calls onStep after each successful step so the route can persist immediately.
  */
 export async function generateStudyPack(input: {
   extractedTexts: { filename: string; text: string }[];
+  onStep?: (event: {
+    step: StudyPackStep;
+    payload: StudyPackStepPayload;
+    modelUsed: string;
+  }) => void | Promise<void>;
 }): Promise<{
   lockedIn: string;
   summary: string;
-  testMe: unknown;
-  carded: unknown;
+  testMe: TestMeItem[];
+  carded: CardedItem[];
+  models: Partial<Record<StudyPackStep, string>>;
 }> {
   if (input.extractedTexts.length === 0) {
     throw new Error("generateStudyPack requires at least one extracted text");
   }
 
-  const lockedIn = await generateLockedIn(input.extractedTexts);
-  const summary = await generateSummary(lockedIn);
-  const testMe = await generateTestMe(lockedIn);
-  const carded = await generateCarded(summary);
+  const models: Partial<Record<StudyPackStep, string>> = {};
 
-  return { lockedIn, summary, testMe, carded };
+  const lockedInResult = await generateTextFromPrompt(
+    lockedInPrompt(input.extractedTexts),
+    { purpose: "locked_in" },
+  );
+  models.locked_in = lockedInResult.modelUsed;
+  await input.onStep?.({
+    step: "locked_in",
+    payload: { kind: "locked_in", content: lockedInResult.text },
+    modelUsed: lockedInResult.modelUsed,
+  });
+
+  const summaryResult = await generateTextFromPrompt(
+    summaryPrompt(lockedInResult.text),
+    { purpose: "summary" },
+  );
+  models.summary = summaryResult.modelUsed;
+  await input.onStep?.({
+    step: "summary",
+    payload: { kind: "summary", content: summaryResult.text },
+    modelUsed: summaryResult.modelUsed,
+  });
+
+  let testMe: TestMeItem[];
+  let testMeModel: string;
+  try {
+    const testMeResult = await generateJsonArray({
+      kind: "test_me",
+      prompt: testMePrompt(lockedInResult.text),
+      elementSchema: testMeItemSchema,
+    });
+    testMe = testMeResult.items;
+    testMeModel = testMeResult.modelUsed;
+  } catch (err) {
+    throw toGenerationError(
+      err instanceof StudyPackJsonError
+        ? err
+        : new StudyPackJsonError(
+            "test_me",
+            err instanceof Error ? err.message : "test_me failed",
+            "",
+          ),
+    );
+  }
+  models.test_me = testMeModel;
+  await input.onStep?.({
+    step: "test_me",
+    payload: { kind: "test_me", content: testMe },
+    modelUsed: testMeModel,
+  });
+
+  let carded: CardedItem[];
+  let cardedModel: string;
+  try {
+    const cardedResult = await generateJsonArray({
+      kind: "carded",
+      prompt: cardedPrompt(summaryResult.text),
+      elementSchema: cardedItemSchema,
+    });
+    carded = cardedResult.items;
+    cardedModel = cardedResult.modelUsed;
+  } catch (err) {
+    throw toGenerationError(
+      err instanceof StudyPackJsonError
+        ? err
+        : new StudyPackJsonError(
+            "carded",
+            err instanceof Error ? err.message : "carded failed",
+            "",
+          ),
+    );
+  }
+  models.carded = cardedModel;
+  await input.onStep?.({
+    step: "carded",
+    payload: { kind: "carded", content: carded },
+    modelUsed: cardedModel,
+  });
+
+  return {
+    lockedIn: lockedInResult.text,
+    summary: summaryResult.text,
+    testMe,
+    carded,
+    models,
+  };
 }
+
+export async function generateLockedIn(
+  extractedTexts: { filename: string; text: string }[],
+): Promise<string> {
+  const result = await generateTextFromPrompt(lockedInPrompt(extractedTexts), {
+    purpose: "locked_in",
+  });
+  return result.text;
+}
+
+export async function generateSummary(lockedInMarkdown: string): Promise<string> {
+  const result = await generateTextFromPrompt(summaryPrompt(lockedInMarkdown), {
+    purpose: "summary",
+  });
+  return result.text;
+}
+
+export async function generateTestMe(
+  lockedInMarkdown: string,
+): Promise<TestMeItem[]> {
+  const result = await generateJsonArray({
+    kind: "test_me",
+    prompt: testMePrompt(lockedInMarkdown),
+    elementSchema: testMeItemSchema,
+  });
+  return result.items;
+}
+
+export async function generateCarded(
+  summaryMarkdown: string,
+): Promise<CardedItem[]> {
+  const result = await generateJsonArray({
+    kind: "carded",
+    prompt: cardedPrompt(summaryMarkdown),
+    elementSchema: cardedItemSchema,
+  });
+  return result.items;
+}
+
+export { GenerationError };

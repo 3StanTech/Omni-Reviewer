@@ -6,6 +6,15 @@ export type IngestStatus = "ready" | "unprocessed" | "failed";
 
 export type ViewKind = "locked_in" | "summary" | "test_me" | "carded";
 
+export type GenerationJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "partial";
+
+export type GenerationJobStep = "locked_in" | "summary" | "test_me" | "carded";
+
 export type Topic = {
   id: string;
   name: string;
@@ -41,7 +50,21 @@ export type StudyView = {
   kind: ViewKind;
   content: string;
   contentJson: unknown | null;
+  modelId?: string | null;
   generatedAt: Date;
+};
+
+export type GenerationJob = {
+  id: string;
+  reviewerId: string;
+  status: GenerationJobStatus;
+  step: GenerationJobStep | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  modelUsed: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  finishedAt: Date | null;
 };
 
 export type TestMeItem = {

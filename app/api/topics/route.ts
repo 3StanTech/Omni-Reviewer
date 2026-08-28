@@ -26,17 +26,19 @@ function serializeTopic(row: {
 
 export async function GET() {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const rows = await listTopics();
+  const rows = await listTopics(userId);
   return NextResponse.json(rows.map(serializeTopic));
 }
 
 export async function POST(request: Request) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -61,6 +63,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const row = await createTopic(parsed.data.name);
+  const row = await createTopic(userId, parsed.data.name);
   return NextResponse.json(serializeTopic(row), { status: 201 });
 }

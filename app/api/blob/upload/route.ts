@@ -22,15 +22,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  let userId: string | null = null;
   if (body.type === "blob.generate-client-token") {
     const session = await auth();
-    if (!session) {
+    userId = session?.user?.id ?? null;
+    if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
 
   try {
-    const result = await handleClientUpload({ request, body });
+    const result = await handleClientUpload({ request, body, userId });
     return NextResponse.json(result);
   } catch (err) {
     const message =

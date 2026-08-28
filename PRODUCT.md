@@ -2,13 +2,13 @@
 
 ## What this is
 
-Omni-Reviewer is a signed-in, single-user personal study tool. One person uploads course material, then studies it through four generated study modes that stay on the pack until they choose to regenerate.
+Omni-Reviewer is a signed-in, invite-only personal study tool. Each invited person uploads their own course material, then studies it through four generated study modes that stay on the pack until they choose to regenerate.
 
-It is not multi-tenant, not a marketing site, and not a shared classroom product. Auth is a single shared password so a public deploy cannot spend generation credits without the gate.
+It is multi-user but not public signup: an operator creates accounts with a script. Friends cannot see each other's topics or packs. Auth is email plus password via Auth.js Credentials.
 
 ## Who it is for
 
-Tristan (or one operator) studying late at night from notes, PDFs, slides, and lecture media. Primary jobs:
+Tristan and invited friends studying late at night from notes, PDFs, slides, and lecture media. Primary jobs:
 
 1. Group study packs under topics.
 2. Attach sources to a pack.
@@ -19,14 +19,15 @@ Tristan (or one operator) studying late at night from notes, PDFs, slides, and l
 
 | Object | Role |
 | --- | --- |
-| **Topic** | Top-level wayfinding tab. Holds many reviewers. |
+| **User** | Invite-only account (email + password). Owns topics and generation jobs. |
+| **Topic** | Top-level wayfinding tab. Holds many reviewers. Scoped to one user. |
 | **Reviewer** | A study pack: sources + four independent study modes. |
 | **Source** | An uploaded file (PDF, image, text, video, audio) with an ingest status. |
 | **Study mode** | One of four persisted study surfaces for a reviewer (Locked In, Summary, Test Me, Carded). |
 
 ## Information architecture
 
-- `/login` - password only. No signup, no roles.
+- `/login` - email + password. No public signup, no roles.
 - `/` - topic tabs, create/rename/delete topic, list of reviewers in the selected topic, create/rename/delete reviewer.
 - `/topics/[topicId]/reviewers/[reviewerId]` - pack workspace: source list and upload, generate/regenerate, four study mode tabs.
 
@@ -58,27 +59,43 @@ Generated only on explicit Generate or Redo. Tab changes never call the model. S
 - Redo Summary / Test Me / Carded rewrites only that mode from persisted upstream (Locked In or Summary).
 - Disabled when the required upstream is missing, or when no source is `ready` for Locked In / Generate.
 - Clear error when the pack is video/audio only or has no ingested text.
-- Pipeline (server, full pack): ready sources → Locked In → Summary → Test Me → Carded; all four upserted together.
+- Pipeline (server, full pack): ready sources → Locked In → Summary → Test Me → Carded; each mode is saved as it finishes.
+- Models are OpenRouter `:free` ids (defaults and optional fallbacks). Do not use `openrouter/auto` as a primary model.
 
 ## Auth and security facts
 
-- Auth.js Credentials, shared `APP_PASSWORD`, session via `AUTH_SECRET`.
+- Auth.js Credentials against the `users` table (scrypt password hashes). Session `user.id` is the user uuid.
+- No public register page. Invite with `npm run user:create -- email@x password [name]`.
 - Middleware/proxy protects pages and APIs; unauthenticated pages go to `/login`, APIs return 401.
-- `GEMINI_API_KEY` is server-only. Client never reads it.
-- Client uploads go direct to Vercel Blob, then `POST` metadata to `/api/reviewers/[id]/sources`. Do not wait on Blob `onUploadCompleted` for source rows.
+- Every topic/reviewer/source/view/job API is scoped by session user. Cross-user ids return 404 (no existence leak).
+- `OPENROUTER_API_KEY` is server-only. Client never reads it.
+- Client uploads go direct to Vercel Blob under `users/<userId>/reviewers/<reviewerId>/...`, then `POST` metadata to `/api/reviewers/[id]/sources`. Do not wait on Blob `onUploadCompleted` for source rows.
+- Privacy: notes and extracted text are sent to third-party free model providers via OpenRouter. Requests ask for `data_collection: deny` where supported; treat provider policy as best-effort.
 
 ## Configuration (names only)
 
 | Variable | Role |
 | --- | --- |
-| `APP_PASSWORD` | Shared gate password |
 | `AUTH_SECRET` | Session signing |
 | `AUTH_TRUST_HOST` | Accept host before `AUTH_URL` is set |
 | `AUTH_URL` | Canonical production URL |
-| `DATABASE_URL` | Neon Postgres |
+| `DATABASE_URL` | Neon Postgres (use direct/unpooled URL for `db:push`) |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob |
-| `GEMINI_API_KEY` | Generation (server only) |
-| `AI_MODEL` | Model id; default `gemini-3.7-flash` |
+| `OPENROUTER_API_KEY` | Generation (server only) |
+| `AI_MODEL_LOCKED_IN` | Locked In model id (`:free`) |
+| `AI_MODEL_SUMMARY` | Summary model id (`:free`) |
+| `AI_MODEL_JSON` | Test Me / Carded model id (`:free`) |
+| `AI_MODEL_VISION` | Vision model id for images (`:free`) |
+| `AI_MODEL_FALLBACKS` | Comma-separated `:free` fallbacks |
+
+## Operator notes
+
+1. Push schema with Neon **direct / unpooled** `DATABASE_URL` (`npm run db:push`). The Neon pooler cannot run migrations.
+2. Create the first invite: `npm run user:create -- you@example.com 'password' 'Name'`.
+3. Sign in; create topics only after a user exists (`topics.user_id` is required).
+4. Optional migrate path: if existing rows lack owners, add `user_id` nullable first, run `user:create` with `--bootstrap`, then tighten to not null.
+
+Stay on Neon. Friends cannot see each other's packs.
 
 ## Product principles
 

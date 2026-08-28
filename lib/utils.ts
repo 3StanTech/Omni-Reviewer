@@ -14,6 +14,7 @@ export function safeClientFilename(name: string): string {
 }
 
 export function buildClientBlobPathname(
+  userId: string,
   reviewerId: string,
   filename: string,
 ): string {
@@ -21,7 +22,7 @@ export function buildClientBlobPathname(
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  return `reviewers/${reviewerId}/${id}-${safeClientFilename(filename)}`;
+  return `users/${userId}/reviewers/${reviewerId}/${id}-${safeClientFilename(filename)}`;
 }
 
 export async function readApiError(res: Response): Promise<string> {

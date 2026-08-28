@@ -4,9 +4,9 @@ Personal study packs: organize topics, attach sources, and generate four persist
 
 ## What it is
 
-Omni-Reviewer is a signed-in, single-user study app.
+Omni-Reviewer is a signed-in, invite-only multi-user study app. Accounts are created by an operator; there is no public signup. Each user only sees their own topics and packs.
 
-- **Topics** are the top-level tabs.
+- **Topics** are the top-level tabs (per user).
 - Each topic holds many **reviewers** (study packs).
 - Each reviewer owns its own uploaded **sources** and an independent set of four **study modes**.
 
@@ -32,11 +32,13 @@ Study modes are persisted. Generate or regenerate only on an explicit action.
 npm install
 cp .env.example .env.local
 # fill in values in .env.local
+# use Neon direct/unpooled DATABASE_URL for schema push
 npm run db:push
+npm run user:create -- you@example.com 'your-password' 'Your Name'
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000) and sign in with the email and password you created.
 
 ## Required environment variables
 
@@ -44,16 +46,34 @@ Names only — set values in `.env.local` (local) or your host (production):
 
 | Name | Purpose |
 | --- | --- |
-| `APP_PASSWORD` | Shared gate password for the single user |
+| `OPENROUTER_API_KEY` | OpenRouter API key for generation (server only) |
+| `AI_MODEL_LOCKED_IN` | Locked In model id (`:free`) |
+| `AI_MODEL_SUMMARY` | Summary model id (`:free`) |
+| `AI_MODEL_JSON` | Test Me / Carded model id (`:free`) |
+| `AI_MODEL_VISION` | Vision model id for images (`:free`) |
+| `AI_MODEL_FALLBACKS` | Comma-separated `:free` fallback model ids |
+| `DATABASE_URL` | Neon Postgres connection string |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob read/write token |
 | `AUTH_SECRET` | Session signing secret |
 | `AUTH_TRUST_HOST` | Set to `true` so the first production host is accepted |
 | `AUTH_URL` | Canonical app URL (set after first production deploy) |
-| `DATABASE_URL` | Neon Postgres connection string |
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob read/write token |
-| `GEMINI_API_KEY` | Gemini API key for generation |
-| `AI_MODEL` | Model id (default `gemini-3.7-flash`) |
 
 See `.env.example` for the full list.
+
+`db:push` must use Neon’s **direct / unpooled** connection string. The pooler endpoint cannot run migrations.
+
+## Login and invites
+
+- Sign in at `/login` with email + password.
+- Create invites (no public register):
+
+```bash
+npm run user:create -- friend@example.com 'password' 'Friend Name'
+# optional: assign orphaned rows after a nullable user_id migration
+npm run user:create -- friend@example.com 'password' 'Friend Name' --bootstrap
+```
+
+Do not print or commit passwords.
 
 ## Scripts
 
@@ -63,10 +83,11 @@ See `.env.example` for the full list.
 | `npm run build` | Production build |
 | `npm run start` | Start the production server |
 | `npm run lint` | Run ESLint |
-| `npm run db:push` | Push Drizzle schema to the database |
+| `npm run db:push` | Push Drizzle schema (direct/unpooled `DATABASE_URL`) |
 | `npm run db:generate` | Generate Drizzle migrations |
+| `npm run user:create` | Invite a user (`tsx scripts/create-user.ts`) |
 | `npm test` | Run Vitest |
 
 ## Stack
 
-Next.js (App Router), TypeScript, Tailwind CSS, Auth.js, Drizzle ORM, Neon Postgres, Vercel Blob.
+Next.js (App Router), TypeScript, Tailwind CSS, Auth.js, Drizzle ORM, Neon Postgres, Vercel Blob, OpenRouter.

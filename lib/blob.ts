@@ -60,8 +60,12 @@ const ALLOWED_MIME_SET = new Set<string>(ALLOWED_MIME_TYPES);
 /** 500 MiB — lecture video headroom; Blob still enforces per-token. */
 export const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 
-const REVIEWER_PATH_RE =
-  /^reviewers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i;
+const UUID_RE =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const USER_REVIEWER_PATH_RE = new RegExp(
+  `^users\\/(${UUID_RE})\\/reviewers\\/(${UUID_RE})\\/`,
+  "i",
+);
 
 export function normalizeMime(mime: string): string {
   return mime.toLowerCase().split(";")[0]?.trim() ?? "";
@@ -98,30 +102,49 @@ export function safeFilename(name: string): string {
 }
 
 /**
- * Namespace: reviewers/<reviewerId>/<uuid>-<safe-filename>
+ * Namespace: users/<userId>/reviewers/<reviewerId>/<uuid>-<safe-filename>
  * Client should use this (or an equivalent) when calling upload().
  */
-export function buildBlobPathname(reviewerId: string, filename: string): string {
+export function buildBlobPathname(
+  userId: string,
+  reviewerId: string,
+  filename: string,
+): string {
   const id = crypto.randomUUID();
-  return `reviewers/${reviewerId}/${id}-${safeFilename(filename)}`;
+  return `users/${userId}/reviewers/${reviewerId}/${id}-${safeFilename(filename)}`;
 }
 
-export function parseReviewerIdFromPathname(pathname: string): string | null {
-  const match = REVIEWER_PATH_RE.exec(pathname);
-  return match?.[1] ?? null;
+export function parseUserReviewerFromPathname(
+  pathname: string,
+): { userId: string; reviewerId: string } | null {
+  const match = USER_REVIEWER_PATH_RE.exec(pathname);
+  if (!match?.[1] || !match[2]) return null;
+  return { userId: match[1], reviewerId: match[2] };
 }
 
 export function assertNamespacedPathname(
   pathname: string,
-  reviewerId?: string | null,
+  opts: {
+    userId?: string | null;
+    reviewerId?: string | null;
+  } = {},
 ): void {
-  const fromPath = parseReviewerIdFromPathname(pathname);
-  if (!fromPath) {
+  const parsed = parseUserReviewerFromPathname(pathname);
+  if (!parsed) {
     throw new Error(
-      "pathname must be namespaced as reviewers/<reviewerId>/<uuid>-<filename>",
+      "pathname must be namespaced as users/<userId>/reviewers/<reviewerId>/<uuid>-<filename>",
     );
   }
-  if (reviewerId && fromPath.toLowerCase() !== reviewerId.toLowerCase()) {
+  if (
+    opts.userId &&
+    parsed.userId.toLowerCase() !== opts.userId.toLowerCase()
+  ) {
+    throw new Error("pathname userId does not match session user");
+  }
+  if (
+    opts.reviewerId &&
+    parsed.reviewerId.toLowerCase() !== opts.reviewerId.toLowerCase()
+  ) {
     throw new Error("pathname reviewerId does not match clientPayload.reviewerId");
   }
 }
@@ -157,6 +180,7 @@ export function parseClientPayload(
 export async function handleClientUpload(args: {
   request: Request;
   body: HandleUploadBody;
+  userId: string | null;
 }): Promise<
   | { type: "blob.generate-client-token"; clientToken: string }
   | { type: "blob.upload-completed"; response: "ok" }
@@ -166,8 +190,14 @@ export async function handleClientUpload(args: {
     body: args.body,
     token: process.env.BLOB_READ_WRITE_TOKEN,
     onBeforeGenerateToken: async (pathname, clientPayload) => {
+      if (!args.userId) {
+        throw new Error("Unauthorized");
+      }
       const payload = parseClientPayload(clientPayload);
-      assertNamespacedPathname(pathname, payload.reviewerId ?? null);
+      assertNamespacedPathname(pathname, {
+        userId: args.userId,
+        reviewerId: payload.reviewerId ?? null,
+      });
 
       return {
         allowedContentTypes: [...ALLOWED_MIME_TYPES],

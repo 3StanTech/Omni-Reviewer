@@ -35,7 +35,8 @@ function serializeReviewer(row: {
 
 export async function GET(request: Request) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -55,18 +56,19 @@ export async function GET(request: Request) {
     );
   }
 
-  const topic = await getTopic(topicIdParsed.data);
+  const topic = await getTopic(topicIdParsed.data, userId);
   if (!topic) {
     return NextResponse.json({ error: "Topic not found" }, { status: 404 });
   }
 
-  const rows = await listReviewersByTopic(topicIdParsed.data);
+  const rows = await listReviewersByTopic(topicIdParsed.data, userId);
   return NextResponse.json(rows.map(serializeReviewer));
 }
 
 export async function POST(request: Request) {
   const session = await auth();
-  if (!session) {
+  const userId = session?.user?.id;
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -91,11 +93,19 @@ export async function POST(request: Request) {
     );
   }
 
-  const topic = await getTopic(parsed.data.topicId);
+  const topic = await getTopic(parsed.data.topicId, userId);
   if (!topic) {
     return NextResponse.json({ error: "Topic not found" }, { status: 404 });
   }
 
-  const row = await createReviewer(parsed.data.topicId, parsed.data.name);
+  const row = await createReviewer(
+    parsed.data.topicId,
+    userId,
+    parsed.data.name,
+  );
+  if (!row) {
+    return NextResponse.json({ error: "Topic not found" }, { status: 404 });
+  }
+
   return NextResponse.json(serializeReviewer(row), { status: 201 });
 }

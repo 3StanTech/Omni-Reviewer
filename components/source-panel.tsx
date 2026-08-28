@@ -34,6 +34,7 @@ export type SourceListItem = {
 };
 
 type SourcePanelProps = {
+  userId: string;
   reviewerId: string;
   initialSources: SourceListItem[];
   onSourcesChange?: (sources: SourceListItem[]) => void;
@@ -90,6 +91,7 @@ function normalizeSource(raw: Record<string, unknown>): SourceListItem {
 }
 
 export function SourcePanel({
+  userId,
   reviewerId,
   initialSources,
   onSourcesChange,
@@ -117,7 +119,7 @@ export function SourcePanel({
     try {
       for (const file of files) {
         setProgress(0);
-        const pathname = buildClientBlobPathname(reviewerId, file.name);
+        const pathname = buildClientBlobPathname(userId, reviewerId, file.name);
         const blob = await upload(pathname, file, {
           access: "public",
           handleUploadUrl: "/api/blob/upload",
