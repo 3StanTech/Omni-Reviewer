@@ -3,12 +3,17 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { createTopic, listTopics } from "@/lib/queries";
+import {
+  cappedBodyError,
+  MAX_MUTATION_BODY_BYTES,
+  readCappedJson,
+} from "@/lib/request-body";
 
 export const dynamic = "force-dynamic";
 
 const createTopicSchema = z.object({
   name: z.string().trim().min(1, "name is required").max(200),
-});
+}).strict();
 
 function serializeTopic(row: {
   id: string;
@@ -44,9 +49,13 @@ export async function POST(request: Request) {
 
   let json: unknown;
   try {
-    json = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    json = await readCappedJson(request, {
+      maxBytes: MAX_MUTATION_BODY_BYTES,
+      tooLargeMessage: "Topic request body exceeds the safe size limit",
+    });
+  } catch (error) {
+    const { message, status } = cappedBodyError(error);
+    return NextResponse.json({ error: message }, { status });
   }
 
   const parsed = createTopicSchema.safeParse(json);

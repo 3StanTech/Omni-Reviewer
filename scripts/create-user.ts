@@ -2,9 +2,8 @@
  * Invite a user (no public signup).
  *
  * Usage:
- *   npx tsx scripts/create-user.ts email@example.com 'password' [name]
- *   npx tsx scripts/create-user.ts email@example.com 'password' --bootstrap
- *   npx tsx scripts/create-user.ts email@example.com 'password' 'Display Name' --bootstrap
+ *   printf '%s\n' 'password' | npx tsx scripts/create-user.ts email@example.com [name]
+ *   npx tsx scripts/create-user.ts email@example.com [name] --bootstrap
  *
  * --bootstrap: after insert, assign orphaned rows (null user_id) to this user.
  * Useful when migrating an existing DB where user_id was added as nullable.
@@ -18,6 +17,8 @@
  * --bootstrap, then tighten to not null.
  */
 
+import { stdin, stdout } from "node:process";
+
 import { neon } from "@neondatabase/serverless";
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/neon-http";
@@ -27,9 +28,66 @@ import { generationJobs, topics, users } from "../lib/schema";
 
 function usage(): never {
   console.error(
-    "Usage: npx tsx scripts/create-user.ts <email> <password> [name] [--bootstrap]",
+    "Usage: printf '%s\\n' '<password>' | npx tsx scripts/create-user.ts <email> [name] [--bootstrap]",
   );
   process.exit(1);
+}
+
+/** Read one password without ever accepting it as a command-line argument. */
+async function readPassword(): Promise<string> {
+  if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stdin) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    }
+    const password = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+    if (!password) {
+      throw new Error("Password is required on stdin");
+    }
+    return password;
+  }
+
+  return new Promise((resolve, reject) => {
+    let password = "";
+    const onData = (chunk: Buffer | string) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      for (const character of text) {
+        if (character === "\u0003") {
+          cleanup();
+          reject(new Error("Password prompt cancelled"));
+          return;
+        }
+        if (character === "\r" || character === "\n") {
+          cleanup();
+          stdout.write("\n");
+          if (!password) {
+            reject(new Error("Password is required on stdin"));
+          } else {
+            resolve(password);
+          }
+          return;
+        }
+        if (character === "\u0008" || character === "\u007f") {
+          if (password.length > 0) {
+            password = password.slice(0, -1);
+            stdout.write("\b \b");
+          }
+          continue;
+        }
+        password += character;
+      }
+    };
+    const cleanup = () => {
+      stdin.off("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+    };
+
+    stdout.write("Password: ");
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onData);
+  });
 }
 
 async function main() {
@@ -38,10 +96,9 @@ async function main() {
   const positional = args.filter((a) => a !== "--bootstrap");
 
   const emailRaw = positional[0];
-  const password = positional[1];
-  const nameArg = positional[2];
+  const nameArg = positional[1];
 
-  if (!emailRaw || !password) {
+  if (!emailRaw || positional.length > 2) {
     usage();
   }
 
@@ -54,6 +111,14 @@ async function main() {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error("DATABASE_URL is not set");
+    process.exit(1);
+  }
+
+  let password: string;
+  try {
+    password = await readPassword();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Password is required on stdin");
     process.exit(1);
   }
 

@@ -14,12 +14,47 @@
  */
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 import { authConfig } from "./auth.config";
+import { isUsableAuthSecret } from "./lib/auth-secret";
 
-const { auth } = NextAuth(authConfig);
+const configuredSecret = process.env.AUTH_SECRET;
+
+function misconfiguredResponse(req: NextRequest): NextResponse {
+  const { pathname } = req.nextUrl;
+  const isLoginPage = pathname === "/login";
+  const isAuthApi =
+    pathname === "/api/auth" || pathname.startsWith("/api/auth/");
+  const isApi = pathname.startsWith("/api/");
+  const isBlobUploadCallback =
+    pathname === "/api/blob/upload" && req.method === "POST";
+
+  // Keep the public login page and provider callback reachable so users see
+  // the same route shape while the server refuses to mint or trust sessions.
+  if (isLoginPage || isAuthApi || isBlobUploadCallback) {
+    return NextResponse.next();
+  }
+  if (isApi) {
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 503 });
+  }
+  return NextResponse.redirect(new URL("/login", req.nextUrl.origin));
+}
+
+// Auth.js must still initialize during a build when the deployment secret is
+// absent or too short. The callback below fails closed before accepting the
+// request, while this non-secret sentinel keeps the static module shape valid.
+const nextAuthSecret = isUsableAuthSecret(configuredSecret)
+  ? configuredSecret.trim()
+  : "invalid-auth-secret-for-proxy-only-000000";
+
+const { auth } = NextAuth({ ...authConfig, secret: nextAuthSecret });
 
 export default auth((req) => {
+  if (!isUsableAuthSecret(process.env.AUTH_SECRET)) {
+    return misconfiguredResponse(req);
+  }
+
   const { pathname } = req.nextUrl;
   const isLoggedIn = !!req.auth?.user;
   const isLoginPage = pathname === "/login";

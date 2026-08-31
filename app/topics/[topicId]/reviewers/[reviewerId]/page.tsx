@@ -7,7 +7,9 @@ import { ReviewerWorkspace } from "@/components/reviewer-workspace";
 import type { SourceListItem } from "@/components/source-panel";
 import {
   getReviewer,
+  getCardsForReviewer,
   getTopic,
+  listTestAttemptStats,
   listSourcesForUi,
   listViewMetaByReviewer,
 } from "@/lib/queries";
@@ -34,9 +36,11 @@ export default async function ReviewerPage({ params }: PageProps) {
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer || reviewer.topicId !== topicId) notFound();
 
-  const [sourceRows, viewMeta] = await Promise.all([
+  const [sourceRows, viewMeta, cards, testAttemptStats] = await Promise.all([
     listSourcesForUi(reviewerId, userId),
     listViewMetaByReviewer(reviewerId, userId),
+    getCardsForReviewer(reviewerId, userId),
+    listTestAttemptStats(reviewerId, userId),
   ]);
   const initialSources: SourceListItem[] = sourceRows.map((s) => ({
     id: s.id,
@@ -44,7 +48,9 @@ export default async function ReviewerPage({ params }: PageProps) {
     filename: s.filename,
     mime: s.mime,
     kind: s.kind as SourceKind,
-    blobUrl: s.blobUrl,
+    blobUrl: s.blobPathname
+      ? `/api/reviewers/${reviewerId}/sources/${s.id}`
+      : null,
     blobPathname: s.blobPathname,
     ingestStatus: s.ingestStatus as IngestStatus,
     errorMessage: s.errorMessage,
@@ -67,6 +73,10 @@ export default async function ReviewerPage({ params }: PageProps) {
       contentJson: null,
       modelId: row.modelId ?? null,
       generatedAt: row.generatedAt.toISOString(),
+      revision: row.revision,
+      isEdited: row.isEdited,
+      isPinned: row.isPinned,
+      updatedAt: row.updatedAt.toISOString(),
     };
     if (row.kind === "locked_in") initialViews.locked_in = placeholder;
     else if (row.kind === "summary") initialViews.summary = placeholder;
@@ -89,6 +99,16 @@ export default async function ReviewerPage({ params }: PageProps) {
             ? reviewer.lastGeneratedAt.toISOString()
             : null
         }
+        examDate={reviewer.examDate}
+        initialCards={cards.map((card) => ({
+          ...card,
+          dueAt: card.dueAt.toISOString(),
+          lastReviewedAt: card.lastReviewedAt?.toISOString() ?? null,
+        }))}
+        initialTestAttemptStats={testAttemptStats.map((stats) => ({
+          ...stats,
+          lastAttemptedAt: stats.lastAttemptedAt?.toISOString() ?? null,
+        }))}
       />
     </AppShell>
   );

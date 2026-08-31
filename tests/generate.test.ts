@@ -41,7 +41,17 @@ vi.mock("@openrouter/ai-sdk-provider", () => ({
   },
 }));
 
-import { generateStudyPack, generateTextFromPrompt } from "@/lib/ai";
+import {
+  generateCarded,
+  generateStudyPack,
+  generateStudyPackStep,
+  generateTextFromPrompt,
+  visionReadImages,
+} from "@/lib/ai";
+import {
+  MAX_VISION_OUTPUT_TOKENS,
+  MAX_VISION_TEXT_CHARS,
+} from "@/lib/learning-limits";
 import { classifyGenerationError } from "@/lib/generation-errors";
 import {
   cardedPrompt,
@@ -56,12 +66,32 @@ describe("generate", () => {
   beforeEach(() => {
     generateText.mockReset();
     generateObject.mockReset();
+    process.env.AUTH_SECRET = "test-auth-secret-0123456789abcdefgh";
+    process.env.AUTH_TRUST_HOST = "true";
+    process.env.DATABASE_URL = "postgresql://user:password@example.test/db";
+    process.env.BLOB_READ_WRITE_TOKEN = "test-blob-token";
+    process.env.AUTH_URL = "http://localhost:3000";
     process.env.OPENROUTER_API_KEY = "test-key-not-real";
     process.env.AI_MODEL_LOCKED_IN = "z-ai/glm-5.2:free";
     process.env.AI_MODEL_SUMMARY = "z-ai/glm-5.2:free";
     process.env.AI_MODEL_JSON = "z-ai/glm-5.2:free";
     process.env.AI_MODEL_FALLBACKS =
       "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,openrouter/free";
+  });
+
+  it("caps vision output tokens and rejects oversized vision text", async () => {
+    generateText.mockResolvedValue({
+      text: "x".repeat(MAX_VISION_TEXT_CHARS + 1),
+    });
+
+    await expect(visionReadImages(
+      [{ mime: "image/png", bytes: new Uint8Array([1, 2, 3]) }],
+      "Read the image",
+    )).rejects.toThrow(/vision output exceeds/i);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(generateText.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: MAX_VISION_OUTPUT_TOKENS,
+    });
   });
 
   it("calls pipeline in order Locked In → Summary → Test Me → Carded", async () => {
@@ -135,6 +165,50 @@ describe("generate", () => {
     expect(pack.carded).toEqual(JSON.parse(SAMPLE_CARDED_JSON));
   });
 
+  it("rejects an empty structured Carded result before it can be persisted", async () => {
+    generateObject.mockResolvedValue({
+      object: [],
+      response: { modelId: "z-ai/glm-5.2:free" },
+    });
+
+    await expect(generateCarded("# Summary\n\nMaterial")).rejects.toThrow(/carded/i);
+    expect(generateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects structured output above the item cap", async () => {
+    generateObject.mockResolvedValue({
+      object: Array.from({ length: 101 }, (_, index) => ({
+        id: `c${index}`,
+        front: "Front",
+        back: "Back",
+      })),
+      response: { modelId: "z-ai/glm-5.2:free" },
+    });
+
+    await expect(generateCarded("# Summary\n\nMaterial")).rejects.toThrow(/carded/i);
+    expect(generateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("generates one resumable step and preserves the provider model id", async () => {
+    generateText.mockResolvedValueOnce({
+      text: SAMPLE_LOCKED_IN,
+      response: { modelId: "provider/actual-model" },
+    });
+
+    const result = await generateStudyPackStep({
+      step: "locked_in",
+      extractedTexts: [{ filename: "notes.txt", text: "source" }],
+    });
+
+    expect(result).toEqual({
+      step: "locked_in",
+      payload: { kind: "locked_in", content: SAMPLE_LOCKED_IN },
+      modelUsed: "provider/actual-model",
+    });
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+
   it("maps retryable generation errors", () => {
     expect(
       classifyGenerationError({ statusCode: 429, message: "rate limit" }),
@@ -165,6 +239,44 @@ describe("generate", () => {
     expect(
       classifyGenerationError(new Error("request timed out")),
     ).toMatchObject({ code: "timeout", retryable: true });
+
+    expect(classifyGenerationError(new Error("provider secret details"))).toEqual(
+      expect.objectContaining({
+        code: "unknown",
+        message: "Generation failed unexpectedly. Try again shortly.",
+        retryable: false,
+      }),
+    );
+  });
+
+  it.each([
+    ["HTTP 500", { statusCode: 500, message: "internal server error" }, "unavailable"],
+    ["HTTP 504", { statusCode: 504, message: "gateway timeout" }, "unavailable"],
+    ["fetch failed", new TypeError("fetch failed"), "unavailable"],
+    ["connection reset", Object.assign(new Error("socket closed"), { code: "ECONNRESET" }), "unavailable"],
+    ["connection refused", Object.assign(new Error("socket closed"), { code: "ECONNREFUSED" }), "unavailable"],
+    ["network unreachable", Object.assign(new Error("network error"), { code: "ENETUNREACH" }), "unavailable"],
+    ["DNS retry", Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" }), "unavailable"],
+    ["network timeout", Object.assign(new Error("socket timeout"), { code: "ETIMEDOUT" }), "timeout"],
+  ])("classifies %s as a redacted retryable failure", (_name, error, code) => {
+    const classified = classifyGenerationError(error);
+
+    expect(classified).toMatchObject({ code, retryable: true });
+    expect(classified.message).toBe(
+      code === "timeout"
+        ? "Generation timed out. Try again in a moment."
+        : "The model provider is temporarily unavailable. Try again shortly.",
+    );
+    expect(classified.message).not.toContain("socket");
+    expect(classified.message).not.toContain("ECONN");
+  });
+
+  it("does not retry arbitrary unknown errors", () => {
+    expect(classifyGenerationError(new Error("programming failure"))).toEqual({
+      code: "unknown",
+      message: "Generation failed unexpectedly. Try again shortly.",
+      retryable: false,
+    });
   });
 
   it("GET views route does not import generate at module scope", () => {

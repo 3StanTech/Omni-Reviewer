@@ -20,6 +20,7 @@ import { SummaryView } from "@/components/summary-view";
 import { TestMeView } from "@/components/test-me-view";
 import type { ViewsPayload } from "@/lib/serialize-view";
 import type { ViewKind } from "@/lib/types";
+import type { SerializedAttemptStats, SerializedCard } from "@/components/reviewer-workspace";
 
 type ViewTabsProps = {
   views: ViewsPayload;
@@ -28,7 +29,13 @@ type ViewTabsProps = {
   showRedo: boolean;
   busy: boolean;
   error: string | null;
-  onRedo: (kind: ViewKind) => void;
+  onRedo: (kind: ViewKind, forceOverwrite?: boolean) => void;
+  reviewerId: string;
+  cards: SerializedCard[];
+  testAttemptStats: SerializedAttemptStats[];
+  onCardsChange: (cards: SerializedCard[]) => void;
+  onTestAttemptStatsChange: (stats: SerializedAttemptStats[]) => void;
+  onViewsChange: (views: ViewsPayload) => void;
 };
 
 const MODE_COPY: Record<
@@ -105,6 +112,12 @@ export function ViewTabs({
   busy,
   error,
   onRedo,
+  reviewerId,
+  cards,
+  testAttemptStats,
+  onCardsChange,
+  onTestAttemptStatsChange,
+  onViewsChange,
 }: ViewTabsProps) {
   const [tab, setTab] = useState<ViewKind>("locked_in");
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -125,7 +138,7 @@ export function ViewTabs({
 
   function confirmRedo() {
     setConfirmOpen(false);
-    onRedo(tab);
+    onRedo(tab, true);
   }
 
   return (
@@ -189,6 +202,12 @@ export function ViewTabs({
         </p>
       ) : null}
 
+      {views.staleKinds?.includes(tab) ? (
+        <p role="status" className="max-w-xl rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          This mode is from an older generation. Redo it when you are ready.
+        </p>
+      ) : null}
+
       <TabsContent value={tab} className="outline-none">
         {viewsLoading && !modeHasContent(tab, views) ? (
           <div className="space-y-3" aria-busy="true" aria-live="polite">
@@ -199,18 +218,36 @@ export function ViewTabs({
             <Skeleton className="h-48 w-full rounded-xl" />
           </div>
         ) : tab === "locked_in" ? (
-          <LockedInView content={views.locked_in?.content ?? null} />
+          <LockedInView
+            content={views.locked_in?.content ?? null}
+            view={views.locked_in}
+            reviewerId={reviewerId}
+            onSaved={(next) => {
+              onViewsChange({
+                ...views,
+                locked_in: views.locked_in ? { ...views.locked_in, ...next } : null,
+                staleKinds: ["summary", "test_me", "carded"],
+              });
+            }}
+          />
         ) : tab === "summary" ? (
           <SummaryView content={views.summary?.content ?? null} />
         ) : tab === "test_me" ? (
           <TestMeView
             contentJson={views.test_me?.contentJson ?? null}
             content={views.test_me?.content ?? null}
+            reviewerId={reviewerId}
+            viewRevision={views.test_me?.revision ?? 1}
+            attemptStats={testAttemptStats}
+            onAttemptStatsChange={onTestAttemptStatsChange}
           />
         ) : (
           <CardedView
             contentJson={views.carded?.contentJson ?? null}
             content={views.carded?.content ?? null}
+            reviewerId={reviewerId}
+            durableCards={cards}
+            onCardsChange={onCardsChange}
           />
         )}
       </TabsContent>

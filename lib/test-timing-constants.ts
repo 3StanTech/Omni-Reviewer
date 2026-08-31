@@ -1,0 +1,5 @@
+export const DEFAULT_TIMED_TEST_SECONDS = 5 * 60;
+export const MIN_TIMED_TEST_SECONDS = 30;
+export const MAX_TIMED_TEST_SECONDS = 60 * 60;
+export const MAX_TIMED_TEST_TOKEN_CHARS = 4096;
+export const MIN_AUTH_SECRET_CHARS = 32;

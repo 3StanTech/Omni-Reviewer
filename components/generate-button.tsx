@@ -50,7 +50,9 @@ type GenerateButtonProps = {
   hasReadySource: boolean;
   hasViews: boolean;
   sourcesAreMediaOnly: boolean;
+  activeJobId?: string | null;
   onGenerated: (views: ViewsPayload) => void;
+  onGenerationFinished?: () => void;
 };
 
 const STEP_LABELS: Record<string, string> = {
@@ -89,28 +91,40 @@ export function GenerateButton({
   hasReadySource,
   hasViews,
   sourcesAreMediaOnly,
+  activeJobId = null,
   onGenerated,
+  onGenerationFinished,
 }: GenerateButtonProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState<string | null>(null);
 
-  if (hasViews) return null;
+  if (hasViews && !activeJobId) return null;
 
-  const disabled = busy || !hasReadySource;
+  const disabled = busy || (!hasReadySource && !activeJobId);
 
   async function pollJob(jobId: string): Promise<JobPollResponse> {
     const maxAttempts = 180;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const res = await fetch(
+      // POST claims at most one current step. A concurrent browser receives
+      // the live lease and simply polls again without issuing model work.
+      const stepRes = await fetch(
         `/api/reviewers/${reviewerId}/generation/${jobId}`,
+        { method: "POST" },
       );
-      if (!res.ok) {
-        throw new Error(await readApiError(res));
+      let data: JobPollResponse | null = null;
+      try {
+        data = (await stepRes.json()) as JobPollResponse;
+      } catch {
+        data = null;
       }
-      const data = (await res.json()) as JobPollResponse;
+      if (!stepRes.ok && !data?.status) {
+        throw new Error(await readApiError(stepRes));
+      }
+      if (!data) throw new Error("Generation returned an invalid response.");
       setCurrentStep(data.step);
+      if (data.views) onGenerated(data.views);
       if (
         data.status === "succeeded" ||
         data.status === "failed" ||
@@ -123,23 +137,33 @@ export function GenerateButton({
     throw new Error("Generation is taking too long. Refresh and check views.");
   }
 
-  async function runGenerate() {
+  async function runGenerate(existingJobId?: string | null) {
     setBusy(true);
     setError(null);
     setCurrentStep("locked_in");
     try {
-      const res = await fetch(`/api/reviewers/${reviewerId}/generate`, {
-        method: "POST",
-      });
-
       let data: GenerateResponse | null = null;
-      try {
-        data = (await res.json()) as GenerateResponse;
-      } catch {
-        data = null;
+      let res: Response | null = null;
+      if (!existingJobId) {
+        res = await fetch(`/api/reviewers/${reviewerId}/generate`, {
+          method: "POST",
+        });
+        try {
+          data = (await res.json()) as GenerateResponse;
+        } catch {
+          data = null;
+        }
       }
 
-      if (data?.jobId) {
+      const jobId = existingJobId ?? data?.jobId;
+      if (jobId) {
+        if (!data) {
+          data = {
+            jobId,
+            status: "queued",
+            step: "locked_in",
+          };
+        }
         setCurrentStep(data.step);
         // Long POST may already be terminal; otherwise poll until done.
         if (
@@ -149,6 +173,7 @@ export function GenerateButton({
         ) {
           if (data.views) onGenerated(data.views);
           if (data.status === "succeeded") {
+            onGenerationFinished?.();
             setConfirmOpen(false);
             setCurrentStep(null);
             return;
@@ -162,12 +187,14 @@ export function GenerateButton({
             ),
           );
           if (data.status === "partial") setConfirmOpen(false);
+          onGenerationFinished?.();
           return;
         }
 
-        const polled = await pollJob(data.jobId);
+        const polled = await pollJob(jobId);
         if (polled.views) onGenerated(polled.views);
         if (polled.status === "succeeded") {
+          onGenerationFinished?.();
           setConfirmOpen(false);
           setCurrentStep(null);
           return;
@@ -181,10 +208,11 @@ export function GenerateButton({
           ),
         );
         if (polled.status === "partial") setConfirmOpen(false);
+        onGenerationFinished?.();
         return;
       }
 
-      if (!res.ok) {
+      if (res && !res.ok) {
         setError(
           data
             ? errorMessageFromUnknown(data, "Generation failed. Try again in a moment.")
@@ -204,7 +232,7 @@ export function GenerateButton({
 
   function handleClick() {
     setError(null);
-    if (!hasReadySource) {
+    if (!hasReadySource && !activeJobId) {
       if (sourcesAreMediaOnly) {
         setError(
           "This pack only has video or audio. Those are not processed in v1, so generation cannot run yet. Upload a PDF, image, or text file.",
@@ -216,11 +244,11 @@ export function GenerateButton({
       }
       return;
     }
-    if (hasViews) {
+    if (hasViews && !activeJobId) {
       setConfirmOpen(true);
       return;
     }
-    void runGenerate();
+    void runGenerate(activeJobId);
   }
 
   const stepLabel = formatStep(currentStep);
@@ -238,13 +266,20 @@ export function GenerateButton({
               ? "Needs at least one Ready source"
               : hasViews
                 ? "Regenerate all four views"
-                : "Generate all four views"
+            : activeJobId
+              ? "Resume generation"
+              : "Generate all four views"
           }
         >
           {busy ? (
             <>
               <CircleNotch className="animate-spin" weight="bold" />
               Generating
+            </>
+          ) : activeJobId ? (
+            <>
+              <CircleNotch weight="bold" />
+              Resume
             </>
           ) : hasViews ? (
             <>

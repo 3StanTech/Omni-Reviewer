@@ -245,6 +245,45 @@
     font-weight: 650;
   }
 
+  .prose-study table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin: 1em 0;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-family: var(--font-ui), ui-sans-serif, sans-serif;
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+
+  .prose-study th,
+  .prose-study td {
+    min-width: 7rem;
+    border: 1px solid oklch(0.8 0.02 80 / 55%);
+    padding: 0.55rem 0.7rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .prose-study th {
+    background: oklch(0.88 0.02 85 / 70%);
+    font-weight: 650;
+  }
+
+  .prose-study .katex {
+    font-size: 1em;
+  }
+
+  .prose-study .katex-error {
+    color: var(--destructive);
+    font-family: var(--font-mono), ui-monospace, monospace;
+  }
+
+  .prose-study math {
+    overflow-x: auto;
+  }
+
   .touch-target {
     min-height: 2.75rem;
     min-width: 2.75rem;

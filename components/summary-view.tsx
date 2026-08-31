@@ -1,7 +1,7 @@
 import { Note } from "@phosphor-icons/react/dist/ssr";
 
 import { EmptyState } from "@/components/empty-state";
-import { MarkdownBody } from "@/components/locked-in-view";
+import { MarkdownBody } from "@/components/study-markdown";
 
 type SummaryViewProps = {
   content: string | null;

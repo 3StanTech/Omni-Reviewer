@@ -7,8 +7,30 @@ import {
   GenerationError,
   toGenerationError,
 } from "@/lib/generation-errors";
+import { getEnv } from "@/lib/env";
 import { getOpenRouterModel } from "@/lib/openrouter";
+import { isValidCardFront, normalizeLearningIds } from "@/lib/learning";
 import {
+  MAX_CARD_BACK_CHARS,
+  MAX_CARD_FRONT_CHARS,
+  MAX_CARDED_ITEMS,
+  MAX_GENERATED_JSON_CHARS,
+  MAX_GENERATED_MARKDOWN_CHARS,
+  MAX_GENERATION_JSON_OUTPUT_TOKENS,
+  MAX_GENERATION_TEXT_OUTPUT_TOKENS,
+  MAX_LEARNING_ID_CHARS,
+  MAX_TEST_ME_ANSWER_CHARS,
+  MAX_TEST_ME_CHOICE_CHARS,
+  MAX_TEST_ME_CHOICES,
+  MAX_TEST_ME_EXPLANATION_CHARS,
+  MAX_TEST_ME_ITEMS,
+  MAX_TEST_ME_QUESTION_CHARS,
+  MAX_VISION_OUTPUT_TOKENS,
+  MAX_VISION_TEXT_CHARS,
+} from "@/lib/learning-limits";
+import {
+  PromptInputLimitError,
+  assertPromptWithinLimit,
   cardedPrompt,
   lockedInPrompt,
   summaryPrompt,
@@ -33,53 +55,73 @@ export class StudyPackJsonError extends Error {
   }
 }
 
-const testMeItemSchema = z.object({
-  id: z.string(),
-  question: z.string(),
-  choices: z.array(z.string()).optional(),
-  answer: z.string(),
-  explanation: z.string(),
-});
+const testMeItemSchema = z
+  .object({
+    id: z.string().trim().min(1).max(MAX_LEARNING_ID_CHARS),
+    question: z.string().trim().min(1).max(MAX_TEST_ME_QUESTION_CHARS),
+    choices: z.array(z.string().trim().min(1).max(MAX_TEST_ME_CHOICE_CHARS))
+      .min(2)
+      .max(MAX_TEST_ME_CHOICES),
+    answer: z.string().trim().min(1).max(MAX_TEST_ME_ANSWER_CHARS),
+    explanation: z.string().max(MAX_TEST_ME_EXPLANATION_CHARS),
+  })
+  .superRefine((item, context) => {
+    if (!item.choices.includes(item.answer)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["answer"],
+        message: "answer must exactly match one of choices",
+      });
+    }
+  })
+  .strict();
 
 const cardedItemSchema = z.object({
-  id: z.string(),
-  front: z.string(),
-  back: z.string(),
+  id: z.string().trim().min(1).max(MAX_LEARNING_ID_CHARS),
+  front: z.string().trim().min(1).max(MAX_CARD_FRONT_CHARS),
+  back: z.string().trim().min(1).max(MAX_CARD_BACK_CHARS),
+}).strict().superRefine((item, context) => {
+  if (!isValidCardFront(item.front)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["front"],
+      message: "cloze cards must use balanced {{answer}} placeholders",
+    });
+  }
 });
 
 const MAX_ATTEMPTS = 3;
 
 function modelIdForPurpose(purpose: GenerationPurpose): string {
+  const env = getEnv();
   switch (purpose) {
     case "locked_in":
-      return (
-        process.env.AI_MODEL_LOCKED_IN ||
-        process.env.AI_MODEL ||
-        "z-ai/glm-5.2:free"
-      );
+      return env.AI_MODEL_LOCKED_IN;
     case "summary":
-      return (
-        process.env.AI_MODEL_SUMMARY ||
-        process.env.AI_MODEL ||
-        "z-ai/glm-5.2:free"
-      );
+      return env.AI_MODEL_SUMMARY;
     case "json":
-      return (
-        process.env.AI_MODEL_JSON ||
-        process.env.AI_MODEL ||
-        "z-ai/glm-5.2:free"
-      );
+      return env.AI_MODEL_JSON;
     case "vision":
-      return (
-        process.env.AI_MODEL_VISION ||
-        process.env.AI_MODEL ||
-        "minimax/minimax-m3:free"
-      );
+      return env.AI_MODEL_VISION;
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new Error("aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function jitterDelay(attempt: number): number {
@@ -88,9 +130,10 @@ function jitterDelay(attempt: number): number {
   return base + jitter;
 }
 
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw new Error("aborted");
     try {
       return await fn();
     } catch (err) {
@@ -99,7 +142,7 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
       if (!classified.retryable || attempt === MAX_ATTEMPTS) {
         throw classified;
       }
-      await sleep(jitterDelay(attempt));
+      await sleep(jitterDelay(attempt), signal);
     }
   }
   throw toGenerationError(lastError);
@@ -129,8 +172,9 @@ export function getModelId(purpose: GenerationPurpose = "locked_in"): string {
 
 export async function generateTextFromPrompt(
   prompt: string,
-  options: { purpose: GenerationPurpose } = { purpose: "locked_in" },
+  options: { purpose: GenerationPurpose; signal?: AbortSignal } = { purpose: "locked_in" },
 ): Promise<{ text: string; modelUsed: string }> {
+  assertPromptWithinLimit(prompt);
   const modelId = modelIdForPurpose(options.purpose);
   const healJson = options.purpose === "json";
 
@@ -138,17 +182,30 @@ export async function generateTextFromPrompt(
     const { text, response, providerMetadata } = await generateText({
       model: getOpenRouterModel(modelId, { healJson }),
       prompt,
+      maxOutputTokens: options.purpose === "json"
+        ? MAX_GENERATION_JSON_OUTPUT_TOKENS
+        : MAX_GENERATION_TEXT_OUTPUT_TOKENS,
+      abortSignal: options.signal,
     });
+    const normalizedText = text.trim();
+    if (normalizedText.length > MAX_GENERATED_MARKDOWN_CHARS) {
+      throw new GenerationError(
+        "token_limit",
+        "Generated text exceeds the safe output limit.",
+        false,
+      );
+    }
     return {
-      text: text.trim(),
+      text: normalizedText,
       modelUsed: extractModelUsed({ response, providerMetadata }, modelId),
     };
-  });
+  }, options.signal);
 }
 
 export async function visionReadImages(
   images: { mime: string; bytes: Uint8Array }[],
   instruction: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<string> {
   if (images.length === 0) {
     throw new Error("visionReadImages requires at least one image");
@@ -159,6 +216,8 @@ export async function visionReadImages(
   const result = await withRetry(async () => {
     const { text } = await generateText({
       model: getOpenRouterModel(modelId),
+      abortSignal: options.signal,
+      maxOutputTokens: MAX_VISION_OUTPUT_TOKENS,
       messages: [
         {
           role: "user",
@@ -173,8 +232,16 @@ export async function visionReadImages(
         },
       ],
     });
-    return text.trim();
-  });
+    const normalizedText = text.trim();
+    if (normalizedText.length > MAX_VISION_TEXT_CHARS) {
+      throw new GenerationError(
+        "token_limit",
+        "Vision output exceeds the safe text limit.",
+        false,
+      );
+    }
+    return normalizedText;
+  }, options.signal);
 
   return result;
 }
@@ -193,6 +260,9 @@ function stripJsonFences(raw: string): string {
 }
 
 function parseJsonArray(raw: string): unknown[] {
+  if (raw.length > MAX_GENERATED_JSON_CHARS) {
+    throw new RangeError("Generated JSON exceeds the safe output limit");
+  }
   const cleaned = stripJsonFences(raw);
   const parsed: unknown = JSON.parse(cleaned);
   if (!Array.isArray(parsed)) {
@@ -201,24 +271,69 @@ function parseJsonArray(raw: string): unknown[] {
   return parsed;
 }
 
-function tryParseJsonArrayLocally<T>(
+function tryParseJsonArrayLocally<T extends { id: string }>(
   elementSchema: z.ZodType<T>,
   raw: string,
+  maxItems: number,
 ): T[] | null {
   if (!raw.trim()) return null;
   try {
-    return elementSchema.array().parse(parseJsonArray(raw));
+    return elementSchema.array().max(maxItems).parse(parseJsonArray(raw));
   } catch {
     return null;
   }
 }
 
-async function generateJsonArray<T>(args: {
+export function normalizeGeneratedIds<T extends { id: string }>(items: T[]): T[] {
+  return normalizeLearningIds(items);
+}
+
+function normalizeGeneratedItems<T extends { id: string }>(
+  kind: "test_me" | "carded",
+  items: T[],
+): { items: T[]; raw: string } {
+  const maxItems = kind === "test_me" ? MAX_TEST_ME_ITEMS : MAX_CARDED_ITEMS;
+  if (items.length === 0) {
+    throw new GenerationError(
+      "json_parse",
+      `Generated ${kind} output must contain at least one item.`,
+      false,
+    );
+  }
+  if (items.length > maxItems) {
+    throw new GenerationError(
+      "json_parse",
+      `Generated ${kind} output exceeds the safe item limit.`,
+      false,
+    );
+  }
+  const normalized = normalizeGeneratedIds(items);
+  if (normalized.some((item) => item.id.length > MAX_LEARNING_ID_CHARS)) {
+    throw new GenerationError(
+      "json_parse",
+      `Generated ${kind} output contains an item id that exceeds the safe size limit.`,
+      false,
+    );
+  }
+  const raw = JSON.stringify(normalized);
+  if (raw.length > MAX_GENERATED_JSON_CHARS) {
+    throw new GenerationError(
+      "token_limit",
+      "Generated structured output exceeds the safe size limit.",
+      false,
+    );
+  }
+  return { items: normalized, raw };
+}
+
+async function generateJsonArray<T extends { id: string }>(args: {
   kind: "test_me" | "carded";
   prompt: string;
   elementSchema: z.ZodType<T>;
 }): Promise<{ items: T[]; modelUsed: string; raw: string }> {
+  assertPromptWithinLimit(args.prompt);
   const modelId = modelIdForPurpose("json");
+  const maxItems = args.kind === "test_me" ? MAX_TEST_ME_ITEMS : MAX_CARDED_ITEMS;
   let lastRaw = "";
 
   try {
@@ -229,25 +344,28 @@ async function generateJsonArray<T>(args: {
           output: "array",
           schema: args.elementSchema,
           prompt: args.prompt,
+          maxOutputTokens: MAX_GENERATION_JSON_OUTPUT_TOKENS,
         });
+        const normalized = normalizeGeneratedItems(args.kind, result.object as T[]);
         return {
-          items: result.object as T[],
+          ...normalized,
           modelUsed: extractModelUsed(result, modelId),
-          raw: JSON.stringify(result.object),
         };
       } catch (err) {
         // Last resort local parse (no extra model call) when healing still fails.
         if (NoObjectGeneratedError.isInstance(err) && err.text) {
-          lastRaw = err.text;
-          const parsed = tryParseJsonArrayLocally(args.elementSchema, err.text);
+          lastRaw = err.text.length > MAX_GENERATED_JSON_CHARS
+            ? err.text.slice(0, MAX_GENERATED_JSON_CHARS + 1)
+            : err.text;
+          const parsed = tryParseJsonArrayLocally(args.elementSchema, err.text, maxItems);
           if (parsed) {
+            const normalized = normalizeGeneratedItems(args.kind, parsed);
             return {
-              items: parsed,
+              ...normalized,
               modelUsed: extractModelUsed(
                 { response: err.response },
                 modelId,
               ),
-              raw: err.text,
             };
           }
         }
@@ -255,9 +373,10 @@ async function generateJsonArray<T>(args: {
       }
     });
   } catch (objectError) {
-    const parsed = tryParseJsonArrayLocally(args.elementSchema, lastRaw);
+    const parsed = tryParseJsonArrayLocally(args.elementSchema, lastRaw, maxItems);
     if (parsed) {
-      return { items: parsed, modelUsed: modelId, raw: lastRaw };
+      const normalized = normalizeGeneratedItems(args.kind, parsed);
+      return { ...normalized, modelUsed: modelId };
     }
     const detail =
       objectError instanceof Error ? objectError.message : "unknown parse error";
@@ -274,6 +393,107 @@ export type StudyPackStepPayload =
   | { kind: "summary"; content: string }
   | { kind: "test_me"; content: TestMeItem[] }
   | { kind: "carded"; content: CardedItem[] };
+
+export type GeneratedStudyPackStep = {
+  step: StudyPackStep;
+  payload: StudyPackStepPayload;
+  modelUsed: string;
+};
+
+/**
+ * Generate one pipeline step. Keeping this operation step-sized is important
+ * for route handlers: a request can claim one lease and make one logical
+ * provider operation, then persist before the next request resumes the run.
+ */
+export async function generateStudyPackStep(input: {
+  step: StudyPackStep;
+  extractedTexts?: { filename: string; text: string }[];
+  lockedIn?: string;
+  summary?: string;
+}): Promise<GeneratedStudyPackStep> {
+  switch (input.step) {
+    case "locked_in": {
+      if (!input.extractedTexts?.length) {
+        throw new Error("locked_in generation requires extracted texts");
+      }
+      const result = await generateTextFromPrompt(
+        lockedInPrompt(input.extractedTexts),
+        { purpose: "locked_in" },
+      );
+      return {
+        step: "locked_in",
+        payload: { kind: "locked_in", content: result.text },
+        modelUsed: result.modelUsed,
+      };
+    }
+    case "summary": {
+      const lockedIn = input.lockedIn?.trim();
+      if (!lockedIn) throw new Error("summary generation requires Locked In");
+      const result = await generateTextFromPrompt(summaryPrompt(lockedIn), {
+        purpose: "summary",
+      });
+      return {
+        step: "summary",
+        payload: { kind: "summary", content: result.text },
+        modelUsed: result.modelUsed,
+      };
+    }
+    case "test_me": {
+      const lockedIn = input.lockedIn?.trim();
+      if (!lockedIn) throw new Error("test_me generation requires Locked In");
+      try {
+        const result = await generateJsonArray({
+          kind: "test_me",
+          prompt: testMePrompt(lockedIn),
+          elementSchema: testMeItemSchema,
+        });
+        return {
+          step: "test_me",
+          payload: { kind: "test_me", content: result.items },
+          modelUsed: result.modelUsed,
+        };
+      } catch (err) {
+        if (err instanceof PromptInputLimitError) throw err;
+        throw toGenerationError(
+          err instanceof StudyPackJsonError
+            ? err
+            : new StudyPackJsonError(
+                "test_me",
+                err instanceof Error ? err.message : "test_me failed",
+                "",
+              ),
+        );
+      }
+    }
+    case "carded": {
+      const summary = input.summary?.trim();
+      if (!summary) throw new Error("carded generation requires Summary");
+      try {
+        const result = await generateJsonArray({
+          kind: "carded",
+          prompt: cardedPrompt(summary),
+          elementSchema: cardedItemSchema,
+        });
+        return {
+          step: "carded",
+          payload: { kind: "carded", content: result.items },
+          modelUsed: result.modelUsed,
+        };
+      } catch (err) {
+        if (err instanceof PromptInputLimitError) throw err;
+        throw toGenerationError(
+          err instanceof StudyPackJsonError
+            ? err
+            : new StudyPackJsonError(
+                "carded",
+                err instanceof Error ? err.message : "carded failed",
+                "",
+              ),
+        );
+      }
+    }
+  }
+}
 
 /**
  * Sequential study-pack pipeline:
@@ -333,6 +553,7 @@ export async function generateStudyPack(input: {
     testMe = testMeResult.items;
     testMeModel = testMeResult.modelUsed;
   } catch (err) {
+    if (err instanceof PromptInputLimitError) throw err;
     throw toGenerationError(
       err instanceof StudyPackJsonError
         ? err
@@ -361,6 +582,7 @@ export async function generateStudyPack(input: {
     carded = cardedResult.items;
     cardedModel = cardedResult.modelUsed;
   } catch (err) {
+    if (err instanceof PromptInputLimitError) throw err;
     throw toGenerationError(
       err instanceof StudyPackJsonError
         ? err

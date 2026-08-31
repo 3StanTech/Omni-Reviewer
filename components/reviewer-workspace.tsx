@@ -27,6 +27,32 @@ type ReviewerWorkspaceProps = {
   initialSources: SourceListItem[];
   initialViews: ViewsPayload;
   lastGeneratedAt: string | null;
+  examDate: string | null;
+  initialCards: SerializedCard[];
+  initialTestAttemptStats: SerializedAttemptStats[];
+};
+
+export type SerializedCard = {
+  id: string;
+  sourceKey: string;
+  front: string;
+  back: string;
+  kind?: "basic" | "cloze";
+  revision: number;
+  isEdited: boolean;
+  isPinned: boolean;
+  dueAt: string;
+  intervalDays: number;
+  repetitions: number;
+  easeFactor: number;
+  lastReviewedAt: string | null;
+};
+
+export type SerializedAttemptStats = {
+  itemId: string;
+  attempts: number;
+  misses: number;
+  lastAttemptedAt: string | null;
 };
 
 const NOT_GENERATED_YET =
@@ -44,13 +70,17 @@ function needsViewBodies(views: ViewsPayload): boolean {
 }
 
 function stampFromViews(views: ViewsPayload): string | null {
-  return (
-    views.locked_in?.generatedAt ??
-    views.summary?.generatedAt ??
-    views.test_me?.generatedAt ??
-    views.carded?.generatedAt ??
-    null
-  );
+  const stamps = [
+    views.locked_in?.generatedAt,
+    views.summary?.generatedAt,
+    views.test_me?.generatedAt,
+    views.carded?.generatedAt,
+  ].filter((stamp): stamp is string => Boolean(stamp));
+  return stamps.length > 0
+    ? stamps.reduce((latest, stamp) =>
+        Date.parse(stamp) > Date.parse(latest) ? stamp : latest,
+      )
+    : null;
 }
 
 export function ReviewerWorkspace({
@@ -62,6 +92,9 @@ export function ReviewerWorkspace({
   initialSources,
   initialViews,
   lastGeneratedAt,
+  examDate,
+  initialCards,
+  initialTestAttemptStats,
 }: ReviewerWorkspaceProps) {
   const [sources, setSources] = useState(initialSources);
   const [views, setViews] = useState(initialViews);
@@ -73,6 +106,13 @@ export function ReviewerWorkspace({
   const [viewsReload, setViewsReload] = useState(0);
   const [redoBusy, setRedoBusy] = useState(false);
   const [redoError, setRedoError] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [cards, setCards] = useState(initialCards);
+  const [testAttemptStats, setTestAttemptStats] = useState(initialTestAttemptStats);
+  const [currentExamDate, setCurrentExamDate] = useState(examDate);
+  const [examDateDraft, setExamDateDraft] = useState(examDate ?? "");
+  const [examDateBusy, setExamDateBusy] = useState(false);
+  const [examDateError, setExamDateError] = useState<string | null>(null);
   const isClient = useIsClient();
   const generatedStamp = generatedAt
     ? isClient
@@ -104,6 +144,36 @@ export function ReviewerWorkspace({
       (s) => s.kind === "video" || s.kind === "audio" || s.ingestStatus === "unprocessed",
     );
   }, [sources]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadActiveGeneration() {
+      try {
+        const res = await fetch(`/api/reviewers/${reviewerId}/generation`);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          job: { id: string } | null;
+          views: ViewsPayload | null;
+        };
+        if (cancelled || !data.job) return;
+        setActiveJobId(data.job.id);
+        if (data.views) {
+          setViews(data.views);
+          const stamp = stampFromViews(data.views);
+          if (stamp) setGeneratedAt(stamp);
+        }
+      } catch {
+        // Active-job discovery is advisory; the explicit Generate action can
+        // still start or resume a run if this read is temporarily unavailable.
+      }
+    }
+
+    void loadActiveGeneration();
+    return () => {
+      cancelled = true;
+    };
+  }, [reviewerId]);
 
   useEffect(() => {
     if (!needsViewBodies(initialViews)) return;
@@ -145,16 +215,34 @@ export function ReviewerWorkspace({
   function applyGenerated(next: ViewsPayload) {
     setViews(next);
     setGeneratedAt(stampFromViews(next) ?? new Date().toISOString());
+    if (next.carded) {
+      void fetch(`/api/reviewers/${reviewerId}/cards`)
+        .then(async (response) => {
+          if (!response.ok) return null;
+          return (await response.json()) as { cards: SerializedCard[] };
+        })
+        .then((data) => {
+          if (data) setCards(data.cards);
+        })
+        .catch(() => undefined);
+    }
   }
 
-  async function redo(kind: ViewKind) {
+  async function redo(kind: ViewKind, forceOverwrite = false) {
     setRedoBusy(true);
     setRedoError(null);
     try {
+      const expectedProtected = [
+        ...(["locked_in", "summary", "test_me", "carded"] as const)
+          .map((viewKind) => views[viewKind])
+          .filter((view): view is NonNullable<typeof view> => Boolean(view))
+          .map((view) => ({ key: `view:${view.kind}`, revision: view.revision })),
+        ...cards.map((card) => ({ key: `card:${card.id}`, revision: card.revision })),
+      ];
       const res = await fetch(`/api/reviewers/${reviewerId}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind }),
+        body: JSON.stringify({ kind, forceOverwrite, expectedProtected }),
       });
       if (!res.ok) {
         setRedoError(await readApiError(res));
@@ -165,20 +253,35 @@ export function ReviewerWorkspace({
         views?: ViewsPayload;
       };
       if (data.jobId) {
+        setActiveJobId(data.jobId);
         const maxAttempts = 180;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           const poll = await fetch(
             `/api/reviewers/${reviewerId}/generation/${data.jobId}`,
+            { method: "POST" },
           );
-          if (!poll.ok) {
-            setRedoError(await readApiError(poll));
-            return;
-          }
-          const job = (await poll.json()) as {
+          let job: {
             status: string;
             views?: ViewsPayload;
             error?: { message?: string } | string | null;
-          };
+          } | null = null;
+          try {
+            job = (await poll.json()) as {
+              status: string;
+              views?: ViewsPayload;
+              error?: { message?: string } | string | null;
+            };
+          } catch {
+            job = null;
+          }
+          if (!poll.ok && !job?.status) {
+            setRedoError(await readApiError(poll));
+            return;
+          }
+          if (!job) {
+            setRedoError("Generation returned an invalid response.");
+            return;
+          }
           if (
             job.status === "succeeded" ||
             job.status === "failed" ||
@@ -192,6 +295,7 @@ export function ReviewerWorkspace({
                   : job.error?.message;
               if (msg) setRedoError(msg);
             }
+            setActiveJobId(null);
             return;
           }
           await new Promise((r) => setTimeout(r, 1500));
@@ -204,6 +308,26 @@ export function ReviewerWorkspace({
       setRedoError("Generation failed. Try again in a moment.");
     } finally {
       setRedoBusy(false);
+    }
+  }
+
+  async function saveExamDate() {
+    setExamDateBusy(true);
+    setExamDateError(null);
+    try {
+      const res = await fetch(`/api/reviewers/${reviewerId}/exam-date`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ examDate: examDateDraft || null }),
+      });
+      if (!res.ok) throw new Error(await readApiError(res));
+      const data = (await res.json()) as { examDate: string | null };
+      setCurrentExamDate(data.examDate);
+      setExamDateDraft(data.examDate ?? "");
+    } catch (error) {
+      setExamDateError(error instanceof Error ? error.message : "Could not save exam date.");
+    } finally {
+      setExamDateBusy(false);
     }
   }
 
@@ -226,6 +350,32 @@ export function ReviewerWorkspace({
         <p className="text-sm text-muted-foreground" suppressHydrationWarning>
           {generatedLabel}
         </p>
+        <div className="flex flex-wrap items-end gap-2 pt-3">
+          <label
+            htmlFor="exam-date"
+            className="grid gap-1 text-xs text-muted-foreground"
+          >
+            Exam date
+            <input
+              id="exam-date"
+              name="examDate"
+              type="date"
+              value={examDateDraft}
+              onChange={(event) => setExamDateDraft(event.target.value)}
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+            />
+          </label>
+          <button
+            type="button"
+            className="h-9 rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"
+            onClick={() => void saveExamDate()}
+            disabled={examDateBusy || examDateDraft === (currentExamDate ?? "")}
+          >
+            {examDateBusy ? "Saving" : "Save date"}
+          </button>
+          {currentExamDate ? <p className="pb-2 text-xs text-muted-foreground">Cards will be scheduled no later than this date.</p> : null}
+          {examDateError ? <p role="alert" className="basis-full text-xs text-destructive">{examDateError}</p> : null}
+        </div>
       </div>
 
       <SourcePanel
@@ -254,7 +404,9 @@ export function ReviewerWorkspace({
           hasReadySource={hasReadySource}
           hasViews={hasViews}
           sourcesAreMediaOnly={sourcesAreMediaOnly}
+          activeJobId={activeJobId}
           onGenerated={applyGenerated}
+          onGenerationFinished={() => setActiveJobId(null)}
         />
       </section>
 
@@ -288,7 +440,13 @@ export function ReviewerWorkspace({
           showRedo={hasViews}
           busy={redoBusy}
           error={redoError}
-          onRedo={(kind) => void redo(kind)}
+          cards={cards}
+          testAttemptStats={testAttemptStats}
+          reviewerId={reviewerId}
+          onCardsChange={setCards}
+          onTestAttemptStatsChange={setTestAttemptStats}
+          onViewsChange={setViews}
+          onRedo={(kind, forceOverwrite) => void redo(kind, forceOverwrite)}
         />
       </section>
     </div>

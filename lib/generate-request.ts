@@ -9,13 +9,23 @@ export const GENERATE_KINDS = [
 
 export type GenerateKind = (typeof GENERATE_KINDS)[number];
 
+export type ExpectedProtectedRevision = {
+  key: string;
+  revision: number;
+};
+
 const bodySchema = z.object({
   kind: z.enum(GENERATE_KINDS).optional(),
-});
+  forceOverwrite: z.boolean().optional(),
+  expectedProtected: z.array(z.object({
+    key: z.string().min(1).max(300),
+    revision: z.number().int().positive(),
+  }).strict()).max(500).optional(),
+}).strict();
 
 export function parseGenerateBody(
   raw: string,
-): { ok: true; kind: GenerateKind } | { ok: false; error: string } {
+): { ok: true; kind: GenerateKind; forceOverwrite?: boolean; expectedProtected?: ExpectedProtectedRevision[] } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (!trimmed) return { ok: true, kind: "locked_in" };
 
@@ -34,7 +44,14 @@ export function parseGenerateBody(
     };
   }
 
-  return { ok: true, kind: parsed.data.kind ?? "locked_in" };
+  return parsed.data.forceOverwrite === undefined && parsed.data.expectedProtected === undefined
+    ? { ok: true, kind: parsed.data.kind ?? "locked_in" }
+    : {
+        ok: true,
+        kind: parsed.data.kind ?? "locked_in",
+        forceOverwrite: parsed.data.forceOverwrite,
+        expectedProtected: parsed.data.expectedProtected,
+      };
 }
 
 export function missingUpstreamMessage(kind: GenerateKind): string {

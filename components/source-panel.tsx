@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { upload } from "@vercel/blob/client";
+import { put } from "@vercel/blob/client";
 import {
   CircleNotch,
   File,
@@ -17,6 +17,7 @@ import {
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { MAX_PASTE_TEXT_CHARS, MAX_PASTE_TITLE_CHARS } from "@/lib/paste";
 import type { IngestStatus, SourceKind } from "@/lib/types";
 import { buildClientBlobPathname, readApiError } from "@/lib/utils";
 
@@ -26,8 +27,8 @@ export type SourceListItem = {
   filename: string;
   mime: string;
   kind: SourceKind;
-  blobUrl: string;
-  blobPathname: string;
+  blobUrl: string | null;
+  blobPathname: string | null;
   ingestStatus: IngestStatus;
   errorMessage: string | null;
   createdAt: string;
@@ -63,6 +64,11 @@ function KindIcon({ kind }: { kind: SourceKind }) {
       return <ImageIcon className={className} weight="duotone" />;
     case "text":
       return <FileText className={className} weight="duotone" />;
+    case "document":
+    case "presentation":
+      return <FileText className={className} weight="duotone" />;
+    case "paste":
+      return <File className={className} weight="duotone" />;
     case "video":
       return <VideoCamera className={className} weight="duotone" />;
     case "audio":
@@ -79,8 +85,14 @@ function normalizeSource(raw: Record<string, unknown>): SourceListItem {
     filename: String(raw.filename),
     mime: String(raw.mime),
     kind: raw.kind as SourceKind,
-    blobUrl: String(raw.blobUrl ?? raw.blob_url ?? ""),
-    blobPathname: String(raw.blobPathname ?? raw.blob_pathname ?? ""),
+    blobUrl:
+      typeof (raw.blobUrl ?? raw.blob_url) === "string"
+        ? String(raw.blobUrl ?? raw.blob_url)
+        : null,
+    blobPathname:
+      typeof (raw.blobPathname ?? raw.blob_pathname) === "string"
+        ? String(raw.blobPathname ?? raw.blob_pathname)
+        : null,
     ingestStatus: (raw.ingestStatus ?? raw.ingest_status) as IngestStatus,
     errorMessage:
       (raw.errorMessage as string | null | undefined) ??
@@ -102,6 +114,10 @@ export function SourcePanel({
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pasteTitle, setPasteTitle] = useState("");
+  const [pasteText, setPasteText] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteError, setPasteError] = useState<string | null>(null);
 
   function commit(next: SourceListItem[]) {
     setSources(next);
@@ -120,15 +136,41 @@ export function SourcePanel({
       for (const file of files) {
         setProgress(0);
         const pathname = buildClientBlobPathname(userId, reviewerId, file.name);
-        const blob = await upload(pathname, file, {
-          access: "public",
-          handleUploadUrl: "/api/blob/upload",
-          clientPayload: JSON.stringify({
-            reviewerId,
-            filename: file.name,
+        const multipart = file.size > 4 * 1024 * 1024;
+        const tokenResponse = await fetch("/api/blob/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "blob.generate-client-token",
+            payload: {
+              pathname,
+              multipart,
+              clientPayload: JSON.stringify({
+                reviewerId,
+                filename: file.name,
+              }),
+            },
           }),
+        });
+        if (!tokenResponse.ok) throw new Error(await readApiError(tokenResponse));
+        const tokenPayload = (await tokenResponse.json()) as {
+          clientToken?: unknown;
+          attemptToken?: unknown;
+        };
+        if (
+          typeof tokenPayload.clientToken !== "string" ||
+          typeof tokenPayload.attemptToken !== "string"
+        ) {
+          throw new Error("Upload token response was invalid. Try again.");
+        }
+        // The server mints the opaque attempt identity together with the Blob
+        // client token. Keep it only for this registration request.
+        const attemptToken = tokenPayload.attemptToken;
+        const blob = await put(pathname, file, {
+          access: "private",
+          token: tokenPayload.clientToken,
           contentType: file.type || undefined,
-          multipart: file.size > 4 * 1024 * 1024,
+          multipart,
           onUploadProgress: ({ percentage }) => {
             setProgress(Math.round(percentage));
           },
@@ -142,6 +184,7 @@ export function SourcePanel({
             mime: file.type || "application/octet-stream",
             blob_url: blob.url,
             blob_pathname: blob.pathname,
+            attempt_token: attemptToken,
           }),
         });
 
@@ -186,6 +229,34 @@ export function SourcePanel({
     }
   }
 
+  async function addPaste() {
+    if (!pasteText.trim()) return;
+    setPasteBusy(true);
+    setPasteError(null);
+    try {
+      const response = await fetch(`/api/reviewers/${reviewerId}/sources/paste`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: pasteTitle.trim() || "Pasted notes",
+          text: pasteText,
+        }),
+      });
+      if (!response.ok) throw new Error(await readApiError(response));
+      const raw = (await response.json()) as Record<string, unknown>;
+      const next = [...sources, normalizeSource(raw)];
+      commit(next);
+      setPasteTitle("");
+      setPasteText("");
+    } catch (caught) {
+      setPasteError(
+        caught instanceof Error ? caught.message : "Could not add pasted text.",
+      );
+    } finally {
+      setPasteBusy(false);
+    }
+  }
+
   return (
     <section className="space-y-3" aria-labelledby="sources-heading">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -197,17 +268,25 @@ export function SourcePanel({
             Sources
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            PDF, image, text, video, or audio. Video and audio stay unprocessed
-            in v1.
+            PDF, DOCX, PPTX, image, text, or pasted notes. Video and audio stay
+            unprocessed in v1.
           </p>
         </div>
         <div>
+          <label
+            htmlFor="source-file-upload"
+            className="sr-only"
+          >
+            Upload source files
+          </label>
           <input
             ref={inputRef}
+            id="source-file-upload"
+            name="sourceFiles"
             type="file"
             className="sr-only"
             multiple
-            accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.csv,.html,.mp4,.webm,.mov,.avi,.mkv,.mp3,.wav,.ogg,.m4a,.aac,.flac,application/pdf,image/*,text/*,video/*,audio/*"
+            accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.csv,.html,.mp4,.webm,.mov,.avi,.mkv,.mp3,.wav,.ogg,.m4a,.aac,.flac,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,image/*,text/*,video/*,audio/*"
             disabled={uploading}
             onChange={(e) => void handleFiles(e.target.files)}
           />
@@ -232,6 +311,51 @@ export function SourcePanel({
         </div>
       </div>
 
+      <div className="grid gap-2 rounded-xl border border-border/80 bg-surface/40 p-3 sm:p-4">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Paste text</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Add notes without uploading a file.
+          </p>
+        </div>
+        <label htmlFor="source-paste-title" className="grid gap-1 text-xs text-muted-foreground">
+          Title
+          <input
+            id="source-paste-title"
+            name="pasteTitle"
+            value={pasteTitle}
+            maxLength={MAX_PASTE_TITLE_CHARS}
+            onChange={(event) => setPasteTitle(event.target.value)}
+            placeholder="Pasted notes"
+            className="min-h-10 rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+            disabled={pasteBusy}
+          />
+        </label>
+        <label htmlFor="source-paste-text" className="grid gap-1 text-xs text-muted-foreground">
+          Notes
+          <textarea
+            id="source-paste-text"
+            name="pasteText"
+            value={pasteText}
+            maxLength={MAX_PASTE_TEXT_CHARS}
+            onChange={(event) => setPasteText(event.target.value)}
+            placeholder="Paste your study material here"
+            rows={6}
+            className="rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+            disabled={pasteBusy}
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" disabled={pasteBusy || !pasteText.trim()} onClick={() => void addPaste()}>
+            {pasteBusy ? "Adding" : "Add pasted text"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {pasteText.length.toLocaleString()} / {MAX_PASTE_TEXT_CHARS.toLocaleString()}
+          </span>
+        </div>
+        {pasteError ? <p role="alert" className="text-sm text-destructive">{pasteError}</p> : null}
+      </div>
+
       {error ? (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -242,7 +366,7 @@ export function SourcePanel({
         <EmptyState
           icon={<UploadSimple weight="duotone" className="size-5" />}
           title="No sources yet"
-          description="Upload notes, slides, or a PDF. When at least one source is Ready, you can generate the four study modes."
+          description="Upload notes, slides, a PDF, or paste text. When at least one source is Ready, you can generate the four study modes."
           action={
             <Button
               type="button"

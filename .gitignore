@@ -57,3 +57,8 @@ CLAUDE.md
 .agents/
 .claude/
 skills-lock.json
+
+# Local project context (never publish)
+master.md
+CHANGELOG.md
+session-transfer/

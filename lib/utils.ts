@@ -25,6 +25,41 @@ export function buildClientBlobPathname(
   return `users/${userId}/reviewers/${reviewerId}/${id}-${safeClientFilename(filename)}`;
 }
 
+const SAFE_MARKDOWN_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
+/**
+ * Return a link target that is safe to place in rendered Markdown, or null
+ * when the target uses an executable or otherwise unsupported protocol.
+ * Relative links are retained for in-app references; external links are
+ * limited to HTTP(S) and mailto.
+ */
+export function sanitizeMarkdownUrl(value: string): string | null {
+  const target = value.trim();
+  if (!target) return null;
+
+  // Fragment and path links do not need URL parsing and cannot execute script.
+  if (
+    target.startsWith("#") ||
+    target.startsWith("/") ||
+    target.startsWith("./") ||
+    target.startsWith("../")
+  ) {
+    return target;
+  }
+
+  try {
+    const parsed = new URL(target, "https://omni-reviewer.invalid");
+    if (!SAFE_MARKDOWN_PROTOCOLS.has(parsed.protocol)) return null;
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+export function isSafeMarkdownUrl(value: string): boolean {
+  return sanitizeMarkdownUrl(value) !== null;
+}
+
 export async function readApiError(res: Response): Promise<string> {
   try {
     const data: unknown = await res.json();

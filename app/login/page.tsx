@@ -3,6 +3,7 @@ import { AuthError } from "next-auth";
 
 import { LoginForm } from "@/components/login-form";
 import { signIn } from "@/auth";
+import { isUsableAuthSecret } from "@/lib/auth-secret";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ async function loginAction(
 ): Promise<string | null> {
   "use server";
 
-  if (!process.env.AUTH_SECRET || !process.env.DATABASE_URL) {
+  if (!isUsableAuthSecret(process.env.AUTH_SECRET) || !process.env.DATABASE_URL) {
     return "Server is misconfigured. Try again later.";
   }
 

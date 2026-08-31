@@ -1,6 +1,14 @@
 /** Shared TypeScript types mirroring `lib/schema.ts`. */
 
-export type SourceKind = "pdf" | "image" | "text" | "video" | "audio";
+export type SourceKind =
+  | "pdf"
+  | "image"
+  | "text"
+  | "document"
+  | "presentation"
+  | "paste"
+  | "video"
+  | "audio";
 
 export type IngestStatus = "ready" | "unprocessed" | "failed";
 
@@ -15,6 +23,8 @@ export type GenerationJobStatus =
 
 export type GenerationJobStep = "locked_in" | "summary" | "test_me" | "carded";
 
+export type GenerationJobMode = "full" | "single";
+
 export type Topic = {
   id: string;
   name: string;
@@ -28,6 +38,7 @@ export type Reviewer = {
   name: string;
   createdAt: Date;
   lastGeneratedAt: Date | null;
+  examDate: string | null;
 };
 
 export type Source = {
@@ -36,8 +47,8 @@ export type Source = {
   filename: string;
   mime: string;
   kind: SourceKind;
-  blobUrl: string;
-  blobPathname: string;
+  blobUrl: string | null;
+  blobPathname: string | null;
   ingestStatus: IngestStatus;
   extractedText: string | null;
   errorMessage: string | null;
@@ -51,7 +62,12 @@ export type StudyView = {
   content: string;
   contentJson: unknown | null;
   modelId?: string | null;
+  generationRunId?: string | null;
   generatedAt: Date;
+  revision: number;
+  isEdited: boolean;
+  isPinned: boolean;
+  updatedAt: Date;
 };
 
 export type GenerationJob = {
@@ -59,17 +75,25 @@ export type GenerationJob = {
   reviewerId: string;
   status: GenerationJobStatus;
   step: GenerationJobStep | null;
+  mode: GenerationJobMode;
+  generationRunId: string;
+  active: boolean;
+  claimToken: string | null;
+  claimExpiresAt: Date | null;
+  claimedAt: Date | null;
   errorCode: string | null;
   errorMessage: string | null;
   modelUsed: string | null;
   createdAt: Date;
   updatedAt: Date;
   finishedAt: Date | null;
+  forceOverwrite: boolean;
 };
 
 export type TestMeItem = {
   id: string;
   question: string;
+  /** New generated items are MC; legacy v1 items may remain open-ended. */
   choices?: string[];
   answer: string;
   explanation: string;
@@ -79,4 +103,27 @@ export type CardedItem = {
   id: string;
   front: string;
   back: string;
+  /** Inferred from the validated {{answer}} template when present. */
+  kind?: "basic" | "cloze";
+};
+
+export type CardRating = "again" | "good";
+
+export type DurableCard = CardedItem & {
+  sourceKey: string;
+  revision: number;
+  isEdited: boolean;
+  isPinned: boolean;
+  dueAt: Date;
+  intervalDays: number;
+  repetitions: number;
+  easeFactor: number;
+  lastReviewedAt: Date | null;
+};
+
+export type TestAttemptStats = {
+  itemId: string;
+  attempts: number;
+  misses: number;
+  lastAttemptedAt: Date | null;
 };

@@ -7,13 +7,18 @@ import {
   getTopic,
   listReviewersByTopic,
 } from "@/lib/queries";
+import {
+  cappedBodyError,
+  MAX_MUTATION_BODY_BYTES,
+  readCappedJson,
+} from "@/lib/request-body";
 
 export const dynamic = "force-dynamic";
 
 const createReviewerSchema = z.object({
   topicId: z.string().uuid("topicId must be a uuid"),
   name: z.string().trim().min(1, "name is required").max(200),
-});
+}).strict();
 
 function serializeReviewer(row: {
   id: string;
@@ -21,6 +26,7 @@ function serializeReviewer(row: {
   name: string;
   createdAt: Date;
   lastGeneratedAt: Date | null;
+  examDate: string | null;
 }) {
   return {
     id: row.id,
@@ -30,6 +36,7 @@ function serializeReviewer(row: {
     lastGeneratedAt: row.lastGeneratedAt
       ? row.lastGeneratedAt.toISOString()
       : null,
+    examDate: row.examDate,
   };
 }
 
@@ -74,9 +81,13 @@ export async function POST(request: Request) {
 
   let json: unknown;
   try {
-    json = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    json = await readCappedJson(request, {
+      maxBytes: MAX_MUTATION_BODY_BYTES,
+      tooLargeMessage: "Reviewer request body exceeds the safe size limit",
+    });
+  } catch (error) {
+    const { message, status } = cappedBodyError(error);
+    return NextResponse.json({ error: message }, { status });
   }
 
   const parsed = createReviewerSchema.safeParse(json);

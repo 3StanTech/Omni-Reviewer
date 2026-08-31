@@ -3,9 +3,18 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
-import { getReviewer } from "@/lib/queries";
+import {
+  getActiveGenerationJobForReviewer,
+  getLatestFullGenerationJobForReviewer,
+  getLatestGenerationJobForReviewer,
+  getReviewer,
+} from "@/lib/queries";
 import { views } from "@/lib/schema";
-import { viewsPayloadFromRows } from "@/lib/serialize-view";
+import {
+  selectVisibleGenerationRows,
+  manualStaleKinds,
+  viewsPayloadFromRows,
+} from "@/lib/serialize-view";
 
 export const dynamic = "force-dynamic";
 
@@ -29,10 +38,38 @@ export async function GET(
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }
 
+  const activeJob = await getActiveGenerationJobForReviewer(reviewerId, userId);
+  const latestJob =
+    activeJob ?? (await getLatestGenerationJobForReviewer(reviewerId, userId));
+  const baselineCandidate =
+    latestJob?.mode === "full"
+      ? latestJob
+      : await getLatestFullGenerationJobForReviewer(reviewerId, userId);
+  const baselineFullJob =
+    baselineCandidate?.mode === "full"
+      ? {
+          mode: "full" as const,
+          generationRunId: baselineCandidate.generationRunId,
+          step: baselineCandidate.step,
+        }
+      : null;
   const rows = await db
     .select()
     .from(views)
     .where(eq(views.reviewerId, reviewerId));
 
-  return NextResponse.json(viewsPayloadFromRows(rows));
+  if (!latestJob) {
+    return NextResponse.json(
+      viewsPayloadFromRows(rows, { staleKinds: manualStaleKinds(rows) }),
+    );
+  }
+
+  const visible = selectVisibleGenerationRows(rows, latestJob, baselineFullJob);
+
+  return NextResponse.json(
+    viewsPayloadFromRows(visible.rows, {
+      currentGenerationRunId: visible.currentGenerationRunId,
+      staleKinds: [...new Set([...visible.staleKinds, ...manualStaleKinds(rows)])],
+    }),
+  );
 }

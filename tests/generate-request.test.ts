@@ -41,6 +41,33 @@ describe("parseGenerateBody", () => {
     });
     expect(parseGenerateBody('{"kind":"quiz"}').ok).toBe(false);
   });
+
+  it("accepts an explicit overwrite confirmation flag", () => {
+    expect(parseGenerateBody('{"kind":"locked_in","forceOverwrite":true}')).toEqual({
+      ok: true,
+      kind: "locked_in",
+      forceOverwrite: true,
+    });
+  });
+
+  it("preserves the protected revision snapshot used by force overwrite CAS", () => {
+    expect(parseGenerateBody(JSON.stringify({
+      kind: "carded",
+      forceOverwrite: true,
+      expectedProtected: [
+        { key: "view:carded", revision: 4 },
+        { key: "card:123", revision: 2 },
+      ],
+    }))).toEqual({
+      ok: true,
+      kind: "carded",
+      forceOverwrite: true,
+      expectedProtected: [
+        { key: "view:carded", revision: 4 },
+        { key: "card:123", revision: 2 },
+      ],
+    });
+  });
 });
 
 describe("missingUpstreamMessage", () => {

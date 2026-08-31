@@ -13,6 +13,14 @@ import {
   users,
   viewKindEnum,
   views,
+  cards,
+  cardReviews,
+  testAttempts,
+  testSessions,
+  testSessionStatusEnum,
+  cardRatingEnum,
+  blobReservations,
+  blobReservationStateEnum,
 } from "@/lib/schema";
 
 describe("schema", () => {
@@ -23,6 +31,11 @@ describe("schema", () => {
     expect(sources).toBeDefined();
     expect(views).toBeDefined();
     expect(generationJobs).toBeDefined();
+    expect(cards).toBeDefined();
+    expect(testAttempts).toBeDefined();
+    expect(testSessions).toBeDefined();
+    expect(cardReviews).toBeDefined();
+    expect(blobReservations).toBeDefined();
 
     expect(getTableName(users)).toBe("users");
     expect(getTableName(topics)).toBe("topics");
@@ -30,26 +43,72 @@ describe("schema", () => {
     expect(getTableName(sources)).toBe("sources");
     expect(getTableName(views)).toBe("views");
     expect(getTableName(generationJobs)).toBe("generation_jobs");
+    expect(getTableName(cards)).toBe("cards");
+    expect(getTableName(testAttempts)).toBe("test_attempts");
+    expect(getTableName(testSessions)).toBe("test_sessions");
+    expect(getTableName(cardReviews)).toBe("card_reviews");
+    expect(getTableName(blobReservations)).toBe("blob_reservations");
 
     expect(users.email).toBeDefined();
     expect(users.passwordHash).toBeDefined();
     expect(topics.id).toBeDefined();
     expect(topics.userId).toBeDefined();
+    expect(topics.deletingAt).toBeDefined();
     expect(reviewers.topicId).toBeDefined();
+    expect(reviewers.deletingAt).toBeDefined();
     expect(sources.ingestStatus).toBeDefined();
+    expect(sources.deletingAt).toBeDefined();
+    expect(sources.blobPathname).toBeDefined();
+    expect(blobReservations.pathname).toBeDefined();
+    expect(blobReservations.attemptToken).toBeDefined();
+    expect(blobReservations.leaseExpiresAt).toBeDefined();
     expect(views.kind).toBeDefined();
     expect(views.modelId).toBeDefined();
     expect(generationJobs.reviewerId).toBeDefined();
     expect(generationJobs.userId).toBeDefined();
     expect(generationJobs.status).toBeDefined();
     expect(generationJobs.step).toBeDefined();
+    expect(generationJobs.mode).toBeDefined();
+    expect(generationJobs.generationRunId).toBeDefined();
+    expect(generationJobs.active).toBeDefined();
+    expect(generationJobs.claimToken).toBeDefined();
+    expect(generationJobs.claimExpiresAt).toBeDefined();
+    expect(generationJobs.expectedProtected).toBeDefined();
+    expect(views.generationRunId).toBeDefined();
+    expect(views.revision).toBeDefined();
+    expect(views.isEdited).toBeDefined();
+    expect(views.isPinned).toBeDefined();
+    expect(cards.dueAt).toBeDefined();
+    expect(cards.revision).toBeDefined();
+    expect(testAttempts.correct).toBeDefined();
+    expect(testAttempts.sessionId).toBeDefined();
+    expect(testSessions.viewRevision).toBeDefined();
+    expect(testSessions.expiresAt).toBeDefined();
+    expect(testSessions.answeredCount).toBeDefined();
+    expect(testSessions.status).toBeDefined();
+    expect(cardReviews.rating).toBeDefined();
   });
 
-  it("source kinds include pdf|image|text|video|audio", () => {
+  it("supports the two-button card ratings", () => {
+    expect(cardRatingEnum.enumValues).toEqual(["again", "good"]);
+  });
+
+  it("has durable Blob reservation states", () => {
+    expect(blobReservationStateEnum.enumValues).toEqual(["reserved", "released", "deleting"]);
+  });
+
+  it("has durable timed session states", () => {
+    expect(testSessionStatusEnum.enumValues).toEqual(["active", "completed", "expired"]);
+  });
+
+  it("source kinds include file, paste, and deferred media kinds", () => {
     expect(sourceKindEnum.enumValues).toEqual([
       "pdf",
       "image",
       "text",
+      "document",
+      "presentation",
+      "paste",
       "video",
       "audio",
     ]);
