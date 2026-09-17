@@ -116,6 +116,7 @@ const SAFE_LOG_CONTEXTS = new Set([
   "Blob reservation failed",
   "Blob verification failed",
   "Could not save source",
+  "Password reset email failed",
 ]);
 
 const SAFE_LOG_DETAIL_KEYS = new Set([

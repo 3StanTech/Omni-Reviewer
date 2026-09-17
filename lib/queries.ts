@@ -13,14 +13,22 @@ import {
   sql,
 } from "drizzle-orm";
 
+import { hashPassword } from "@/lib/auth-utils";
 import { db } from "@/lib/db";
 import { normalizeLoginEmail } from "@/lib/login-throttle";
+import {
+  createResetToken,
+  hashResetToken,
+  PASSWORD_RESET_TTL_MS,
+} from "@/lib/password-reset";
 import {
   cards,
   blobReservations,
   generationJobs,
   loginThrottles,
+  passwordResetTokens,
   reviewers,
+  users,
   sources,
   testSessions,
   testAttempts,
@@ -2462,4 +2470,93 @@ export async function recordLoginFailure(
 export async function clearLoginThrottle(email: string): Promise<void> {
   const key = normalizeLoginEmail(email);
   await db.delete(loginThrottles).where(eq(loginThrottles.email, key));
+}
+
+export async function getUserIdByEmail(email: string): Promise<string | null> {
+  const key = normalizeLoginEmail(email);
+  const [row] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, key))
+    .limit(1);
+  return row?.id ?? null;
+}
+
+export async function getUserEmailById(userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.email ?? null;
+}
+
+export async function issuePasswordResetToken(
+  email: string,
+): Promise<string | null> {
+  const userId = await getUserIdByEmail(email);
+  if (!userId) return null;
+
+  const token = createResetToken();
+  const tokenHash = hashResetToken(token);
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+
+  await db.execute(sql`
+    UPDATE password_reset_tokens
+    SET consumed_at = NOW()
+    WHERE user_id = ${userId}
+      AND consumed_at IS NULL
+  `);
+  await db.insert(passwordResetTokens).values({
+    userId,
+    tokenHash,
+    expiresAt,
+  });
+  return token;
+}
+
+export async function peekPasswordResetToken(
+  token: string,
+): Promise<{ id: string; userId: string } | null> {
+  if (!token.trim()) return null;
+  const tokenHash = hashResetToken(token);
+  const [row] = await db
+    .select({
+      id: passwordResetTokens.id,
+      userId: passwordResetTokens.userId,
+      expiresAt: passwordResetTokens.expiresAt,
+      consumedAt: passwordResetTokens.consumedAt,
+    })
+    .from(passwordResetTokens)
+    .where(eq(passwordResetTokens.tokenHash, tokenHash))
+    .limit(1);
+  if (!row || row.consumedAt || row.expiresAt.getTime() <= Date.now()) {
+    return null;
+  }
+  return { id: row.id, userId: row.userId };
+}
+
+export async function consumePasswordResetAndSetPassword(
+  token: string,
+  password: string,
+): Promise<string | null> {
+  const tokenHash = hashResetToken(token);
+  const passwordHash = await hashPassword(password);
+  const result = await db.execute(sql`
+    UPDATE password_reset_tokens
+    SET consumed_at = NOW()
+    WHERE token_hash = ${tokenHash}
+      AND consumed_at IS NULL
+      AND expires_at > NOW()
+    RETURNING user_id
+  `);
+  const userId = result.rows[0]?.user_id;
+  if (typeof userId !== "string" || userId.length === 0) {
+    return null;
+  }
+  await db
+    .update(users)
+    .set({ passwordHash })
+    .where(eq(users.id, userId));
+  return userId;
 }

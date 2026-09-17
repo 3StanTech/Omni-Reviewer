@@ -83,7 +83,8 @@ as review history. An optional exam date caps future card due dates.
 
 - Auth.js Credentials against the `users` table (scrypt password hashes). Session `user.id` is the user uuid.
 - No public register page. Invite with `npm run user:create -- email@x [name]`; the script reads the password from hidden stdin.
-- Middleware/proxy protects pages and APIs; unauthenticated pages go to `/login`, APIs return 401.
+- Forgot password is public at `/forgot-password`. It emails a hashed, single-use, one-hour reset link via Resend. The success copy does not reveal whether the email exists. `/reset-password` is also public.
+- Middleware/proxy protects pages and APIs; unauthenticated pages go to `/login` except forgot/reset password; APIs return 401.
 - Every topic/reviewer/source/view/job API is scoped by session user. Cross-user ids return 404 (no existence leak).
 - `OPENROUTER_API_KEY` is server-only. Client never reads it.
 - Source bytes are private application data. Upload paths, metadata, and
@@ -107,6 +108,8 @@ as review history. An optional exam date caps future card due dates.
 | `AUTH_SECRET` | Session signing, at least 32 characters |
 | `AUTH_TRUST_HOST` | Accept host before `AUTH_URL` is set |
 | `AUTH_URL` | Canonical production URL |
+| `RESEND_API_KEY` | Password-reset email (server only) |
+| `EMAIL_FROM` | Optional From address for reset email |
 | `DATABASE_URL` | Neon Postgres (use direct/unpooled URL for `db:push`) |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob |
 | `OPENROUTER_API_KEY` | Generation (server only) |

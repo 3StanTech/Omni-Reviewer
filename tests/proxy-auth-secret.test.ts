@@ -11,6 +11,8 @@ describe("proxy AUTH_SECRET fail-closed contract", () => {
     expect(source).toContain("if (!isUsableAuthSecret(process.env.AUTH_SECRET))");
     expect(source).toContain('pathname === "/api/auth"');
     expect(source).toContain('pathname === "/login"');
+    expect(source).toContain('pathname === "/forgot-password"');
+    expect(source).toContain('pathname === "/reset-password"');
     expect(source).toContain('status: 503');
   });
 });

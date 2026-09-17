@@ -4,7 +4,7 @@
  * Matcher runs on app pages and /api/* (static assets excluded below).
  *
  * Unauthenticated behavior:
- * - Pages (except /login) → redirect to /login
+ * - Pages (except /login, /forgot-password, /reset-password) → redirect to /login
  * - /api/auth/* → always allowed (Auth.js handlers)
  * - POST /api/blob/upload → exempt from session 401 so Vercel Blob's
  *   onUploadCompleted callback (no session cookie) can reach handleUpload,
@@ -21,18 +21,25 @@ import { isUsableAuthSecret } from "./lib/auth-secret";
 
 const configuredSecret = process.env.AUTH_SECRET;
 
+function isPublicAuthPage(pathname: string): boolean {
+  return (
+    pathname === "/login" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password"
+  );
+}
+
 function misconfiguredResponse(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
-  const isLoginPage = pathname === "/login";
   const isAuthApi =
     pathname === "/api/auth" || pathname.startsWith("/api/auth/");
   const isApi = pathname.startsWith("/api/");
   const isBlobUploadCallback =
     pathname === "/api/blob/upload" && req.method === "POST";
 
-  // Keep the public login page and provider callback reachable so users see
+  // Keep public auth pages and the provider callback reachable so users see
   // the same route shape while the server refuses to mint or trust sessions.
-  if (isLoginPage || isAuthApi || isBlobUploadCallback) {
+  if (isPublicAuthPage(pathname) || isAuthApi || isBlobUploadCallback) {
     return NextResponse.next();
   }
   if (isApi) {
@@ -57,7 +64,6 @@ export default auth((req) => {
 
   const { pathname } = req.nextUrl;
   const isLoggedIn = !!req.auth?.user;
-  const isLoginPage = pathname === "/login";
   const isAuthApi =
     pathname === "/api/auth" || pathname.startsWith("/api/auth/");
   const isApi = pathname.startsWith("/api/");
@@ -75,14 +81,14 @@ export default auth((req) => {
         { status: 401 },
       );
     }
-    if (!isLoginPage) {
+    if (!isPublicAuthPage(pathname)) {
       const loginUrl = new URL("/login", req.nextUrl.origin);
       return NextResponse.redirect(loginUrl);
     }
     return NextResponse.next();
   }
 
-  if (isLoginPage) {
+  if (isPublicAuthPage(pathname)) {
     return NextResponse.redirect(new URL("/", req.nextUrl.origin));
   }
 

@@ -47,6 +47,8 @@ describe("auth", () => {
     expect(loginForm).not.toContain("process.env");
     expect(loginForm).toContain('name="email"');
     expect(loginForm).toContain('name="password"');
+    expect(loginForm).toContain("Forgot password?");
+    expect(loginForm).toContain('href="/forgot-password"');
   });
 
   it("login page is a Server Component (secrets stay server-side)", () => {

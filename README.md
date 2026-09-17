@@ -89,6 +89,8 @@ Names only — set values in `.env.local` (local) or your host (production):
 | `AUTH_SECRET` | Session signing secret, at least 32 characters |
 | `AUTH_TRUST_HOST` | Set to `true` so the first production host is accepted |
 | `AUTH_URL` | Canonical app URL (set after first production deploy) |
+| `RESEND_API_KEY` | Resend API key for password-reset email (server only) |
+| `EMAIL_FROM` | Optional From header. Defaults to the Resend onboarding sender |
 
 See `.env.example` for the full list.
 
@@ -112,6 +114,7 @@ See `.env.example` for the full list.
 
 - Sign in at `/login` with email + password.
 - Five failed sign-ins in 15 minutes lock that email for 15 minutes.
+- Forgot password sends a one-hour, single-use link when `RESEND_API_KEY` is set. The form does not say whether the email has an invite.
 - Create invites (no public register):
 
 ```bash

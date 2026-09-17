@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { CircleNotch, EnvelopeSimple, LockSimple } from "@phosphor-icons/react";
 
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,14 @@ export function LoginForm({ action }: { action: LoginAction }) {
             placeholder="Password"
           />
         </div>
+        <p className="text-right">
+          <Link
+            href="/forgot-password"
+            className="text-sm text-primary underline-offset-4 hover:underline"
+          >
+            Forgot password?
+          </Link>
+        </p>
       </div>
 
       {error ? (

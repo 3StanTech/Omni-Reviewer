@@ -22,6 +22,7 @@ import {
   blobReservations,
   blobReservationStateEnum,
   loginThrottles,
+  passwordResetTokens,
 } from "@/lib/schema";
 
 describe("schema", () => {
@@ -52,6 +53,9 @@ describe("schema", () => {
     expect(getTableName(loginThrottles)).toBe("login_throttles");
     expect(loginThrottles.email).toBeDefined();
     expect(loginThrottles.failedCount).toBeDefined();
+    expect(getTableName(passwordResetTokens)).toBe("password_reset_tokens");
+    expect(passwordResetTokens.tokenHash).toBeDefined();
+    expect(passwordResetTokens.userId).toBeDefined();
 
     expect(users.email).toBeDefined();
     expect(users.passwordHash).toBeDefined();
