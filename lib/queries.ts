@@ -14,10 +14,12 @@ import {
 } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import { normalizeLoginEmail } from "@/lib/login-throttle";
 import {
   cards,
   blobReservations,
   generationJobs,
+  loginThrottles,
   reviewers,
   sources,
   testSessions,
@@ -2389,4 +2391,75 @@ export async function getGenerationJobForReviewer(
     )
     .limit(1);
   return row ?? null;
+}
+
+export async function isLoginEmailLocked(email: string): Promise<boolean> {
+  const key = normalizeLoginEmail(email);
+  const [row] = await db
+    .select({ lockedUntil: loginThrottles.lockedUntil })
+    .from(loginThrottles)
+    .where(eq(loginThrottles.email, key))
+    .limit(1);
+  return row?.lockedUntil != null && row.lockedUntil.getTime() > Date.now();
+}
+
+export async function recordLoginFailure(
+  email: string,
+): Promise<{ locked: boolean }> {
+  const key = normalizeLoginEmail(email);
+  const result = await db.execute(sql`
+    INSERT INTO login_throttles (email, failed_count, window_started_at, locked_until, updated_at)
+    VALUES (${key}, 1, NOW(), NULL, NOW())
+    ON CONFLICT (email) DO UPDATE SET
+      failed_count = CASE
+        WHEN login_throttles.locked_until IS NOT NULL
+          AND login_throttles.locked_until > NOW()
+          THEN login_throttles.failed_count
+        WHEN login_throttles.locked_until IS NOT NULL
+          AND login_throttles.locked_until <= NOW()
+          THEN 1
+        WHEN login_throttles.window_started_at <= NOW() - INTERVAL '15 minutes'
+          THEN 1
+        ELSE login_throttles.failed_count + 1
+      END,
+      window_started_at = CASE
+        WHEN login_throttles.locked_until IS NOT NULL
+          AND login_throttles.locked_until > NOW()
+          THEN login_throttles.window_started_at
+        WHEN login_throttles.locked_until IS NOT NULL
+          AND login_throttles.locked_until <= NOW()
+          THEN NOW()
+        WHEN login_throttles.window_started_at <= NOW() - INTERVAL '15 minutes'
+          THEN NOW()
+        ELSE login_throttles.window_started_at
+      END,
+      locked_until = CASE
+        WHEN login_throttles.locked_until IS NOT NULL
+          AND login_throttles.locked_until > NOW()
+          THEN login_throttles.locked_until
+        WHEN login_throttles.locked_until IS NOT NULL
+          AND login_throttles.locked_until <= NOW()
+          THEN NULL
+        WHEN login_throttles.window_started_at <= NOW() - INTERVAL '15 minutes'
+          THEN NULL
+        WHEN login_throttles.failed_count + 1 >= 5
+          THEN NOW() + INTERVAL '15 minutes'
+        ELSE NULL
+      END,
+      updated_at = NOW()
+    RETURNING locked_until
+  `);
+  const lockedUntil = result.rows[0]?.locked_until;
+  if (lockedUntil instanceof Date) {
+    return { locked: lockedUntil.getTime() > Date.now() };
+  }
+  if (typeof lockedUntil === "string") {
+    return { locked: Date.parse(lockedUntil) > Date.now() };
+  }
+  return { locked: false };
+}
+
+export async function clearLoginThrottle(email: string): Promise<void> {
+  const key = normalizeLoginEmail(email);
+  await db.delete(loginThrottles).where(eq(loginThrottles.email, key));
 }

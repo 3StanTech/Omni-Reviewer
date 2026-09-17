@@ -84,6 +84,16 @@ export const users = pgTable("users", {
     .defaultNow(),
 });
 
+export const loginThrottles = pgTable("login_throttles", {
+  email: text("email").primaryKey(),
+  failedCount: integer("failed_count").notNull().default(0),
+  windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const topics = pgTable("topics", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id")
@@ -457,6 +467,8 @@ export const generationJobsRelations = relations(generationJobs, ({ one }) => ({
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type LoginThrottle = typeof loginThrottles.$inferSelect;
+export type NewLoginThrottle = typeof loginThrottles.$inferInsert;
 export type Topic = typeof topics.$inferSelect;
 export type NewTopic = typeof topics.$inferInsert;
 export type Reviewer = typeof reviewers.$inferSelect;

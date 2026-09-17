@@ -21,6 +21,7 @@ import {
   cardRatingEnum,
   blobReservations,
   blobReservationStateEnum,
+  loginThrottles,
 } from "@/lib/schema";
 
 describe("schema", () => {
@@ -48,6 +49,9 @@ describe("schema", () => {
     expect(getTableName(testSessions)).toBe("test_sessions");
     expect(getTableName(cardReviews)).toBe("card_reviews");
     expect(getTableName(blobReservations)).toBe("blob_reservations");
+    expect(getTableName(loginThrottles)).toBe("login_throttles");
+    expect(loginThrottles.email).toBeDefined();
+    expect(loginThrottles.failedCount).toBeDefined();
 
     expect(users.email).toBeDefined();
     expect(users.passwordHash).toBeDefined();

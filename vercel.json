@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "functions": {
-    "app/api/reviewers/[id]/generate/route.ts": {
+    "app/api/reviewers/[id]/generation/[jobId]/route.ts": {
       "maxDuration": 300
     }
   }

@@ -111,6 +111,7 @@ See `.env.example` for the full list.
 ## Login and invites
 
 - Sign in at `/login` with email + password.
+- Five failed sign-ins in 15 minutes lock that email for 15 minutes.
 - Create invites (no public register):
 
 ```bash
@@ -134,6 +135,8 @@ password line to the command from a protected secret source.
 | `npm run db:generate` | Generate Drizzle migrations |
 | `npm run user:create` | Invite a user (`tsx scripts/create-user.ts`) |
 | `npm test` | Run Vitest |
+
+GitHub Actions runs `npm test` and `npm run lint` on main and pull requests.
 
 ## Stack
 

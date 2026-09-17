@@ -57,5 +57,6 @@ describe("auth", () => {
     expect(loginPage).not.toMatch(/^["']use client["']/m);
     expect(loginPage).toContain("use server");
     expect(loginPage).not.toContain("APP_PASSWORD");
+    expect(loginPage).toContain("LOGIN_THROTTLE_LOCKED_MESSAGE");
   });
 });

@@ -4,6 +4,15 @@ import { AuthError } from "next-auth";
 import { LoginForm } from "@/components/login-form";
 import { signIn } from "@/auth";
 import { isUsableAuthSecret } from "@/lib/auth-secret";
+import {
+  LOGIN_THROTTLE_LOCKED_MESSAGE,
+  normalizeLoginEmail,
+} from "@/lib/login-throttle";
+import {
+  clearLoginThrottle,
+  isLoginEmailLocked,
+  recordLoginFailure,
+} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -26,12 +35,23 @@ async function loginAction(
     return "Password is required.";
   }
 
+  const normalized = normalizeLoginEmail(emailRaw);
+
+  try {
+    if (await isLoginEmailLocked(normalized)) {
+      return LOGIN_THROTTLE_LOCKED_MESSAGE;
+    }
+  } catch {
+    return "Server is misconfigured. Try again later.";
+  }
+
   try {
     await signIn("credentials", {
-      email: emailRaw.trim().toLowerCase(),
+      email: normalized,
       password,
       redirectTo: "/",
     });
+    await clearLoginThrottle(normalized);
     return null;
   } catch (error) {
     if (error instanceof AuthError) {
@@ -41,7 +61,20 @@ async function loginAction(
       ) {
         return "Server is misconfigured. Try again later.";
       }
+      try {
+        const recorded = await recordLoginFailure(normalized);
+        if (recorded.locked) {
+          return LOGIN_THROTTLE_LOCKED_MESSAGE;
+        }
+      } catch {
+        return "Server is misconfigured. Try again later.";
+      }
       return "Invalid email or password.";
+    }
+    try {
+      await clearLoginThrottle(normalized);
+    } catch {
+      // Redirect must still propagate.
     }
     throw error;
   }
