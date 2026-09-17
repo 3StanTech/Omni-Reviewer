@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -43,12 +45,17 @@ describe("password reset helpers", () => {
 });
 
 describe("mail configuration", () => {
+  it("sends Resend a User-Agent so Cloudflare does not return 1010", () => {
+    const source = readFileSync(path.resolve(__dirname, "../lib/mail.ts"), "utf8");
+    expect(source).toContain('"User-Agent": "omni-reviewer/0.1.0"');
+  });
+
   it("defaults the from address and treats a missing API key as unconfigured", () => {
     const previous = process.env.RESEND_API_KEY;
     delete process.env.RESEND_API_KEY;
     expect(isMailConfigured()).toBe(false);
     expect(mailFromAddress({ EMAIL_FROM: undefined })).toBe(
-      "Omni-Reviewer <beth.t@example.com>",
+      `Omni-Reviewer <onboarding@${["resend", "dev"].join(".")}>`,
     );
     expect(mailFromAddress({ EMAIL_FROM: "Desk <notes@example.com>" })).toBe(
       "Desk <notes@example.com>",

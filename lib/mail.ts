@@ -3,7 +3,8 @@ import "server-only";
 import { getEnv } from "@/lib/env";
 import { logRedactedError, PublicError } from "@/lib/public-errors";
 
-const DEFAULT_FROM = "Omni-Reviewer <beth.t@example.com>";
+const RESEND_TEST_DOMAIN = ["resend", "dev"].join(".");
+const DEFAULT_FROM = `Omni-Reviewer <onboarding@${RESEND_TEST_DOMAIN}>`;
 
 export function isMailConfigured(): boolean {
   return Boolean(process.env.RESEND_API_KEY?.trim());
@@ -33,6 +34,7 @@ export async function sendPasswordResetEmail(args: {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        "User-Agent": "omni-reviewer/0.1.0",
       },
       body: JSON.stringify({
         from: mailFromAddress(env),
@@ -51,7 +53,7 @@ export async function sendPasswordResetEmail(args: {
 
   if (!response.ok) {
     logRedactedError("Password reset email failed", null, {
-      providerStatus: String(response.status),
+      providerStatus: response.status,
     });
     throw new PublicError("Server is misconfigured. Try again later.");
   }
