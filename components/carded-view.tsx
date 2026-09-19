@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CaretLeft,
   CaretRight,
@@ -49,12 +49,29 @@ function isDurableCard(value: CardedItem | DurableCardView): value is DurableCar
   return "revision" in value && typeof value.revision === "number";
 }
 
+function isDueNow(dueAt: string, now: number) {
+  const due = new Date(dueAt).getTime();
+  return Number.isFinite(due) && due <= now;
+}
+
+function nextIntervalCopy(rating: "again" | "good", intervalDays: number) {
+  if (rating === "again") return "show tonight";
+  return `next in ${intervalDays} days`;
+}
+
 export function CardedView({ contentJson, content, reviewerId, durableCards, onCardsChange }: CardedViewProps) {
   const generatedCards = useMemo(
     () => parseCards(contentJson, content),
     [contentJson, content],
   );
   const cards = durableCards.length > 0 ? durableCards : generatedCards;
+  // Remaining due is dueAt <= now, so the cutoff has to be wall clock.
+  /* eslint-disable react-hooks/purity -- dueAt <= now needs Date.now */
+  const remainingDue = useMemo(() => {
+    const now = Date.now();
+    return durableCards.filter((item) => isDueNow(item.dueAt, now)).length;
+  }, [durableCards]);
+  /* eslint-enable react-hooks/purity */
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [clozeRevealed, setClozeRevealed] = useState(false);
@@ -65,6 +82,14 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
   const [draftRevision, setDraftRevision] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scheduleHint, setScheduleHint] = useState<string | null>(null);
+  const advanceTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
+    };
+  }, []);
 
   const safeIndex = Math.min(index, Math.max(0, cards.length - 1));
   const card = cards[safeIndex];
@@ -86,12 +111,18 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
   function go(delta: number) {
     setFlipped(false);
     setClozeRevealed(false);
+    setScheduleHint(null);
     setIndex((prev) => {
       const next = prev + delta;
       if (next < 0) return 0;
       if (next >= cards.length) return cards.length - 1;
       return next;
     });
+  }
+
+  function toggleFlip() {
+    if (busy || scheduleHint) return;
+    setFlipped((open) => !open);
   }
 
   async function review(rating: "again" | "good") {
@@ -107,8 +138,19 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
       if (!response.ok) throw new Error(await readApiError(response));
       const data = (await response.json()) as { card: DurableCardView };
       onCardsChange(durableCards.map((item) => item.id === data.card.id ? data.card : item));
-      setFlipped(false);
-      setClozeRevealed(false);
+      setScheduleHint(nextIntervalCopy(rating, data.card.intervalDays));
+      if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
+      advanceTimer.current = window.setTimeout(() => {
+        setScheduleHint(null);
+        setFlipped(false);
+        setClozeRevealed(false);
+        setIndex((prev) => {
+          if (cards.length <= 1) return 0;
+          const next = prev + 1;
+          return next >= cards.length ? 0 : next;
+        });
+        advanceTimer.current = null;
+      }, 700);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not save review.");
     } finally {
@@ -166,12 +208,16 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
     }
   }
 
+  const frontSource =
+    isCloze && !clozeRevealed ? renderClozeText(card.front) : card.front;
+
   return (
     <div className="mx-auto flex w-full max-w-lg flex-col gap-4">
-      <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
-        <span>
-          Card {safeIndex + 1} of {cards.length}
-        </span>
+      <div className="flex items-start justify-between gap-2 text-sm text-muted-foreground">
+        <div className="space-y-1">
+          <p className="text-foreground">Memorize. No choices.</p>
+          <p>Remaining {remainingDue} due</p>
+        </div>
         <Button
           type="button"
           variant="ghost"
@@ -180,6 +226,7 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
             setIndex(0);
             setFlipped(false);
             setClozeRevealed(false);
+            setScheduleHint(null);
           }}
         >
           <ArrowCounterClockwise weight="bold" />
@@ -211,38 +258,39 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
         </div>
       ) : null}
 
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setFlipped((f) => !f)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setFlipped((f) => !f);
-          }
-        }}
-        className={cn(
-          "group relative flex min-h-[220px] w-full flex-col items-center justify-center rounded-2xl border border-border/80 bg-surface/70 px-6 py-10 text-center shadow-[0_10px_30px_oklch(0_0_0/25%)] outline-none transition-[transform,background-color] duration-200 focus-visible:ring-3 focus-visible:ring-ring/40 sm:min-h-[260px]",
-          flipped && "bg-primary/10 border-primary/30",
-        )}
-        aria-label={flipped ? "Show front" : "Show back"}
-        aria-pressed={flipped}
-      >
-        <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-          {flipped ? "Back" : "Front"}
-        </span>
-        <MarkdownBody
-          source={
-            flipped
-              ? card.back
-              : isCloze && !clozeRevealed
-                ? renderClozeText(card.front)
-                : card.front
-          }
-        />
-        <span className="mt-6 text-xs text-muted-foreground">
-          Select to flip
-        </span>
+      <div className="carded-scene">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={toggleFlip}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              toggleFlip();
+            }
+          }}
+          className={cn(
+            "carded-flipper group outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+            flipped && "is-flipped",
+          )}
+          aria-label="Flip"
+          aria-pressed={flipped}
+        >
+          <div className="carded-face carded-front">
+            <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+              Front
+            </span>
+            <MarkdownBody source={frontSource} />
+            <span className="mt-6 text-xs text-muted-foreground">Flip</span>
+          </div>
+          <div className="carded-face carded-back">
+            <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+              Back
+            </span>
+            <MarkdownBody source={card.back} />
+            <span className="mt-6 text-xs text-muted-foreground">Flip</span>
+          </div>
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-3">
@@ -254,13 +302,6 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
         >
           <CaretLeft weight="bold" />
           Previous
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => setFlipped((f) => !f)}
-        >
-          Flip
         </Button>
         <Button
           type="button"
@@ -281,14 +322,71 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
           <Button type="button" onClick={() => void saveEdit()} disabled={busy || !frontDraft.trim() || !backDraft.trim()}>{busy ? "Saving" : "Save card"}</Button>
         </div>
       ) : null}
-      {isDurableCard(card) ? (
+      {isDurableCard(card) && flipped ? (
         <div className="flex flex-wrap gap-2 rounded-xl border border-border/80 bg-surface/50 p-4">
-          <span className="w-full text-xs text-muted-foreground">How did that feel?</span>
-          <Button type="button" variant="outline" onClick={() => void review("again")} disabled={busy}>Again</Button>
-          <Button type="button" variant="secondary" onClick={() => void review("good")} disabled={busy}>Good</Button>
+          {scheduleHint ? (
+            <p className="w-full text-sm text-foreground">{scheduleHint}</p>
+          ) : (
+            <>
+              <Button type="button" variant="outline" onClick={() => void review("again")} disabled={busy}>Again</Button>
+              <Button type="button" variant="secondary" onClick={() => void review("good")} disabled={busy}>Good</Button>
+            </>
+          )}
         </div>
       ) : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      <style>{`
+        .carded-scene {
+          perspective: 1400px;
+        }
+        .carded-flipper {
+          position: relative;
+          min-height: 220px;
+          width: 100%;
+          cursor: pointer;
+          transform-style: preserve-3d;
+          transition: transform 700ms ease;
+        }
+        @media (min-width: 640px) {
+          .carded-flipper {
+            min-height: 260px;
+          }
+        }
+        .carded-flipper.is-flipped {
+          transform: rotateX(180deg);
+        }
+        .carded-face {
+          display: flex;
+          min-height: 220px;
+          width: 100%;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          border-radius: 1rem;
+          border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+          background: color-mix(in oklch, var(--surface) 70%, transparent);
+          padding: 2.5rem 1.5rem;
+          text-align: center;
+          box-shadow: 0 10px 30px oklch(0 0 0 / 25%);
+          backface-visibility: hidden;
+          -webkit-backface-visibility: hidden;
+        }
+        @media (min-width: 640px) {
+          .carded-face {
+            min-height: 260px;
+          }
+        }
+        .carded-front {
+          position: relative;
+        }
+        .carded-back {
+          position: absolute;
+          inset: 0;
+          background: color-mix(in oklch, var(--primary) 10%, var(--surface));
+          border-color: color-mix(in oklch, var(--primary) 30%, var(--border));
+          transform: rotateX(180deg);
+        }
+      `}</style>
     </div>
   );
 }

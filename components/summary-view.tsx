@@ -1,7 +1,7 @@
 import { Note } from "@phosphor-icons/react/dist/ssr";
 
 import { EmptyState } from "@/components/empty-state";
-import { MarkdownBody } from "@/components/study-markdown";
+import { InkLegend, MarkdownBody } from "@/components/study-markdown";
 
 type SummaryViewProps = {
   content: string | null;
@@ -19,8 +19,11 @@ export function SummaryView({ content }: SummaryViewProps) {
   }
 
   return (
-    <article className="reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8">
-      <MarkdownBody source={content} />
-    </article>
+    <div>
+      <article className="reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8">
+        <MarkdownBody source={content} />
+      </article>
+      <InkLegend />
+    </div>
   );
 }

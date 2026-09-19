@@ -104,6 +104,14 @@ export function assertPromptWithinLimit(
 export const NO_INVENT_CITATIONS =
   "Do not invent citations, quotes, page numbers, or facts the sources do not support. If something is unclear or missing, say so rather than guessing.";
 
+const SEMANTIC_INK =
+  'Mark a few key phrases with these HTML spans only. Never use other class names. Limit density: a handful of marks per section, wrap the phrase not the whole paragraph, and do not nest spans. Do not put spans inside fenced code.\n' +
+  '- <span class="ink-idea"> for a main idea\n' +
+  '- <span class="ink-example"> for an example\n' +
+  '- <span class="ink-fact"> for a formula, date, or hard fact\n' +
+  '- <span class="ink-warning"> for a warning or common pitfall\n' +
+  '- <span class="ink-exam"> for an exam-likely point';
+
 export function lockedInPrompt(
   extractedTexts: PromptSource[],
 ): string {
@@ -123,6 +131,7 @@ Requirements:
 - Otherwise organize by clear topic headings (## / ###).
 - Merge overlapping content; resolve minor contradictions by preferring the most specific source and noting uncertainty briefly when needed.
 - Be thorough: definitions, key claims, examples, formulas, procedures, and relationships between ideas.
+- ${SEMANTIC_INK}
 - ${NO_INVENT_CITATIONS}
 - Output Markdown only. No preamble or closing remarks outside the document.
 
@@ -140,6 +149,7 @@ Requirements:
 - Keep it detailed enough to review the full material, but denser and shorter than Locked In.
 - Use clear Markdown with headings that mirror Locked In structure when helpful.
 - Prefer bullets and tight paragraphs for scannability; preserve critical definitions, numbers, and distinctions.
+- ${SEMANTIC_INK}
 - ${NO_INVENT_CITATIONS}
 - Output Markdown only. No preamble or closing remarks.
 

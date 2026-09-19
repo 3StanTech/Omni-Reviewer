@@ -29,9 +29,9 @@ Tristan and invited friends studying late at night from notes, PDFs, slides, and
 
 - `/login` - email + password. No public signup, no roles.
 - `/` - topic tabs, create/rename/delete topic, list of reviewers in the selected topic, create/rename/delete reviewer.
-- `/topics/[topicId]/reviewers/[reviewerId]` - pack workspace: source list and upload, generate/regenerate, four study mode tabs.
+- `/topics/[topicId]/reviewers/[reviewerId]` - pack workspace: sources behind a drawer once generated, generate/regenerate, four study modes.
 
-Topic tabs are primary navigation. A reviewer is a workspace, not a metrics dashboard.
+Topic tabs are primary navigation (RemNote-Style uses a left shelf at md+). A reviewer is a workspace, not a metrics dashboard.
 
 ## Ingest rules (v1)
 
@@ -55,14 +55,17 @@ Failed sources keep an error message. Video/audio-only packs cannot generate in 
 
 Generated only on explicit Generate or Redo. Tab changes never call the model. Study modes reload from persistence.
 
-1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables and KaTeX). Source of truth.
-2. **Summary** - detailed summary of Locked In for last-minute review (sanitized Markdown with tables and KaTeX).
-3. **Test Me** - generated multiple-choice questionnaire with optional answer reveal and persisted attempts/misses; legacy open-ended items remain answerable. An optional server-timed run presents one question at a time.
-4. **Carded** - durable flashcards from Summary: flip, rate Again / Good, previous / next. A front using `{{answer}}` placeholders is shown as a cloze card with an explicit reveal step.
+1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables, KaTeX, and optional semantic ink spans). Source of truth.
+2. **Summary** - detailed summary of Locked In for last-minute review (same Markdown surface, including ink).
+3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains. This mode has a last question. It does not schedule tomorrow's work.
+4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome and next interval. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
+
+Looks (Night, Day, Thea-Style, RemNote-Style) are chrome only. They do not add objects.
 
 Test Me answer attempts and misses are persisted per reviewer so missed items can
 be revisited. Card ratings use a small two-button SM-2 schedule and are stored
-as review history. An optional exam date caps future card due dates.
+as review history. An optional exam date caps future card due dates and shows a
+countdown on the pack. Pack rows show how many cards are due today.
 
 ## Generation
 

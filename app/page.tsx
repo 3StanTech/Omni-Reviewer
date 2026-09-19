@@ -50,12 +50,22 @@ export default async function HomePage({ searchParams }: HomeProps) {
     lastGeneratedAt: r.lastGeneratedAt
       ? r.lastGeneratedAt.toISOString()
       : null,
+    examDate: r.examDate,
+    dueTodayCount: r.dueTodayCount,
   }));
+
+  const dueTodayCount = serializedReviewers.reduce(
+    (sum, reviewer) => sum + reviewer.dueTodayCount,
+    0,
+  );
 
   return (
     <AppShell
       title="Study desk"
       subtitle="Pick a topic, open a study pack, attach sources, then generate when you are ready."
+      topics={serializedTopics}
+      selectedTopicId={selectedId}
+      dueTodayCount={dueTodayCount}
     >
       <StudyHome
         topics={serializedTopics}

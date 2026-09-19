@@ -39,6 +39,8 @@ type SourcePanelProps = {
   reviewerId: string;
   initialSources: SourceListItem[];
   onSourcesChange?: (sources: SourceListItem[]) => void;
+  /** When false, hide upload/paste/list. Parent owns the Sources control. */
+  expanded?: boolean;
 };
 
 function statusLabel(status: IngestStatus): string {
@@ -107,6 +109,7 @@ export function SourcePanel({
   reviewerId,
   initialSources,
   onSourcesChange,
+  expanded = true,
 }: SourcePanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [sources, setSources] = useState(initialSources);
@@ -258,7 +261,12 @@ export function SourcePanel({
   }
 
   return (
-    <section className="space-y-3" aria-labelledby="sources-heading">
+    <section
+      id="sources-panel"
+      className="space-y-3"
+      aria-labelledby="sources-heading"
+      hidden={!expanded}
+    >
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2

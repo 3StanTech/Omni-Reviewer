@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { CaretDown, CaretUp } from "@phosphor-icons/react";
 
 import {
   GenerateButton,
@@ -11,7 +12,10 @@ import {
   SourcePanel,
   type SourceListItem,
 } from "@/components/source-panel";
+import { useLook } from "@/components/look-provider";
+import { ModeKit } from "@/components/mode-kit";
 import { ViewTabs } from "@/components/view-tabs";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { formatStampLocal, formatStampUtc } from "@/lib/format-generated-at";
 import type { ViewKind } from "@/lib/types";
@@ -57,6 +61,28 @@ export type SerializedAttemptStats = {
 
 const NOT_GENERATED_YET =
   "Not generated yet. Upload Ready sources, then generate.";
+const MS_PER_DAY = 86_400_000;
+
+function examCountdownCopy(examDate: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(examDate);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const examStart = new Date(year, month - 1, day);
+  const days = Math.round((examStart.getTime() - todayStart.getTime()) / MS_PER_DAY);
+  if (days > 0) return `Exam in ${days} days`;
+  if (days === 0) return "Exam today";
+  return "Exam date passed";
+}
+
+function viewsExist(views: ViewsPayload): boolean {
+  return Boolean(
+    views.locked_in || views.summary || views.test_me || views.carded,
+  );
+}
 
 function needsViewBodies(views: ViewsPayload): boolean {
   const kinds: ViewKind[] = ["locked_in", "summary", "test_me", "carded"];
@@ -113,6 +139,9 @@ export function ReviewerWorkspace({
   const [examDateDraft, setExamDateDraft] = useState(examDate ?? "");
   const [examDateBusy, setExamDateBusy] = useState(false);
   const [examDateError, setExamDateError] = useState<string | null>(null);
+  const [sourcesUserOpen, setSourcesUserOpen] = useState(false);
+  const [activeMode, setActiveMode] = useState<ViewKind>("locked_in");
+  const look = useLook();
   const isClient = useIsClient();
   const generatedStamp = generatedAt
     ? isClient
@@ -130,13 +159,12 @@ export function ReviewerWorkspace({
     [sources],
   );
 
-  const hasViews = useMemo(
-    () =>
-      Boolean(
-        views.locked_in || views.summary || views.test_me || views.carded,
-      ),
-    [views],
-  );
+  const hasViews = useMemo(() => viewsExist(views), [views]);
+  const showModeKit = look === "thea" && hasViews;
+  const sourcesExpanded = hasViews ? sourcesUserOpen : true;
+  const examCountdown = currentExamDate
+    ? examCountdownCopy(currentExamDate)
+    : null;
 
   const sourcesAreMediaOnly = useMemo(() => {
     if (sources.length === 0) return false;
@@ -331,25 +359,134 @@ export function ReviewerWorkspace({
     }
   }
 
-  return (
-    <div className="flex flex-col gap-8">
-      <div className="space-y-1">
-        <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
-          <Link
-            href={`/?topic=${topicId}`}
-            className="rounded outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
-          >
-            {topicName}
-          </Link>
-          <span aria-hidden>/</span>
-          <span className="text-foreground">{reviewerName}</span>
-        </nav>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
-          {reviewerName}
-        </h1>
-        <p className="text-sm text-muted-foreground" suppressHydrationWarning>
-          {generatedLabel}
+  const sourcePanel = (
+    <SourcePanel
+      userId={userId}
+      reviewerId={reviewerId}
+      initialSources={initialSources}
+      onSourcesChange={setSources}
+      expanded={sourcesExpanded}
+    />
+  );
+
+  const generateSection = (
+    <section className="space-y-3" aria-labelledby="generate-heading">
+      <div>
+        <h2
+          id="generate-heading"
+          className="text-sm font-semibold tracking-tight text-foreground"
+        >
+          Study pack
+        </h2>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {hasViews
+            ? "To rebuild all four, open Locked In and use Redo."
+            : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
         </p>
+      </div>
+      <GenerateButton
+        reviewerId={reviewerId}
+        hasReadySource={hasReadySource}
+        hasViews={hasViews}
+        sourcesAreMediaOnly={sourcesAreMediaOnly}
+        activeJobId={activeJobId}
+        onGenerated={applyGenerated}
+        onGenerationFinished={() => setActiveJobId(null)}
+      />
+    </section>
+  );
+
+  const studySection = (
+    <section className="space-y-3" aria-labelledby="views-heading">
+      <h2
+        id="views-heading"
+        className="text-sm font-semibold tracking-tight text-foreground"
+      >
+        Study modes
+      </h2>
+      {viewsError ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="alert" className="text-sm text-destructive">
+            {viewsError}
+          </p>
+          <button
+            type="button"
+            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+            onClick={() => setViewsReload((n) => n + 1)}
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
+      {showModeKit ? (
+        <ModeKit value={activeMode} onChange={setActiveMode} />
+      ) : null}
+      <ViewTabs
+        views={views}
+        viewsLoading={viewsLoading}
+        hasReadySource={hasReadySource}
+        showRedo={hasViews}
+        busy={redoBusy}
+        error={redoError}
+        cards={cards}
+        testAttemptStats={testAttemptStats}
+        reviewerId={reviewerId}
+        onCardsChange={setCards}
+        onTestAttemptStatsChange={setTestAttemptStats}
+        onViewsChange={setViews}
+        onRedo={(kind, forceOverwrite) => void redo(kind, forceOverwrite)}
+        compact={showModeKit}
+        value={activeMode}
+        onValueChange={setActiveMode}
+      />
+    </section>
+  );
+
+  return (
+    <div className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+              <Link
+                href={`/?topic=${topicId}`}
+                className="rounded outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
+              >
+                {topicName}
+              </Link>
+              <span aria-hidden>/</span>
+              <span className="text-foreground">{reviewerName}</span>
+            </nav>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
+                {reviewerName}
+              </h1>
+              {isClient && examCountdown ? (
+                <p className="text-sm text-muted-foreground">{examCountdown}</p>
+              ) : null}
+            </div>
+            <p className="text-sm text-muted-foreground" suppressHydrationWarning>
+              {generatedLabel}
+            </p>
+          </div>
+          {hasViews ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-expanded={sourcesExpanded}
+              aria-controls="sources-panel"
+              onClick={() => setSourcesUserOpen((open) => !open)}
+            >
+              Sources
+              {sourcesExpanded ? (
+                <CaretUp weight="bold" />
+              ) : (
+                <CaretDown weight="bold" />
+              )}
+            </Button>
+          ) : null}
+        </div>
         <div className="flex flex-wrap items-end gap-2 pt-3">
           <label
             htmlFor="exam-date"
@@ -378,77 +515,20 @@ export function ReviewerWorkspace({
         </div>
       </div>
 
-      <SourcePanel
-        userId={userId}
-        reviewerId={reviewerId}
-        initialSources={initialSources}
-        onSourcesChange={setSources}
-      />
-
-      <section className="space-y-3" aria-labelledby="generate-heading">
-        <div>
-          <h2
-            id="generate-heading"
-            className="text-sm font-semibold tracking-tight text-foreground"
-          >
-            Study pack
-          </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {hasViews
-              ? "To rebuild all four, open Locked In and use Redo."
-              : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
-          </p>
-        </div>
-        <GenerateButton
-          reviewerId={reviewerId}
-          hasReadySource={hasReadySource}
-          hasViews={hasViews}
-          sourcesAreMediaOnly={sourcesAreMediaOnly}
-          activeJobId={activeJobId}
-          onGenerated={applyGenerated}
-          onGenerationFinished={() => setActiveJobId(null)}
-        />
-      </section>
-
-      <Separator />
-
-      <section className="space-y-3" aria-labelledby="views-heading">
-        <h2
-          id="views-heading"
-          className="text-sm font-semibold tracking-tight text-foreground"
-        >
-          Study modes
-        </h2>
-        {viewsError ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <p role="alert" className="text-sm text-destructive">
-              {viewsError}
-            </p>
-            <button
-              type="button"
-              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-              onClick={() => setViewsReload((n) => n + 1)}
-            >
-              Try again
-            </button>
-          </div>
-        ) : null}
-        <ViewTabs
-          views={views}
-          viewsLoading={viewsLoading}
-          hasReadySource={hasReadySource}
-          showRedo={hasViews}
-          busy={redoBusy}
-          error={redoError}
-          cards={cards}
-          testAttemptStats={testAttemptStats}
-          reviewerId={reviewerId}
-          onCardsChange={setCards}
-          onTestAttemptStatsChange={setTestAttemptStats}
-          onViewsChange={setViews}
-          onRedo={(kind, forceOverwrite) => void redo(kind, forceOverwrite)}
-        />
-      </section>
+      {hasViews ? (
+        <>
+          {studySection}
+          {sourcePanel}
+          {generateSection}
+        </>
+      ) : (
+        <>
+          {sourcePanel}
+          {generateSection}
+          <Separator />
+          {studySection}
+        </>
+      )}
     </div>
   );
 }

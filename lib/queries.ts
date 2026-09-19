@@ -145,10 +145,31 @@ export async function beginTopicDeletion(
   return result.rows.length > 0;
 }
 
+export type ReviewerByTopic = Reviewer & { dueTodayCount: number };
+
+/**
+ * Due-today math for home pack rows. A durable card counts when it is not
+ * archived and `dueAt` is at or before `now`. Deleting reviewers contribute 0.
+ */
+export function countDueTodayCards(
+  cardRows: ReadonlyArray<{ dueAt: Date; archivedAt: Date | null }>,
+  args: { now: Date; reviewerDeletingAt: Date | null },
+): number {
+  if (args.reviewerDeletingAt != null) return 0;
+  const nowMs = args.now.getTime();
+  let n = 0;
+  for (const card of cardRows) {
+    if (card.archivedAt != null) continue;
+    if (card.dueAt.getTime() > nowMs) continue;
+    n += 1;
+  }
+  return n;
+}
+
 export async function listReviewersByTopic(
   topicId: string,
   userId: string,
-): Promise<Reviewer[]> {
+): Promise<ReviewerByTopic[]> {
   return db
     .select({
       id: reviewers.id,
@@ -158,6 +179,18 @@ export async function listReviewersByTopic(
       lastGeneratedAt: reviewers.lastGeneratedAt,
       examDate: reviewers.examDate,
       deletingAt: reviewers.deletingAt,
+      dueTodayCount: sql<number>`
+        case
+          when ${reviewers.deletingAt} is not null then 0
+          else (
+            select count(*)::int
+            from cards
+            where cards.reviewer_id = ${reviewers.id}
+              and cards.due_at <= now()
+              and cards.archived_at is null
+          )
+        end
+      `.mapWith(Number),
     })
     .from(reviewers)
     .innerJoin(topics, eq(reviewers.topicId, topics.id))

@@ -11,6 +11,12 @@ import {
   renderClozeText,
 } from "@/lib/learning";
 import {
+  cardedPrompt,
+  lockedInPrompt,
+  summaryPrompt,
+  testMePrompt,
+} from "@/lib/prompts";
+import {
   MAX_STUDY_MARKDOWN_CHARS,
   MAX_STUDY_MATH_BLOCKS,
   MAX_STUDY_MATH_CHARS,
@@ -66,6 +72,55 @@ describe("study Markdown and cloze contracts", () => {
     expect(renderer).toContain("output: \"mathml\"");
     expect(renderer).toContain("sanitizeMarkdownUrl");
     expect(renderer).not.toContain("rehypeRaw");
+  });
+
+  it("allowlists semantic ink span classes with KaTeX and still skips raw HTML", () => {
+    const renderer = readFileSync(path.join(root, "components/study-markdown.tsx"), "utf8");
+    const css = readFileSync(path.join(root, "app/globals.css"), "utf8");
+    expect(renderer).toContain("ink-idea|ink-example|ink-fact|ink-warning|ink-exam");
+    expect(renderer).toContain("katex|katex-error");
+    expect(renderer).toContain("remarkInkSpans");
+    expect(renderer).toContain("skipHtml");
+    expect(renderer).not.toContain("rehypeRaw");
+    expect(renderer).toContain('!["img", "picture", "source"]');
+    expect(css).toContain(".ink-idea");
+    expect(css).toContain(".ink-example");
+    expect(css).toContain(".ink-fact");
+    expect(css).toContain(".ink-warning");
+    expect(css).toContain(".ink-exam");
+  });
+
+  it("renders existing packs without ink spans and keeps the legend copy under paper", () => {
+    const lockedIn = readFileSync(path.join(root, "components/locked-in-view.tsx"), "utf8");
+    const summary = readFileSync(path.join(root, "components/summary-view.tsx"), "utf8");
+    const renderer = readFileSync(path.join(root, "components/study-markdown.tsx"), "utf8");
+    const emDash = "\u2014";
+    expect(prepareStudyMarkdown("# Notes\n\nPlain study text with no ink.")).toMatchObject({
+      source: "# Notes\n\nPlain study text with no ink.",
+    });
+    expect(lockedIn).toContain("<InkLegend />");
+    expect(summary).toContain("<InkLegend />");
+    expect(renderer).toContain("Main idea");
+    expect(renderer).toContain("Example");
+    expect(renderer).toContain("Fact");
+    expect(renderer).toContain("Warning");
+    expect(renderer).toContain("Exam likely");
+    expect(renderer).not.toContain(emDash);
+    expect(lockedIn).not.toContain(emDash);
+    expect(summary).not.toContain(emDash);
+  });
+
+  it("asks Locked In and Summary for ink spans and leaves Test Me and Carded prompts unchanged", () => {
+    const lockedIn = lockedInPrompt([{ filename: "notes.txt", text: "Body" }]);
+    const summary = summaryPrompt("Locked In body");
+    const testMe = testMePrompt("Locked In body");
+    const carded = cardedPrompt("Summary body");
+    for (const klass of ["ink-idea", "ink-example", "ink-fact", "ink-warning", "ink-exam"]) {
+      expect(lockedIn).toContain(`<span class="${klass}">`);
+      expect(summary).toContain(`<span class="${klass}">`);
+      expect(testMe).not.toContain(klass);
+      expect(carded).not.toContain(klass);
+    }
   });
 
   it("parses and masks bounded cloze placeholders without changing legacy cards", () => {

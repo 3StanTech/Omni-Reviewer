@@ -41,6 +41,8 @@ export type ReviewerListItem = {
   name: string;
   createdAt: string;
   lastGeneratedAt: string | null;
+  examDate: string | null;
+  dueTodayCount: number;
 };
 
 type ReviewerListProps = {
@@ -257,17 +259,21 @@ export function ReviewerList({
               <Link
                 href={`/topics/${topicId}/reviewers/${reviewer.id}`}
                 prefetch
-                className="flex min-h-14 min-w-0 flex-1 items-center gap-3 px-4 py-3 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+                className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-4 py-2 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
               >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
-                  <Notebook weight="duotone" className="size-4.5" />
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
+                  <Notebook weight="duotone" className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium text-foreground">
                     {reviewer.name}
                   </span>
-                  <span className="block truncate text-xs text-muted-foreground">
+                  <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
                     <GeneratedAtLabel iso={reviewer.lastGeneratedAt} />
+                    {reviewer.dueTodayCount > 0 ? (
+                      <span>{reviewer.dueTodayCount} due</span>
+                    ) : null}
+                    {reviewer.examDate ? <span>{reviewer.examDate}</span> : null}
                   </span>
                 </span>
                 <PackRowChevron />

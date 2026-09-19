@@ -16,8 +16,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
 import { LockedInView } from "@/components/locked-in-view";
+import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { SummaryView } from "@/components/summary-view";
 import { TestMeView } from "@/components/test-me-view";
+import { cn } from "@/lib/utils";
 import type { ViewsPayload } from "@/lib/serialize-view";
 import type { ViewKind } from "@/lib/types";
 import type { SerializedAttemptStats, SerializedCard } from "@/components/reviewer-workspace";
@@ -36,12 +38,20 @@ type ViewTabsProps = {
   onCardsChange: (cards: SerializedCard[]) => void;
   onTestAttemptStatsChange: (stats: SerializedAttemptStats[]) => void;
   onViewsChange: (views: ViewsPayload) => void;
+  compact?: boolean;
+  value?: ViewKind;
+  onValueChange?: (kind: ViewKind) => void;
 };
+
+const MODE_JOB_LINES = Object.fromEntries(
+  MODE_KIT_ITEMS.map((item) => [item.kind, item.job]),
+) as Record<ViewKind, string>;
 
 const MODE_COPY: Record<
   ViewKind,
   {
     label: string;
+    jobLine: string;
     description: string;
     confirmTitle: string;
     confirmBody: string;
@@ -49,6 +59,7 @@ const MODE_COPY: Record<
 > = {
   locked_in: {
     label: "Locked In",
+    jobLine: MODE_JOB_LINES.locked_in,
     description:
       "Rebuilds Locked In from your current sources, then rebuilds Summary, Test Me, and Carded.",
     confirmTitle: "Redo Locked In and the other three modes?",
@@ -57,6 +68,7 @@ const MODE_COPY: Record<
   },
   summary: {
     label: "Summary",
+    jobLine: MODE_JOB_LINES.summary,
     description:
       "Rebuilds Summary from the current Locked In. Carded is not changed.",
     confirmTitle: "Redo Summary?",
@@ -65,12 +77,14 @@ const MODE_COPY: Record<
   },
   test_me: {
     label: "Test Me",
+    jobLine: MODE_JOB_LINES.test_me,
     description: "Rebuilds Test Me from the current Locked In.",
     confirmTitle: "Redo Test Me?",
     confirmBody: "This replaces Test Me using the current Locked In.",
   },
   carded: {
     label: "Carded",
+    jobLine: MODE_JOB_LINES.carded,
     description: "Rebuilds Carded from the current Summary.",
     confirmTitle: "Redo Carded?",
     confirmBody: "This replaces Carded using the current Summary.",
@@ -118,9 +132,18 @@ export function ViewTabs({
   onCardsChange,
   onTestAttemptStatsChange,
   onViewsChange,
+  compact = false,
+  value,
+  onValueChange,
 }: ViewTabsProps) {
-  const [tab, setTab] = useState<ViewKind>("locked_in");
+  const [uncontrolledTab, setUncontrolledTab] = useState<ViewKind>("locked_in");
+  const tab = value ?? uncontrolledTab;
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  function selectTab(next: ViewKind) {
+    if (value === undefined) setUncontrolledTab(next);
+    onValueChange?.(next);
+  }
 
   const copy = MODE_COPY[tab];
   const blockReason = redoBlockReason(tab, views, hasReadySource);
@@ -144,29 +167,36 @@ export function ViewTabs({
   return (
     <Tabs
       value={tab}
-      onValueChange={(value) => setTab(value as ViewKind)}
+      onValueChange={(next) => selectTab(next as ViewKind)}
       className="w-full gap-4"
     >
       <div className="overflow-x-auto">
         <TabsList
           variant="line"
-          className="min-w-full sm:min-w-0"
+          className={cn(
+            "min-w-full sm:min-w-0",
+            compact && "min-h-11 gap-0 border-b border-border p-0",
+          )}
           aria-label="Study modes"
         >
-          <TabsTrigger value="locked_in" className="min-w-[6.5rem]">
-            Locked In
-          </TabsTrigger>
-          <TabsTrigger value="summary" className="min-w-[6.5rem]">
-            Summary
-          </TabsTrigger>
-          <TabsTrigger value="test_me" className="min-w-[6.5rem]">
-            Test Me
-          </TabsTrigger>
-          <TabsTrigger value="carded" className="min-w-[6.5rem]">
-            Carded
-          </TabsTrigger>
+          {MODE_KIT_ITEMS.map((item) => (
+            <TabsTrigger
+              key={item.kind}
+              value={item.kind}
+              title={item.job}
+              className={cn(
+                "min-w-[6.5rem]",
+                compact && "min-h-11 min-w-0 flex-1 px-2 py-1.5 text-xs",
+              )}
+            >
+              {item.label}
+            </TabsTrigger>
+          ))}
         </TabsList>
       </div>
+      {compact ? null : (
+        <p className="text-xs text-muted-foreground">{copy.jobLine}</p>
+      )}
 
       {showRedo ? (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start">

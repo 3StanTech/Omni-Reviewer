@@ -9,8 +9,10 @@ import {
   getReviewer,
   getCardsForReviewer,
   getTopic,
+  listReviewersByTopic,
   listTestAttemptStats,
   listSourcesForUi,
+  listTopics,
   listViewMetaByReviewer,
 } from "@/lib/queries";
 import type { IngestStatus, SourceKind } from "@/lib/types";
@@ -36,12 +38,19 @@ export default async function ReviewerPage({ params }: PageProps) {
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer || reviewer.topicId !== topicId) notFound();
 
-  const [sourceRows, viewMeta, cards, testAttemptStats] = await Promise.all([
-    listSourcesForUi(reviewerId, userId),
-    listViewMetaByReviewer(reviewerId, userId),
-    getCardsForReviewer(reviewerId, userId),
-    listTestAttemptStats(reviewerId, userId),
-  ]);
+  const [sourceRows, viewMeta, cards, testAttemptStats, topics, topicPacks] =
+    await Promise.all([
+      listSourcesForUi(reviewerId, userId),
+      listViewMetaByReviewer(reviewerId, userId),
+      getCardsForReviewer(reviewerId, userId),
+      listTestAttemptStats(reviewerId, userId),
+      listTopics(userId),
+      listReviewersByTopic(topicId, userId),
+    ]);
+  const dueTodayCount = topicPacks.reduce(
+    (sum, pack) => sum + pack.dueTodayCount,
+    0,
+  );
   const initialSources: SourceListItem[] = sourceRows.map((s) => ({
     id: s.id,
     reviewerId: s.reviewerId,
@@ -85,7 +94,16 @@ export default async function ReviewerPage({ params }: PageProps) {
   }
 
   return (
-    <AppShell>
+    <AppShell
+      topics={topics.map((item) => ({
+        id: item.id,
+        name: item.name,
+        sortOrder: item.sortOrder,
+        createdAt: item.createdAt.toISOString(),
+      }))}
+      selectedTopicId={topic.id}
+      dueTodayCount={dueTodayCount}
+    >
       <ReviewerWorkspace
         userId={userId}
         topicId={topic.id}

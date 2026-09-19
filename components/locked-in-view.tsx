@@ -1,5 +1,5 @@
 import { EmptyState } from "@/components/empty-state";
-import { MarkdownBody } from "@/components/study-markdown";
+import { InkLegend, MarkdownBody } from "@/components/study-markdown";
 import { BookOpenText } from "@phosphor-icons/react/dist/ssr";
 import { LockedInEditor } from "@/components/locked-in-editor";
 import type { SerializedView } from "@/lib/serialize-view";
@@ -26,20 +26,26 @@ export function LockedInView({ content, view, reviewerId, onSaved }: LockedInVie
 
   if (view && reviewerId && onSaved) {
     return (
-      <LockedInEditor
-        reviewerId={reviewerId}
-        content={content}
-        revision={view.revision}
-        isEdited={view.isEdited}
-        isPinned={view.isPinned}
-        onSaved={onSaved}
-      />
+      <div>
+        <LockedInEditor
+          reviewerId={reviewerId}
+          content={content}
+          revision={view.revision}
+          isEdited={view.isEdited}
+          isPinned={view.isPinned}
+          onSaved={onSaved}
+        />
+        <InkLegend />
+      </div>
     );
   }
 
   return (
-    <article className="reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8">
-      <MarkdownBody source={content} />
-    </article>
+    <div>
+      <article className="reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8">
+        <MarkdownBody source={content} />
+      </article>
+      <InkLegend />
+    </div>
   );
 }

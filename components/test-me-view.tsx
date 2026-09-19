@@ -2,10 +2,10 @@
 
 import { useMemo, useState } from "react";
 import {
+  ArrowCounterClockwise,
+  ArrowRight,
   CheckCircle,
   Clock,
-  Eye,
-  EyeSlash,
   ListChecks,
   XCircle,
 } from "@phosphor-icons/react";
@@ -15,6 +15,7 @@ import { MarkdownBody } from "@/components/study-markdown";
 import { TimedTestMe } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
 import { parseTestMeItems } from "@/lib/learning";
+import type { TestMeItem } from "@/lib/types";
 import { cn, readApiError } from "@/lib/utils";
 
 type AttemptStats = {
@@ -46,6 +47,10 @@ function controlId(itemId: string, suffix: string): string {
   return `test-me-${readable}-${encoded || "item"}-${suffix}`;
 }
 
+function isCorrect(selected: string, answer: string): boolean {
+  return selected.trim().toLowerCase() === answer.trim().toLowerCase();
+}
+
 export function TestMeView({
   contentJson,
   content,
@@ -55,22 +60,10 @@ export function TestMeView({
   onAttemptStatsChange,
 }: TestMeViewProps) {
   const items = useMemo(
-    () => {
-      const parsed = parseTestMeItems(contentJson, content ?? "");
-      const misses = new Map(attemptStats.map((stats) => [stats.itemId, stats.misses]));
-      return parsed
-        .map((item, position) => ({ item, position, misses: misses.get(item.id) ?? 0 }))
-        .sort((a, b) => b.misses - a.misses || a.position - b.position)
-        .map(({ item }) => item);
-    },
-    [attemptStats, contentJson, content],
+    () => parseTestMeItems(contentJson, content ?? ""),
+    [contentJson, content],
   );
-  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
-  const [selected, setSelected] = useState<Record<string, string>>({});
-  const [showScore, setShowScore] = useState(false);
   const [timed, setTimed] = useState(false);
-  const [saveBusy, setSaveBusy] = useState(false);
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   if (items.length === 0) {
     return (
@@ -95,236 +88,309 @@ export function TestMeView({
     );
   }
 
-  const scorable = items;
-  let correct = 0;
-  for (const item of scorable) {
-    const pick = selected[item.id];
-    if (pick && pick.trim().toLowerCase() === item.answer.trim().toLowerCase()) {
-      correct += 1;
+  return (
+    <UntimedSitting
+      key={viewRevision}
+      items={items}
+      reviewerId={reviewerId}
+      viewRevision={viewRevision}
+      attemptStats={attemptStats}
+      onAttemptStatsChange={onAttemptStatsChange}
+      onStartTimed={() => setTimed(true)}
+    />
+  );
+}
+
+function UntimedSitting({
+  items,
+  reviewerId,
+  viewRevision,
+  attemptStats,
+  onAttemptStatsChange,
+  onStartTimed,
+}: {
+  items: TestMeItem[];
+  reviewerId: string;
+  viewRevision: number;
+  attemptStats: AttemptStats[];
+  onAttemptStatsChange: (stats: AttemptStats[]) => void;
+  onStartTimed: () => void;
+}) {
+  const [index, setIndex] = useState(0);
+  const [selected, setSelected] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [results, setResults] = useState<Record<string, boolean>>({});
+  const [complete, setComplete] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  const item = items[Math.min(index, items.length - 1)];
+  const score = Object.values(results).filter(Boolean).length;
+  const missedItems = items.filter((candidate) => results[candidate.id] === false);
+  const savedMisses = attemptStats.reduce((sum, stats) => sum + stats.misses, 0);
+
+  function resetSitting() {
+    setIndex(0);
+    setSelected("");
+    setSubmitted(false);
+    setResults({});
+    setComplete(false);
+    setSaveMessage(null);
+  }
+
+  async function submitAnswer() {
+    if (!item || submitted || saveBusy) return;
+    const answer = selected.trim();
+    if (!answer) {
+      setSaveMessage("Choose or enter an answer before continuing.");
+      return;
     }
-  }
-
-  function toggleReveal(id: string) {
-    setRevealed((prev) => ({ ...prev, [id]: !prev[id] }));
-    setShowScore(false);
-  }
-
-  function revealAll() {
-    const next: Record<string, boolean> = {};
-    for (const item of items) next[item.id] = true;
-    setRevealed(next);
-  }
-
-  function hideAll() {
-    setRevealed({});
-    setShowScore(false);
-  }
-
-  async function saveAttempt() {
-    const answers = scorable
-      .filter((item) => selected[item.id])
-      .map((item) => ({ itemId: item.id, selectedAnswer: selected[item.id]! }));
-    if (answers.length === 0) return;
     setSaveBusy(true);
     setSaveMessage(null);
     try {
       const response = await fetch(`/api/reviewers/${reviewerId}/test-attempts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedRevision: viewRevision, answers }),
+        body: JSON.stringify({
+          expectedRevision: viewRevision,
+          answers: [{ itemId: item.id, selectedAnswer: answer }],
+        }),
       });
       if (!response.ok) throw new Error(await readApiError(response));
       const data = (await response.json()) as { stats: AttemptStats[] };
       onAttemptStatsChange(data.stats);
-      setSaveMessage(`Saved ${answers.length} answer${answers.length === 1 ? "" : "s"}.`);
+      setResults((previous) => ({ ...previous, [item.id]: isCorrect(answer, item.answer) }));
+      setSubmitted(true);
     } catch (caught) {
-      setSaveMessage(caught instanceof Error ? caught.message : "Could not save attempt.");
+      setSaveMessage(caught instanceof Error ? caught.message : "Could not save this answer.");
     } finally {
       setSaveBusy(false);
     }
   }
 
+  function nextQuestion() {
+    if (!submitted) return;
+    if (index >= items.length - 1) {
+      setComplete(true);
+      return;
+    }
+    setIndex((current) => current + 1);
+    setSelected("");
+    setSubmitted(false);
+    setSaveMessage(null);
+  }
+
+  const timedRunButton = (
+    <Button type="button" variant="outline" size="sm" onClick={onStartTimed}>
+      <Clock weight="bold" />
+      Timed run
+    </Button>
+  );
+
+  if (complete || !item) {
+    return (
+      <section className="space-y-4" aria-labelledby="test-me-complete-title">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h2 id="test-me-complete-title" className="text-base font-semibold text-foreground">
+            Sitting complete
+          </h2>
+          {timedRunButton}
+        </div>
+
+        <div className="rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6">
+          <p className="text-sm font-medium text-foreground">
+            {score} of {items.length} correct.
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Attempts and misses are saved.
+            {savedMisses > 0
+              ? ` ${savedMisses} saved miss${savedMisses === 1 ? "" : "es"} to revisit.`
+              : ""}
+          </p>
+
+          <div className="mt-4 space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Misses</h3>
+            {missedItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No misses this sitting.</p>
+            ) : (
+              <ol className="space-y-2">
+                {missedItems.map((missed) => (
+                  <li
+                    key={missed.id}
+                    className="rounded-lg border border-border/60 bg-muted/40 px-3 py-3 text-sm"
+                  >
+                    <div className="font-medium text-foreground">
+                      <MarkdownBody source={missed.question} />
+                    </div>
+                    <div className="mt-1 text-muted-foreground">
+                      Answer: <MarkdownBody source={missed.answer} inline />
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
+
+        <Button type="button" onClick={resetSitting}>
+          <ArrowCounterClockwise weight="bold" />
+          Start again
+        </Button>
+      </section>
+    );
+  }
+
+  const questionId = controlId(item.id, "question");
+  const correct = results[item.id];
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={revealAll}>
-          <Eye weight="bold" />
-          Reveal answers
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => setTimed(true)}>
-          <Clock weight="bold" />
-          Timed run
-        </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={hideAll}>
-          <EyeSlash weight="bold" />
-          Hide answers
-        </Button>
-        {scorable.length > 0 ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => setShowScore(true)}
-          >
-            Score locally
-          </Button>
-        ) : null}
-        {scorable.length > 0 ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => void saveAttempt()}
-            disabled={saveBusy || !scorable.some((item) => Boolean(selected[item.id]))}
-          >
-            {saveBusy ? "Saving" : "Save attempt"}
-          </Button>
-        ) : null}
-        {showScore && scorable.length > 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {correct} of {scorable.length} questions correct
+    <section className="space-y-4" aria-labelledby="test-me-sitting-title">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="test-me-sitting-title" className="text-base font-semibold text-foreground">
+            Exam sitting. Pick an answer.
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Question {index + 1} of {items.length}
           </p>
-        ) : null}
-        {attemptStats.length > 0 ? (
-          <p className="text-xs text-muted-foreground">
-            {attemptStats.reduce((sum, item) => sum + item.misses, 0)} saved miss{attemptStats.reduce((sum, item) => sum + item.misses, 0) === 1 ? "" : "es"} to revisit
-          </p>
-        ) : null}
-        {saveMessage ? <p role="status" className="text-xs text-muted-foreground">{saveMessage}</p> : null}
+        </div>
+        {timedRunButton}
       </div>
 
-      <ol className="space-y-3">
-        {items.map((item, index) => {
-          const isOpen = !!revealed[item.id];
-          const pick = selected[item.id];
-          const questionId = controlId(item.id, "question");
-          const isCorrect =
-            pick &&
-            pick.trim().toLowerCase() === item.answer.trim().toLowerCase();
+      <SittingItem
+        item={item}
+        questionId={questionId}
+        selected={selected}
+        submitted={submitted}
+        saveBusy={saveBusy}
+        correct={correct}
+        onSelect={(value) => {
+          setSelected(value);
+          setSaveMessage(null);
+        }}
+      />
 
-          return (
-            <li
-              key={item.id}
-              className="rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-5"
-            >
-              <div className="flex gap-3">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
-                  {index + 1}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {submitted ? (
+          <Button type="button" onClick={nextQuestion}>
+            <ArrowRight weight="bold" />
+            {index >= items.length - 1 ? "Finish" : "Next question"}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            onClick={() => void submitAnswer()}
+            disabled={saveBusy || !selected.trim()}
+          >
+            {saveBusy ? "Saving" : "Submit answer"}
+          </Button>
+        )}
+      </div>
+      {saveMessage ? (
+        <p role="alert" className="text-sm text-destructive">
+          {saveMessage}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function SittingItem({
+  item,
+  questionId,
+  selected,
+  submitted,
+  saveBusy,
+  correct,
+  onSelect,
+}: {
+  item: TestMeItem;
+  questionId: string;
+  selected: string;
+  submitted: boolean;
+  saveBusy: boolean;
+  correct: boolean | undefined;
+  onSelect: (value: string) => void;
+}) {
+  const locked = submitted || saveBusy;
+
+  return (
+    <article className="rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6">
+      <div id={questionId} className="mb-4 text-sm font-medium leading-relaxed text-foreground">
+        <MarkdownBody source={item.question} />
+      </div>
+
+      {item.choices ? (
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby={questionId}>
+          {item.choices.map((choice, choiceIndex) => {
+            const choiceId = controlId(item.id, `choice-${choiceIndex + 1}`);
+            const active = selected === choice;
+            return (
+              <button
+                key={choiceId}
+                id={choiceId}
+                name={controlId(item.id, "choices")}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                disabled={locked}
+                className={cn(
+                  "flex min-h-11 min-w-0 items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+                  active
+                    ? "border-primary/50 bg-primary/10 text-foreground"
+                    : "border-border/80 bg-background/40 text-muted-foreground hover:border-border hover:text-foreground",
+                )}
+                onClick={() => onSelect(choice)}
+              >
+                <span
+                  aria-hidden
+                  className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold tabular-nums text-foreground"
+                >
+                  {choiceIndex + 1}
                 </span>
-                <div className="min-w-0 flex-1 space-y-3">
-                  <div
-                    id={questionId}
-                    className="text-sm font-medium leading-relaxed text-foreground"
-                  >
-                    <MarkdownBody source={item.question} />
-                  </div>
+                <span className="min-w-0 flex-1 break-words">
+                  <MarkdownBody source={choice} inline />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <label
+          htmlFor={controlId(item.id, "answer")}
+          className="grid gap-1 text-xs text-muted-foreground"
+        >
+          <span id={controlId(item.id, "answer-label")}>Open response</span>
+          <input
+            id={controlId(item.id, "answer")}
+            name={controlId(item.id, "answer")}
+            value={selected}
+            disabled={locked}
+            onChange={(event) => onSelect(event.target.value)}
+            className="min-h-11 rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+            aria-labelledby={`${questionId} ${controlId(item.id, "answer-label")}`}
+          />
+        </label>
+      )}
 
-                  {item.choices ? (
-                    <div
-                      className="flex flex-col gap-2"
-                      role="radiogroup"
-                      aria-labelledby={questionId}
-                    >
-                      {item.choices.map((choice, choiceIndex) => {
-                        const active = pick === choice;
-                        const choiceId = controlId(item.id, `choice-${choiceIndex + 1}`);
-                        return (
-                          <button
-                            key={choiceId}
-                            id={choiceId}
-                            name={controlId(item.id, "choices")}
-                            type="button"
-                            role="radio"
-                            aria-checked={active}
-                            className={cn(
-                              "min-h-11 rounded-lg border px-3 py-2 text-left text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
-                              active
-                                ? "border-primary/50 bg-primary/10 text-foreground"
-                                : "border-border/80 bg-background/40 text-muted-foreground hover:border-border hover:text-foreground",
-                            )}
-                            onClick={() => {
-                              setSelected((prev) => ({
-                                ...prev,
-                                [item.id]: choice,
-                              }));
-                              setShowScore(false);
-                            }}
-                          >
-                            <MarkdownBody source={choice} inline />
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <label
-                      htmlFor={controlId(item.id, "answer")}
-                      className="grid gap-1 text-xs text-muted-foreground"
-                    >
-                      <span id={controlId(item.id, "answer-label")}>Open response</span>
-                      <input
-                        id={controlId(item.id, "answer")}
-                        name={controlId(item.id, "answer")}
-                        value={pick ?? ""}
-                        onChange={(event) => {
-                          setSelected((prev) => ({ ...prev, [item.id]: event.target.value }));
-                          setShowScore(false);
-                        }}
-                        className="min-h-11 rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
-                        aria-labelledby={`${questionId} ${controlId(item.id, "answer-label")}`}
-                      />
-                    </label>
-                  )}
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => toggleReveal(item.id)}
-                    >
-                      {isOpen ? (
-                        <>
-                          <EyeSlash weight="bold" />
-                          Hide answer
-                        </>
-                      ) : (
-                        <>
-                          <Eye weight="bold" />
-                          Show answer
-                        </>
-                      )}
-                    </Button>
-                    {showScore && pick ? (
-                      isCorrect ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-success">
-                          <CheckCircle weight="fill" />
-                          Correct
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-destructive">
-                          <XCircle weight="fill" />
-                          Incorrect
-                        </span>
-                      )
-                    ) : null}
-                  </div>
-
-                  {isOpen ? (
-                    <div className="rounded-lg border border-border/60 bg-muted/40 px-3 py-3 text-sm">
-                      <p className="font-medium text-foreground">
-                        Answer: <MarkdownBody source={item.answer} inline />
-                      </p>
-                      {item.explanation ? (
-                        <MarkdownBody source={item.explanation} />
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
+      {submitted ? (
+        <div className="mt-4 space-y-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-3" role="status">
+          <p
+            className={cn(
+              "inline-flex items-center gap-1 text-sm font-medium",
+              correct ? "text-success" : "text-destructive",
+            )}
+          >
+            {correct ? <CheckCircle weight="fill" /> : <XCircle weight="fill" />}
+            {correct ? "Correct" : "Incorrect"}
+          </p>
+          <div className="text-sm text-muted-foreground">
+            <strong className="text-foreground">Answer:</strong>{" "}
+            <MarkdownBody source={item.answer} inline />
+          </div>
+          {item.explanation ? <MarkdownBody source={item.explanation} /> : null}
+        </div>
+      ) : null}
+    </article>
   );
 }

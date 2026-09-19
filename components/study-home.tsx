@@ -1,13 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import { useLook } from "@/components/look-provider";
 import {
   ReviewerList,
   type ReviewerListItem,
 } from "@/components/reviewer-list";
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
+import { useTopicNav } from "@/components/topic-shelf";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 type StudyHomeProps = {
   topics: TopicListItem[];
@@ -42,18 +45,33 @@ export function StudyHome({
   topicName,
   reviewers,
 }: StudyHomeProps) {
-  const [optimisticId, setOptimisticId] = useState<string | null>(null);
+  const look = useLook();
+  const topicNav = useTopicNav();
+  const [localOptimisticId, setLocalOptimisticId] = useState<string | null>(
+    null,
+  );
+  const optimisticId = topicNav?.optimisticId ?? localOptimisticId;
+  const setOptimisticId = topicNav?.setOptimisticId ?? setLocalOptimisticId;
+
+  useEffect(() => {
+    if (optimisticId !== null && optimisticId === selectedId) {
+      setOptimisticId(null);
+    }
+  }, [optimisticId, selectedId, setOptimisticId]);
+
   const topicPending =
     optimisticId !== null && optimisticId !== selectedId;
   const effectiveSelected = topicPending ? optimisticId : selectedId;
 
   return (
     <div className="flex flex-col gap-8">
-      <TopicTabs
-        topics={topics}
-        selectedId={effectiveSelected}
-        onOptimisticSelect={setOptimisticId}
-      />
+      <div className={cn(look === "remnote" && "md:hidden")}>
+        <TopicTabs
+          topics={topics}
+          selectedId={effectiveSelected}
+          onOptimisticSelect={setOptimisticId}
+        />
+      </div>
       {topicPending ? (
         <ReviewerListSkeleton />
       ) : (
