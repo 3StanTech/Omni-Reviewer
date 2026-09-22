@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import {
   ReviewerList,
@@ -8,6 +9,7 @@ import {
 } from "@/components/reviewer-list";
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
 import { useTopicNav } from "@/components/topic-shelf";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type StudyHomeProps = {
@@ -44,6 +46,8 @@ export function StudyHome({
   reviewers,
 }: StudyHomeProps) {
   const topicNav = useTopicNav();
+  const shelfOpen = topicNav?.shelfOpen ?? true;
+  const duePack = reviewers.find((reviewer) => reviewer.dueTodayCount > 0) ?? null;
   const [localOptimisticId, setLocalOptimisticId] = useState<string | null>(
     null,
   );
@@ -62,7 +66,17 @@ export function StudyHome({
 
   return (
     <div className="flex flex-col gap-8">
-      <div>
+      {duePack && selectedId ? (
+        <Button
+          nativeButton={false}
+          render={
+            <Link href={`/topics/${selectedId}/reviewers/${duePack.id}?mode=carded`} />
+          }
+        >
+          Practice due cards
+        </Button>
+      ) : null}
+      <div className={shelfOpen ? "md:hidden" : undefined}>
         <TopicTabs
           topics={topics}
           selectedId={effectiveSelected}

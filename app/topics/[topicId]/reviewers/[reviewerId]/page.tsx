@@ -21,9 +21,10 @@ export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: Promise<{ topicId: string; reviewerId: string }>;
+  searchParams: Promise<{ mode?: string }>;
 };
 
-export default async function ReviewerPage({ params }: PageProps) {
+export default async function ReviewerPage({ params, searchParams }: PageProps) {
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) {
@@ -31,6 +32,10 @@ export default async function ReviewerPage({ params }: PageProps) {
   }
 
   const { topicId, reviewerId } = await params;
+  const { mode } = await searchParams;
+  const initialMode = mode === "summary" || mode === "test_me" || mode === "carded"
+    ? mode
+    : "locked_in";
 
   const topic = await getTopic(topicId, userId);
   if (!topic) notFound();
@@ -120,6 +125,7 @@ export default async function ReviewerPage({ params }: PageProps) {
             : null
         }
         examDate={reviewer.examDate}
+      initialMode={initialMode}
         initialCards={cards.map((card) => ({
           ...card,
           dueAt: card.dueAt.toISOString(),

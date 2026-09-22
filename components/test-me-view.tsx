@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, use, useMemo, useRef, useState } from "react";
+import { Suspense, use, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowCounterClockwise,
   ArrowRight,
@@ -211,6 +211,21 @@ function UntimedSitting({
     })
     : false;
   const savedMisses = attemptStats.reduce((sum, stats) => sum + stats.misses, 0);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey || submitted || !item) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable='true']")) return;
+      const choice = item.choices?.[Number(event.key) - 1];
+      if (/^[1-4]$/.test(event.key) && choice) {
+        setSelected(choice);
+        setSaveMessage(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [item, submitted]);
 
   function applySession(payload: UntimedSittingPayload) {
     const next = sittingView(payload, items);
@@ -555,7 +570,7 @@ function SittingItem({
             )}
           >
             {correct ? <CheckCircle weight="fill" /> : <XCircle weight="fill" />}
-            {correct ? "Correct" : "Incorrect"}
+            {correct ? "Correct" : "Incorrect. The main point:"}
           </p>
           <div className="text-sm text-muted-foreground">
             <strong className="text-foreground">Answer:</strong>{" "}

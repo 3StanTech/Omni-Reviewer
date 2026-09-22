@@ -221,6 +221,20 @@ export async function listReviewersByTopic(
     .orderBy(asc(reviewers.createdAt));
 }
 
+/** Reviewers with an in-progress untimed sitting for this owner. */
+export async function listActiveUntimedReviewerIds(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ reviewerId: testSessions.reviewerId })
+    .from(testSessions)
+    .where(and(
+      eq(testSessions.userId, userId),
+      eq(testSessions.mode, "untimed"),
+      eq(testSessions.status, "active"),
+      isNull(testSessions.expiresAt),
+    ));
+  return rows.map((row) => row.reviewerId);
+}
+
 export async function getReviewer(
   id: string,
   userId: string,

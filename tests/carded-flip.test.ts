@@ -30,8 +30,9 @@ describe("Carded recall flip", () => {
   it("keeps Again and Good out of the tree until the card is flipped", () => {
     expect(src).toContain("isDurableCard(card) && flipped");
     const gradesBlock = src.slice(src.indexOf("isDurableCard(card) && flipped"));
-    expect(gradesBlock).toContain(">Again<");
-    expect(gradesBlock).toContain(">Good<");
+    expect(gradesBlock).toContain("Again,");
+    expect(gradesBlock).toContain("Good,");
+    expect(gradesBlock).toContain("gradePreview");
     const beforeGrades = src.slice(0, src.indexOf("isDurableCard(card) && flipped"));
     expect(beforeGrades).not.toContain(">Again<");
     expect(beforeGrades).not.toContain(">Good<");

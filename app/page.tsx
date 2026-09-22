@@ -5,7 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import type { ReviewerListItem } from "@/components/reviewer-list";
 import { StudyHome } from "@/components/study-home";
 import type { TopicListItem } from "@/components/topic-tabs";
-import { listReviewersByTopic, listTopics } from "@/lib/queries";
+import { listActiveUntimedReviewerIds, listReviewersByTopic, listTopics } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -38,9 +38,13 @@ export default async function HomePage({ searchParams }: HomeProps) {
   const selectedTopic =
     topics.find((t) => t.id === selectedId) ?? null;
 
-  const reviewers = selectedId
-    ? await listReviewersByTopic(selectedId, userId)
-    : [];
+  const [reviewers, activeUntimed] = selectedId
+    ? await Promise.all([
+      listReviewersByTopic(selectedId, userId),
+      listActiveUntimedReviewerIds(userId),
+    ])
+    : [[], []];
+  const activeUntimedIds = new Set(activeUntimed);
 
   const serializedReviewers: ReviewerListItem[] = reviewers.map((r) => ({
     id: r.id,
@@ -52,6 +56,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
       : null,
     examDate: r.examDate,
     dueTodayCount: r.dueTodayCount,
+    hasActiveSitting: activeUntimedIds.has(r.id),
   }));
 
   const dueTodayCount = serializedReviewers.reduce(

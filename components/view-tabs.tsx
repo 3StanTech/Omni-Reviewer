@@ -45,6 +45,7 @@ type ViewTabsProps = {
   onNavigateRequest?: (kind: ViewKind) => boolean;
   onRedoRequest?: (kind: ViewKind, forceOverwrite: boolean) => boolean;
   compact?: boolean;
+  examDate?: string | null;
   value?: ViewKind;
   onValueChange?: (kind: ViewKind) => void;
 };
@@ -143,6 +144,7 @@ export function ViewTabs({
   onNavigateRequest,
   onRedoRequest,
   compact = false,
+  examDate = null,
   value,
   onValueChange,
 }: ViewTabsProps) {
@@ -183,7 +185,7 @@ export function ViewTabs({
       onValueChange={(next) => selectTab(next as ViewKind)}
       className="w-full gap-4"
     >
-      <div className="overflow-x-auto">
+      <div className="sticky top-14 z-20 -mx-1 overflow-x-auto bg-background/95 px-1 py-2 backdrop-blur">
         <TabsList
           variant="line"
           className={cn(
@@ -301,6 +303,7 @@ export function ViewTabs({
             content={views.carded?.content ?? null}
             reviewerId={reviewerId}
             durableCards={cards}
+            examDate={examDate}
             onCardsChange={onCardsChange}
           />
         )}

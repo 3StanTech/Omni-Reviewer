@@ -43,6 +43,7 @@ export type ReviewerListItem = {
   lastGeneratedAt: string | null;
   examDate: string | null;
   dueTodayCount: number;
+  hasActiveSitting?: boolean;
 };
 
 type ReviewerListProps = {
@@ -278,6 +279,16 @@ export function ReviewerList({
                 </span>
                 <PackRowChevron />
               </Link>
+              {reviewer.dueTodayCount > 0 || reviewer.hasActiveSitting ? (
+                <Link
+                  href={reviewer.dueTodayCount > 0
+                    ? `/topics/${topicId}/reviewers/${reviewer.id}?mode=carded`
+                    : `/topics/${topicId}/reviewers/${reviewer.id}?mode=test_me`}
+                  className="flex items-center border-l border-border/60 px-3 text-xs font-medium text-primary outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+                >
+                  {reviewer.dueTodayCount > 0 ? "Review due cards" : "Resume Test Me"}
+                </Link>
+              ) : null}
               <div className="flex items-center border-l border-border/60 px-1">
                 <DropdownMenu>
                   <DropdownMenuTrigger

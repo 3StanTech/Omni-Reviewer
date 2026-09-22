@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/empty-state";
 import { MarkdownBody } from "@/components/study-markdown";
 import { Button } from "@/components/ui/button";
 import { parseCardedItems } from "@/lib/learning";
+import { scheduleCardReview } from "@/lib/sm2";
 import { isClozeCardFront, renderClozeText } from "@/lib/learning";
 import {
   captureDueQueue,
@@ -40,6 +41,7 @@ type CardedViewProps = {
   content: string | null;
   reviewerId: string;
   durableCards: DurableCardView[];
+  examDate?: string | null;
   onCardsChange: (cards: DurableCardView[]) => void;
 };
 
@@ -59,12 +61,33 @@ function isDueNow(dueAt: string, now: number) {
   return Number.isFinite(due) && due <= now;
 }
 
+function gradePreview(
+  card: DurableCardView,
+  rating: "again" | "good",
+  examDate: string | null,
+): string {
+  const next = scheduleCardReview({
+    dueAt: new Date(card.dueAt),
+    intervalDays: card.intervalDays,
+    repetitions: card.repetitions,
+    easeFactor: card.easeFactor,
+  }, rating, new Date(), examDate);
+  return nextIntervalCopy(rating, next.intervalDays);
+}
+
 function nextIntervalCopy(rating: "again" | "good", intervalDays: number) {
   if (rating === "again") return "show tonight";
   return `next in ${intervalDays} days`;
 }
 
-export function CardedView({ contentJson, content, reviewerId, durableCards, onCardsChange }: CardedViewProps) {
+export function CardedView({
+  contentJson,
+  content,
+  reviewerId,
+  durableCards,
+  examDate = null,
+  onCardsChange,
+}: CardedViewProps) {
   const generatedCards = useMemo(
     () => parseCards(contentJson, content),
     [contentJson, content],
@@ -211,6 +234,26 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
       if (epoch === reviewEpoch.current) setBusy(false);
     }
   }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.closest("input, textarea, [contenteditable='true']"))) return;
+      if (browsing || editing || busy || dueStale || !isDurableCard(card)) return;
+      if (event.key === " " && !flipped) {
+        event.preventDefault();
+        setFlipped(true);
+      }
+      if (!flipped) return;
+      if (event.key === "1") void review("again");
+      if (event.key === "2") void review("good");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // review is recreated each render; the listener only needs the latest closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browsing, busy, card, dueStale, editing, flipped]);
 
   async function saveEdit() {
     if (!isDurableCard(card)) return;
@@ -424,8 +467,12 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
             <p className="w-full text-sm text-foreground">{scheduleHint}</p>
           ) : (
             <>
-              <Button type="button" variant="outline" onClick={() => void review("again")} disabled={busy}>Again</Button>
-              <Button type="button" variant="secondary" onClick={() => void review("good")} disabled={busy}>Good</Button>
+              <Button type="button" variant="outline" onClick={() => void review("again")} disabled={busy}>
+                Again, {gradePreview(card, "again", examDate)}
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => void review("good")} disabled={busy}>
+                Good, {gradePreview(card, "good", examDate)}
+              </Button>
             </>
           )}
         </div>

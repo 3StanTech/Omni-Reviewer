@@ -53,6 +53,7 @@ type ReviewerWorkspaceProps = {
   initialViews: ViewsPayload;
   lastGeneratedAt: string | null;
   examDate: string | null;
+  initialMode?: ViewKind;
   initialCards: SerializedCard[];
   initialTestAttemptStats: SerializedAttemptStats[];
 };
@@ -142,6 +143,7 @@ export function ReviewerWorkspace({
   examDate,
   initialCards,
   initialTestAttemptStats,
+  initialMode = "locked_in",
 }: ReviewerWorkspaceProps) {
   const [sources, setSources] = useState(initialSources);
   const [views, setViews] = useState(initialViews);
@@ -158,7 +160,7 @@ export function ReviewerWorkspace({
   const [examDateBusy, setExamDateBusy] = useState(false);
   const [examDateError, setExamDateError] = useState<string | null>(null);
   const [sourcesUserOpen, setSourcesUserOpen] = useState(false);
-  const [activeMode, setActiveMode] = useState<ViewKind>("locked_in");
+  const [activeMode, setActiveMode] = useState<ViewKind>(initialMode);
   const [documentDraftDirty, setDocumentDraftDirty] = useState(false);
   const [draftDialogOpen, setDraftDialogOpen] = useState(false);
   const [pendingDraftAction, setPendingDraftAction] = useState<PendingDraftAction | null>(null);
@@ -484,6 +486,7 @@ export function ReviewerWorkspace({
         showRedo={hasViews}
         busy={generation.state.busy}
         cards={cards}
+        examDate={currentExamDate}
         testAttemptStats={testAttemptStats}
         reviewerId={reviewerId}
         onCardsChange={setCards}
@@ -529,9 +532,6 @@ export function ReviewerWorkspace({
                 <p className="text-sm text-muted-foreground">{examCountdown}</p>
               ) : null}
             </div>
-            <p className="text-sm text-muted-foreground" suppressHydrationWarning>
-              {generatedLabel}
-            </p>
           </div>
           {hasViews ? (
             <Button
@@ -552,7 +552,9 @@ export function ReviewerWorkspace({
           ) : null}
         </div>
         <details className="mt-3 max-w-md rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-          <summary className="cursor-pointer text-sm font-medium text-foreground">Exam date {currentExamDate ? `· ${currentExamDate}` : ""}</summary>
+          <summary className="cursor-pointer text-sm font-medium text-foreground" suppressHydrationWarning>
+            {generatedLabel}. Exam date {currentExamDate ? `· ${currentExamDate}` : ""}
+          </summary>
           <div className="flex flex-wrap items-end gap-2 pt-3">
             <label htmlFor="exam-date" className="grid gap-1 text-xs text-muted-foreground">
               Exam date
