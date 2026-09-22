@@ -7,15 +7,27 @@ import {
   MAX_INGEST_BYTES,
   MAX_UPLOAD_BYTES,
 } from "@/lib/blob";
+import { createIngestBudget, ingestSource } from "@/lib/ingest";
 import {
   beginSourceDeletion,
   deleteSourceForOwner,
   getReviewer,
   getSourceForReviewer,
+  replaceFailedSourceIngest,
 } from "@/lib/queries";
-import { logRedactedError } from "@/lib/public-errors";
+import { logRedactedError, publicErrorMessage } from "@/lib/public-errors";
+import { serializeSource } from "@/lib/source-response";
+import type { SourceKind } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
+const RETRYABLE_SOURCE_KINDS = new Set<SourceKind>([
+  "pdf",
+  "text",
+  "document",
+  "presentation",
+]);
 
 type RouteContext = {
   params: Promise<{ id: string; sourceId: string }>;
@@ -111,4 +123,71 @@ export async function DELETE(request: Request, context: RouteContext) {
   }
 
   return NextResponse.json({ ok: true, id: deleted.id });
+}
+
+export async function POST(request: Request, context: RouteContext) {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { id: reviewerId, sourceId } = await context.params;
+  const reviewer = await getReviewer(reviewerId, userId);
+  if (!reviewer) {
+    return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
+  }
+
+  const source = await getSourceForReviewer(reviewerId, sourceId, userId);
+  if (!source || source.deletingAt) {
+    return NextResponse.json({ error: "Source not found" }, { status: 404 });
+  }
+  if (source.ingestStatus !== "failed" || !RETRYABLE_SOURCE_KINDS.has(source.kind)) {
+    return NextResponse.json(
+      { error: "Only a failed text, PDF, or Office source can be retried" },
+      { status: 409 },
+    );
+  }
+  if (!source.blobPathname || !source.blobUrl) {
+    return NextResponse.json({ error: "Source file unavailable" }, { status: 404 });
+  }
+
+  const budget = createIngestBudget(request.signal);
+  try {
+    let ingest;
+    try {
+      ingest = await ingestSource({
+        mime: source.mime,
+        blobUrl: source.blobUrl,
+        blobPathname: source.blobPathname,
+        filename: source.filename,
+        signal: budget.signal,
+        budget,
+      });
+      budget.throwIfExpired();
+    } catch (error) {
+      const message = publicErrorMessage(error, "Source ingest failed");
+      if (message === "Source ingest failed") {
+        logRedactedError("Source ingest failed", error, { reviewerId, sourceId });
+      }
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+
+    let row = await replaceFailedSourceIngest(userId, reviewerId, sourceId, {
+      ingestStatus: ingest.ingestStatus,
+      extractedText: ingest.extractedText,
+      errorMessage: ingest.errorMessage,
+    });
+    if (!row) {
+      row = await getSourceForReviewer(reviewerId, sourceId, userId);
+    }
+    if (!row || row.deletingAt) {
+      return NextResponse.json({ error: "Source not found" }, { status: 404 });
+    }
+    return NextResponse.json(
+      serializeSource(row, `/api/reviewers/${reviewerId}/sources/${row.id}`),
+    );
+  } finally {
+    budget.dispose();
+  }
 }

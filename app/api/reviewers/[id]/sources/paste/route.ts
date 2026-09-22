@@ -16,7 +16,7 @@ import {
   publicErrorMessage,
   PublicError,
 } from "@/lib/public-errors";
-import { serializeSource } from "@/app/api/reviewers/[id]/sources/route";
+import { serializeSource } from "@/lib/source-response";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;

@@ -254,6 +254,7 @@ describe("generation revision boundaries", () => {
     expect(generateRoute).toContain("reactivateGenerationJobForResume");
     expect(generateRoute).toContain('latest.status === "partial"');
     expect(controls).toContain("hasTerminalResume");
+    expect(controls).toContain("const resumeAllowed = hasReadySource && (hasActiveJob || hasTerminalResume)");
     expect(status).toContain('state.status === "partial"');
   });
 

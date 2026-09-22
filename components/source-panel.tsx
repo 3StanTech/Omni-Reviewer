@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { put } from "@vercel/blob/client";
 import {
+  ArrowClockwise,
   CircleNotch,
   File,
   FilePdf,
@@ -42,6 +43,15 @@ type SourcePanelProps = {
   /** When false, hide upload/paste/list. Parent owns the Sources control. */
   expanded?: boolean;
 };
+
+function canRetryStoredFile(source: Pick<SourceListItem, "kind" | "ingestStatus" | "blobPathname">): boolean {
+  return source.ingestStatus === "failed"
+    && Boolean(source.blobPathname)
+    && (source.kind === "pdf"
+      || source.kind === "text"
+      || source.kind === "document"
+      || source.kind === "presentation");
+}
 
 function statusLabel(status: IngestStatus): string {
   if (status === "ready") return "Ready";
@@ -117,6 +127,7 @@ export function SourcePanel({
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [pasteBusy, setPasteBusy] = useState(false);
@@ -229,6 +240,29 @@ export function SourcePanel({
       setError("Could not remove source. Try again.");
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function retrySource(sourceId: string) {
+    setRetryingId(sourceId);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/reviewers/${reviewerId}/sources/${sourceId}`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        setError(await readApiError(res));
+        return;
+      }
+      const raw = (await res.json()) as Record<string, unknown>;
+      commit(sources.map((source) => (
+        source.id === sourceId ? normalizeSource(raw) : source
+      )));
+    } catch {
+      setError("Could not retry source. Try again.");
+    } finally {
+      setRetryingId(null);
     }
   }
 
@@ -416,21 +450,39 @@ export function SourcePanel({
                   </p>
                 ) : null}
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="shrink-0 text-muted-foreground hover:text-destructive"
-                disabled={deletingId === source.id || uploading}
-                aria-label={`Remove ${source.filename}`}
-                onClick={() => void deleteSource(source.id)}
-              >
-                {deletingId === source.id ? (
-                  <CircleNotch className="animate-spin" />
-                ) : (
-                  <Trash />
-                )}
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                {canRetryStoredFile(source) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={retryingId === source.id || deletingId === source.id || uploading}
+                    onClick={() => void retrySource(source.id)}
+                  >
+                    {retryingId === source.id ? (
+                      <CircleNotch className="animate-spin" />
+                    ) : (
+                      <ArrowClockwise />
+                    )}
+                    Retry
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-muted-foreground hover:text-destructive"
+                  disabled={deletingId === source.id || retryingId === source.id || uploading}
+                  aria-label={`Remove ${source.filename}`}
+                  onClick={() => void deleteSource(source.id)}
+                >
+                  {deletingId === source.id ? (
+                    <CircleNotch className="animate-spin" />
+                  ) : (
+                    <Trash />
+                  )}
+                </Button>
+              </div>
             </li>
           ))}
         </ul>

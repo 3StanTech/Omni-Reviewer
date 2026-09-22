@@ -5,7 +5,7 @@ vi.mock("@/lib/queries", () => ({
   createSourceForOwner: vi.fn(),
   getReviewer: vi.fn(),
 }));
-vi.mock("@/app/api/reviewers/[id]/sources/route", () => ({
+vi.mock("@/lib/source-response", () => ({
   serializeSource: (row: { id: string; reviewerId: string; filename: string; mime: string; kind: string; blobPathname: string | null; ingestStatus: string; errorMessage: string | null; createdAt: Date }, sourceUrl: string | null) => ({
     id: row.id,
     reviewerId: row.reviewerId,

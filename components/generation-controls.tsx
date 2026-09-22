@@ -25,7 +25,8 @@ export function GenerationControls({
   const canStart = hasReadySource && !state.busy;
   const hasActiveJob = Boolean(state.jobId && !["succeeded", "failed", "partial"].includes(state.status));
   const hasTerminalResume = Boolean(state.jobId && (state.status === "failed" || state.status === "partial"));
-  const label = hasActiveJob || hasTerminalResume ? "Resume" : hasCompleteViews ? "All generated" : hasViews ? "Generate missing" : "Generate";
+  const resumeAllowed = hasReadySource && (hasActiveJob || hasTerminalResume);
+  const label = resumeAllowed ? "Resume" : hasCompleteViews ? "All generated" : hasViews ? "Generate missing" : "Generate";
   const help = !hasReadySource
     ? sourcesAreMediaOnly
       ? "Video and audio only. Upload a PDF, image, or text file."
@@ -40,9 +41,9 @@ export function GenerationControls({
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
-          onClick={hasActiveJob || hasTerminalResume ? onResume : onGenerate}
-          disabled={(hasCompleteViews && !hasTerminalResume) || (!canStart && !hasActiveJob && !hasTerminalResume)}
-          title={hasActiveJob || hasTerminalResume ? "Resume the saved generation" : help}
+          onClick={resumeAllowed ? onResume : onGenerate}
+          disabled={(hasCompleteViews && !resumeAllowed) || (!canStart && !resumeAllowed)}
+          title={resumeAllowed ? "Resume the saved generation" : help}
         >
           {state.busy ? <CircleNotch className="animate-spin" weight="bold" /> : <Sparkle weight="fill" />}
           {state.busy ? "Generating" : label}

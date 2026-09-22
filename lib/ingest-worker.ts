@@ -2,12 +2,15 @@ import { parentPort } from "node:worker_threads";
 
 import { getResolvedPDFJS } from "unpdf";
 import { officeFormatForKind, extractOfficeText } from "./office";
-import { MAX_PDF_IMAGE_PIXELS, MAX_PDF_PAGES } from "./pdf-vision";
+import { MAX_PDF_PAGES } from "./pdf-vision";
 
 /** Keep parser output bounded before it crosses the worker boundary. */
 export const MAX_PDF_TEXT_CHARS = 1_000_000;
 export const MAX_PDF_OUTPUT_BYTES = 8 * 1024 * 1024;
-export const MAX_PDF_WORKER_MEMORY_BYTES = 256 * 1024 * 1024;
+/** Above the 1024 MB worker heap, so the RSS stop does not reject a file the heap can still hold. */
+export const MAX_PDF_WORKER_MEMORY_BYTES = 1536 * 1024 * 1024;
+/** Text extraction never decodes slide bitmaps. Zero skips every image with pixels. */
+const PDF_TEXT_MAX_IMAGE_SIZE = 0;
 
 type WorkerRequest = {
   kind: "office" | "pdf-text";
@@ -67,7 +70,7 @@ async function parsePdfText(bytes: Uint8Array): Promise<string> {
     data: bytes,
     useSystemFonts: true,
     disableFontFace: true,
-    maxImageSize: MAX_PDF_IMAGE_PIXELS,
+    maxImageSize: PDF_TEXT_MAX_IMAGE_SIZE,
     disableAutoFetch: true,
     disableStream: true,
   }) as { promise: Promise<unknown>; destroy?: () => Promise<void> };

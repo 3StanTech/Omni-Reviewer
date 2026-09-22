@@ -4,6 +4,14 @@
   "functions": {
     "app/api/reviewers/[id]/generation/[jobId]/route.ts": {
       "maxDuration": 300
+    },
+    "app/api/reviewers/[id]/sources/route.ts": {
+      "maxDuration": 60,
+      "memory": 3008
+    },
+    "app/api/reviewers/[id]/sources/[sourceId]/route.ts": {
+      "maxDuration": 60,
+      "memory": 3008
     }
   }
 }

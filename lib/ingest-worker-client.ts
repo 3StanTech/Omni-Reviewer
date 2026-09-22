@@ -5,10 +5,10 @@ import { Worker } from "node:worker_threads";
 import { PublicError } from "@/lib/public-errors";
 
 /** V8 heap ceiling for the killable parser worker; the worker also checks RSS. */
-const PDF_WORKER_MAX_OLD_GENERATION_MB = 256;
+const PDF_WORKER_MAX_OLD_GENERATION_MB = 1024;
 
-/** Keep hostile concurrent uploads from creating an unbounded worker storm. */
-export const MAX_PARSER_WORKERS = 4;
+/** One parser at the raised ceiling. Parallel workers would exhaust the function. */
+export const MAX_PARSER_WORKERS = 1;
 export const MAX_PARSER_QUEUE = 32;
 
 type ParserResult =
@@ -40,6 +40,12 @@ const parserQueue: Array<{
   onAbort: () => void;
 }> = [];
 let activeParserWorkers = 0;
+
+function killedParserError(kind: ParserArgs["kind"], fallback: string): PublicError {
+  return new PublicError(
+    kind === "pdf-text" ? "PDF parser exceeded the safe memory limit" : fallback,
+  );
+}
 
 function runParserWorker(args: ParserArgs): Promise<string> {
   if (args.signal.aborted) {
@@ -95,11 +101,11 @@ function runParserWorker(args: ParserArgs): Promise<string> {
       });
     });
     worker.once("error", () => {
-      finish(() => reject(new PublicError("Parser worker failed")));
+      finish(() => reject(killedParserError(args.kind, "Parser worker failed")));
     });
     worker.once("exit", (code) => {
       if (code !== 0 || !settled) {
-        finish(() => reject(new PublicError("Parser worker stopped unexpectedly")));
+        finish(() => reject(killedParserError(args.kind, "Parser worker stopped unexpectedly")));
       }
     });
     args.signal.addEventListener("abort", onAbort, { once: true });

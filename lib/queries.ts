@@ -3183,6 +3183,39 @@ export async function createSourceForOwner(
   return sourceFromRawRow(raw);
 }
 
+/** Replace a failed ingest from the stored file. A row that is no longer failed stays unchanged. */
+export async function replaceFailedSourceIngest(
+  userId: string,
+  reviewerId: string,
+  sourceId: string,
+  values: {
+    ingestStatus: Source["ingestStatus"];
+    extractedText: string | null;
+    errorMessage: string | null;
+  },
+): Promise<Source | null> {
+  const result = await db.execute(sql`
+    UPDATE sources AS s
+    SET ingest_status = ${values.ingestStatus}::ingest_status,
+        extracted_text = ${values.extractedText},
+        error_message = ${values.errorMessage}
+    FROM reviewers AS r
+    INNER JOIN topics AS t ON t.id = r.topic_id
+    WHERE s.id = ${sourceId}
+      AND s.reviewer_id = ${reviewerId}
+      AND s.reviewer_id = r.id
+      AND t.user_id = ${userId}
+      AND s.ingest_status = 'failed'::ingest_status
+      AND s.deleting_at IS NULL
+      AND s.blob_pathname IS NOT NULL
+      AND r.deleting_at IS NULL
+      AND t.deleting_at IS NULL
+    RETURNING s.*
+  `);
+  const raw = result.rows[0] as Record<string, unknown> | undefined;
+  return raw ? sourceFromRawRow(raw) : null;
+}
+
 function sourceFromRawRow(raw: Record<string, unknown>): Source {
   const asDate = (value: unknown): Date | null =>
     value instanceof Date ? value : typeof value === "string" ? new Date(value) : null;
