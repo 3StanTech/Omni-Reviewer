@@ -15,10 +15,15 @@ describe("topic shelf", () => {
   const shell = read("components/app-shell.tsx");
   const home = read("components/study-home.tsx");
   const page = read("app/page.tsx");
+  const reviewer = read("app/topics/[topicId]/reviewers/[reviewerId]/page.tsx");
 
-  it("is available as a collapsible library surface and is md+ only", () => {
-    expect(shelf).toContain("hidden");
-    expect(shelf).toContain("md:flex");
+  it("toggles from a header button and remembers the choice", () => {
+    expect(shelf).toContain("omni-topic-shelf");
+    expect(shelf).toContain('aria-label="Topics"');
+    expect(shelf).toContain("aria-expanded");
+    expect(shelf).toContain("aria-controls");
+    expect(shelf).toContain('id={TOPIC_SHELF_ID}');
+    expect(shell).toContain("TopicShelfToggle");
   });
 
   it("slots the shelf in AppShell and keeps mood control", () => {
@@ -35,8 +40,10 @@ describe("topic shelf", () => {
     expect(shelf).toContain("{dueTodayCount}");
   });
 
-  it("keeps TopicTabs on the home surface", () => {
+  it("keeps TopicTabs on the home surface and the shelf on a study pack", () => {
     expect(home).toContain("TopicTabs");
+    expect(reviewer).toContain("topics={topics.map");
+    expect(reviewer).not.toContain("showTopicShelf={false}");
   });
 
   it("uses Phosphor icons and does not put an em dash in shelf copy", () => {

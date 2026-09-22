@@ -105,7 +105,6 @@ export default async function ReviewerPage({ params }: PageProps) {
       }))}
       selectedTopicId={topic.id}
       dueTodayCount={dueTodayCount}
-      showTopicShelf={false}
     >
       <ReviewerWorkspace
         userId={userId}

@@ -3,8 +3,11 @@
 import {
   createContext,
   useContext,
+  useCallback,
+  useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import Link from "next/link";
@@ -15,8 +18,10 @@ import {
   DotsThreeVertical,
   PencilSimple,
   Plus,
+  SidebarSimple,
   Trash,
 } from "@phosphor-icons/react";
+import { readLocalStorage, writeLocalStorage } from "@/lib/safe-storage";
 
 import type { TopicListItem } from "@/components/topic-tabs";
 import { Button } from "@/components/ui/button";
@@ -38,21 +43,78 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn, readApiError } from "@/lib/utils";
 
+export const TOPIC_SHELF_ID = "topic-shelf";
+export const TOPIC_SHELF_STORAGE_KEY = "omni-topic-shelf";
+
 type TopicNavValue = {
   optimisticId: string | null;
   setOptimisticId: (id: string | null) => void;
+  shelfOpen: boolean;
+  setShelfOpen: (open: boolean) => void;
 };
 
 const TopicNavContext = createContext<TopicNavValue | null>(null);
+const TOPIC_SHELF_TOGGLE_ID = "topic-shelf-toggle";
+const shelfListeners = new Set<() => void>();
+
+function readShelfOpen(): boolean {
+  const stored = readLocalStorage(TOPIC_SHELF_STORAGE_KEY);
+  if (stored === "open") return true;
+  if (stored === "closed") return false;
+  return window.matchMedia("(min-width: 768px)").matches;
+}
+
+function subscribeShelf(listener: () => void) {
+  shelfListeners.add(listener);
+  return () => shelfListeners.delete(listener);
+}
+
+function emitShelf() {
+  for (const listener of shelfListeners) listener();
+}
+
+function focusShelfToggle() {
+  document.getElementById(TOPIC_SHELF_TOGGLE_ID)?.focus();
+}
 
 export function TopicNavProvider({ children }: { children: ReactNode }) {
   const [optimisticId, setOptimisticId] = useState<string | null>(null);
+  const shelfOpen = useSyncExternalStore(
+    subscribeShelf,
+    readShelfOpen,
+    () => true,
+  );
+  const setShelfOpen = useCallback((open: boolean) => {
+    writeLocalStorage(TOPIC_SHELF_STORAGE_KEY, open ? "open" : "closed");
+    emitShelf();
+  }, []);
+
   const value = useMemo(
-    () => ({ optimisticId, setOptimisticId }),
-    [optimisticId],
+    () => ({ optimisticId, setOptimisticId, shelfOpen, setShelfOpen }),
+    [optimisticId, shelfOpen, setShelfOpen],
   );
   return (
     <TopicNavContext.Provider value={value}>{children}</TopicNavContext.Provider>
+  );
+}
+
+export function TopicShelfToggle() {
+  const topicNav = useTopicNav();
+  if (!topicNav) return null;
+  return (
+    <Button
+      id={TOPIC_SHELF_TOGGLE_ID}
+      type="button"
+      variant="ghost"
+      size="icon-lg"
+      className="min-h-11 min-w-11"
+      aria-label="Topics"
+      aria-expanded={topicNav.shelfOpen}
+      aria-controls={TOPIC_SHELF_ID}
+      onClick={() => topicNav.setShelfOpen(!topicNav.shelfOpen)}
+    >
+      <SidebarSimple weight="bold" />
+    </Button>
   );
 }
 
@@ -73,6 +135,7 @@ export function TopicShelf({
 }: TopicShelfProps) {
   const router = useRouter();
   const topicNav = useTopicNav();
+  const shelfOpen = topicNav?.shelfOpen ?? true;
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -172,9 +235,34 @@ export function TopicShelf({
     }
   }
 
+  useEffect(() => {
+    if (!shelfOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (!window.matchMedia("(max-width: 767px)").matches) return;
+      topicNav?.setShelfOpen(false);
+      focusShelfToggle();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [shelfOpen, topicNav]);
+
+  if (!shelfOpen) return null;
+
   return (
+    <>
+    <button
+      type="button"
+      className="fixed inset-0 z-40 bg-black/40 md:hidden"
+      aria-label="Close topics"
+      onClick={() => {
+        topicNav?.setShelfOpen(false);
+        focusShelfToggle();
+      }}
+    />
     <aside
-      className="sticky top-0 hidden h-svh w-[228px] shrink-0 flex-col overflow-y-auto border-r border-border bg-chrome md:flex"
+      id={TOPIC_SHELF_ID}
+      className="fixed inset-y-0 left-0 z-50 flex h-svh w-[min(228px,86vw)] shrink-0 flex-col overflow-y-auto border-r border-border bg-chrome md:sticky md:z-auto md:w-[228px]"
       aria-label="Topic shelf"
     >
       <div className="flex flex-col gap-1 p-3">
@@ -430,5 +518,6 @@ export function TopicShelf({
         </DialogContent>
       </Dialog>
     </aside>
+    </>
   );
 }
