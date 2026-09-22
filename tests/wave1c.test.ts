@@ -127,7 +127,7 @@ describe("Wave 1C contracts", () => {
           "HTTP-Referer": "https://omni-reviewer.example",
         }),
         extraBody: expect.objectContaining({
-          models: ["provider/fallback:free", "openrouter/free"],
+          models: [],
         }),
       }),
     );
@@ -324,6 +324,10 @@ describe("Wave 1C contracts", () => {
       status: "failed",
       step: "summary",
       mode: "single",
+      intent: "redo",
+      targetKinds: ["summary"],
+      completedKinds: [],
+      upstreamRevisions: {},
       generationRunId: "run-1",
       active: false,
       claimToken: null,

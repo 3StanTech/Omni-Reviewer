@@ -1,6 +1,7 @@
 /** Plain prompt strings for the study-pack generation pipeline. No secrets. */
 
 import { MAX_GENERATED_JSON_CHARS } from "@/lib/learning-limits";
+import { classifySourceLength, estimateTokensFromText } from "@/lib/ai-budgets";
 
 export const PROMPT_LIMITS = {
   maxSources: 50,
@@ -104,13 +105,8 @@ export function assertPromptWithinLimit(
 export const NO_INVENT_CITATIONS =
   "Do not invent citations, quotes, page numbers, or facts the sources do not support. If something is unclear or missing, say so rather than guessing.";
 
-const SEMANTIC_INK =
-  'Mark a few key phrases with these HTML spans only. Never use other class names. Limit density: a handful of marks per section, wrap the phrase not the whole paragraph, and do not nest spans. Do not put spans inside fenced code.\n' +
-  '- <span class="ink-idea"> for a main idea\n' +
-  '- <span class="ink-example"> for an example\n' +
-  '- <span class="ink-fact"> for a formula, date, or hard fact\n' +
-  '- <span class="ink-warning"> for a warning or common pitfall\n' +
-  '- <span class="ink-exam"> for an exam-likely point';
+const NO_AUTOMATIC_HIGHLIGHTING =
+  "Do not add HTML spans, semantic ink classes, or automatic highlighting. Keep the Markdown content plain so the learner can manage highlights and notes.";
 
 export function lockedInPrompt(
   extractedTexts: PromptSource[],
@@ -131,7 +127,7 @@ Requirements:
 - Otherwise organize by clear topic headings (## / ###).
 - Merge overlapping content; resolve minor contradictions by preferring the most specific source and noting uncertainty briefly when needed.
 - Be thorough: definitions, key claims, examples, formulas, procedures, and relationships between ideas.
-- ${SEMANTIC_INK}
+- ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
 - Output Markdown only. No preamble or closing remarks outside the document.
 
@@ -149,7 +145,7 @@ Requirements:
 - Keep it detailed enough to review the full material, but denser and shorter than Locked In.
 - Use clear Markdown with headings that mirror Locked In structure when helpful.
 - Prefer bullets and tight paragraphs for scannability; preserve critical definitions, numbers, and distinctions.
-- ${SEMANTIC_INK}
+- ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
 - Output Markdown only. No preamble or closing remarks.
 
@@ -159,7 +155,12 @@ ${lockedInMarkdown}`
   );
 }
 
-export function testMePrompt(lockedInMarkdown: string): string {
+export function testMePrompt(
+  lockedInMarkdown: string,
+  maxItems = ({ short: 5, medium: 10, long: 20 } as const)[
+    classifySourceLength(estimateTokensFromText(lockedInMarkdown))
+  ],
+): string {
   return assertPromptWithinLimit(`You are creating a "Test Me" quiz from the Locked In study document below.
 
 Requirements:
@@ -173,8 +174,8 @@ Requirements:
     "explanation": string
   }
 - Every item must be multiple-choice with at least two non-empty choices. Use recall, comparison, and application questions when the material supports it.
-- Return no more than 100 items and no more than 8 choices per item. Keep each question, answer, and explanation concise enough to fit the output budget.
-- Aim for enough items to meaningfully assess the material (typically 8–20, scale with content depth).
+- Return no more than ${maxItems} items and no more than 8 choices per item. Keep each question, answer, and explanation concise enough to fit the output budget.
+- Aim for enough items to meaningfully assess the material while staying within that limit; return fewer when the source has fewer distinct facts.
 - ${NO_INVENT_CITATIONS}
 - Output raw JSON only: a single array starting with [ and ending with ].
 
@@ -184,7 +185,12 @@ ${lockedInMarkdown}`
   );
 }
 
-export function cardedPrompt(summaryMarkdown: string): string {
+export function cardedPrompt(
+  summaryMarkdown: string,
+  maxItems = ({ short: 10, medium: 20, long: 30 } as const)[
+    classifySourceLength(estimateTokensFromText(summaryMarkdown))
+  ],
+): string {
   return assertPromptWithinLimit(`You are creating "Carded" flashcards from the Summary document below.
 
 Requirements:
@@ -197,8 +203,8 @@ Requirements:
   }
 - One atomic idea per card. Front should be answerable without seeing the back.
 - For a fill-in-the-blank card, the front may use one or more balanced {{answer}} placeholders. Keep each placeholder short and put the explanation in back.
-- Return no more than 100 cards. Keep each front and back below 20,000 characters.
-- Aim for enough cards to cover the Summary (typically 10–30, scale with content).
+- Return no more than ${maxItems} cards. Keep each front and back below 20,000 characters.
+- Aim for enough cards to cover the Summary while staying within that limit; return fewer when the Summary has fewer distinct facts.
 - ${NO_INVENT_CITATIONS}
 - Output raw JSON only: a single array starting with [ and ending with ].
 

@@ -7,6 +7,7 @@ const getReviewerMock = vi.hoisted(() => vi.fn());
 const getViewMock = vi.hoisted(() => vi.fn());
 const recordMock = vi.hoisted(() => vi.fn());
 const recordTimedMock = vi.hoisted(() => vi.fn());
+const recordUntimedMock = vi.hoisted(() => vi.fn());
 const statsMock = vi.hoisted(() => vi.fn());
 const createSessionMock = vi.hoisted(() => vi.fn());
 const activeSessionMock = vi.hoisted(() => vi.fn());
@@ -17,6 +18,7 @@ vi.mock("@/lib/queries", () => ({
   getViewForReviewer: getViewMock,
   recordTestAttempts: recordMock,
   recordTimedTestAttempt: recordTimedMock,
+  recordUntimedTestAttempt: recordUntimedMock,
   listTestAttemptStats: statsMock,
   createOrResumeTimedTestSession: createSessionMock,
   getActiveTimedTestSession: activeSessionMock,
@@ -45,6 +47,7 @@ describe("timed Test Me route contracts", () => {
     getViewMock.mockReset();
     recordMock.mockReset();
     recordTimedMock.mockReset();
+    recordUntimedMock.mockReset();
     statsMock.mockReset();
     createSessionMock.mockReset();
     activeSessionMock.mockReset();

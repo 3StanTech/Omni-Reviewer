@@ -20,17 +20,19 @@ import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { SummaryView } from "@/components/summary-view";
 import { TestMeView } from "@/components/test-me-view";
 import { cn } from "@/lib/utils";
-import type { ViewsPayload } from "@/lib/serialize-view";
+import type { StudyViewSavePatch, ViewsPayload } from "@/lib/serialize-view";
 import type { ViewKind } from "@/lib/types";
+import type { LockedInDraftController } from "@/components/locked-in-editor";
+import type { MutableRefObject } from "react";
 import type { SerializedAttemptStats, SerializedCard } from "@/components/reviewer-workspace";
 
 type ViewTabsProps = {
+  userId: string;
   views: ViewsPayload;
   viewsLoading?: boolean;
   hasReadySource: boolean;
   showRedo: boolean;
   busy: boolean;
-  error: string | null;
   onRedo: (kind: ViewKind, forceOverwrite?: boolean) => void;
   reviewerId: string;
   cards: SerializedCard[];
@@ -38,6 +40,10 @@ type ViewTabsProps = {
   onCardsChange: (cards: SerializedCard[]) => void;
   onTestAttemptStatsChange: (stats: SerializedAttemptStats[]) => void;
   onViewsChange: (views: ViewsPayload) => void;
+  onDraftDirtyChange?: (dirty: boolean) => void;
+  draftControllerRef?: MutableRefObject<LockedInDraftController | null>;
+  onNavigateRequest?: (kind: ViewKind) => boolean;
+  onRedoRequest?: (kind: ViewKind, forceOverwrite: boolean) => boolean;
   compact?: boolean;
   value?: ViewKind;
   onValueChange?: (kind: ViewKind) => void;
@@ -120,11 +126,11 @@ function redoBlockReason(
 
 export function ViewTabs({
   views,
+  userId,
   viewsLoading = false,
   hasReadySource,
   showRedo,
   busy,
-  error,
   onRedo,
   reviewerId,
   cards,
@@ -132,6 +138,10 @@ export function ViewTabs({
   onCardsChange,
   onTestAttemptStatsChange,
   onViewsChange,
+  onDraftDirtyChange,
+  draftControllerRef,
+  onNavigateRequest,
+  onRedoRequest,
   compact = false,
   value,
   onValueChange,
@@ -141,6 +151,7 @@ export function ViewTabs({
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   function selectTab(next: ViewKind) {
+    if (next !== tab && onNavigateRequest && !onNavigateRequest(next)) return;
     if (value === undefined) setUncontrolledTab(next);
     onValueChange?.(next);
   }
@@ -156,11 +167,13 @@ export function ViewTabs({
       setConfirmOpen(true);
       return;
     }
+    if (onRedoRequest && !onRedoRequest(tab, false)) return;
     onRedo(tab);
   }
 
   function confirmRedo() {
     setConfirmOpen(false);
+    if (onRedoRequest && !onRedoRequest(tab, true)) return;
     onRedo(tab, true);
   }
 
@@ -226,14 +239,8 @@ export function ViewTabs({
         </div>
       ) : null}
 
-      {error ? (
-        <p role="alert" className="max-w-xl text-sm text-destructive">
-          {error}
-        </p>
-      ) : null}
-
       {views.staleKinds?.includes(tab) ? (
-        <p role="status" className="max-w-xl rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+        <p role="status" className="max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           This mode is from an older generation. Redo it when you are ready.
         </p>
       ) : null}
@@ -249,19 +256,36 @@ export function ViewTabs({
           </div>
         ) : tab === "locked_in" ? (
           <LockedInView
+            userId={userId}
             content={views.locked_in?.content ?? null}
             view={views.locked_in}
             reviewerId={reviewerId}
-            onSaved={(next) => {
+            onDirtyChange={onDraftDirtyChange}
+            controllerRef={draftControllerRef}
+            onSaved={(next: StudyViewSavePatch) => {
               onViewsChange({
                 ...views,
                 locked_in: views.locked_in ? { ...views.locked_in, ...next } : null,
-                staleKinds: ["summary", "test_me", "carded"],
+                staleKinds: next.staleKinds ?? views.staleKinds,
               });
             }}
           />
         ) : tab === "summary" ? (
-          <SummaryView content={views.summary?.content ?? null} />
+          <SummaryView
+            userId={userId}
+            content={views.summary?.content ?? null}
+            view={views.summary}
+            reviewerId={reviewerId}
+            onDirtyChange={onDraftDirtyChange}
+            controllerRef={draftControllerRef}
+            onSaved={(next: StudyViewSavePatch) => {
+              onViewsChange({
+                ...views,
+                summary: views.summary ? { ...views.summary, ...next } : null,
+                staleKinds: next.staleKinds ?? views.staleKinds,
+              });
+            }}
+          />
         ) : tab === "test_me" ? (
           <TestMeView
             contentJson={views.test_me?.contentJson ?? null}

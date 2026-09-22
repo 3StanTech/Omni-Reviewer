@@ -51,6 +51,7 @@ import {
 import {
   MAX_VISION_OUTPUT_TOKENS,
   MAX_VISION_TEXT_CHARS,
+  GENERATION_STEP_DEADLINE_MS,
 } from "@/lib/learning-limits";
 import { classifyGenerationError } from "@/lib/generation-errors";
 import {
@@ -126,6 +127,8 @@ describe("generate", () => {
 
     expect(generateText).toHaveBeenCalledTimes(2);
     expect(generateObject).toHaveBeenCalledTimes(2);
+    expect(generateText.mock.calls.every((call) => (call[0] as { maxRetries: number }).maxRetries === 0)).toBe(true);
+    expect(generateObject.mock.calls.every((call) => (call[0] as { maxRetries: number }).maxRetries === 0)).toBe(true);
 
     const textPrompts = generateText.mock.calls.map(
       (call) => (call[0] as { prompt: string }).prompt,
@@ -207,6 +210,41 @@ describe("generate", () => {
     });
     expect(generateText).toHaveBeenCalledTimes(1);
     expect(generateObject).not.toHaveBeenCalled();
+  });
+
+  it("limits a retryable provider failure to two total SDK calls", async () => {
+    generateText
+      .mockRejectedValueOnce({ statusCode: 503, message: "unavailable" })
+      .mockResolvedValueOnce({
+        text: SAMPLE_LOCKED_IN,
+        response: { modelId: "provider/actual-model" },
+      });
+
+    await expect(generateTextFromPrompt("short source", { purpose: "locked_in" })).resolves.toMatchObject({
+      text: SAMPLE_LOCKED_IN,
+    });
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(generateText.mock.calls.every((call) => (call[0] as { maxRetries: number }).maxRetries === 0)).toBe(true);
+  });
+
+  it("classifies the generation deadline abort as a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      generateText.mockImplementation(({ abortSignal }: { abortSignal: AbortSignal }) => (
+        new Promise((_resolve, reject) => {
+          abortSignal.addEventListener("abort", () => reject(abortSignal.reason), { once: true });
+        })
+      ));
+
+      const pending = generateTextFromPrompt("short source", { purpose: "locked_in" });
+      const settled = pending.then(() => null, (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(GENERATION_STEP_DEADLINE_MS);
+
+      await expect(settled).resolves.toMatchObject({ code: "timeout", retryable: true });
+      expect(generateText).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("maps retryable generation errors", () => {

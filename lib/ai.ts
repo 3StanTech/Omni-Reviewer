@@ -4,6 +4,11 @@ import { generateObject, generateText, NoObjectGeneratedError } from "ai";
 import { z } from "zod";
 
 import {
+  assertGenerationBudget,
+  estimateTokensFromText,
+  generationBudget,
+} from "@/lib/ai-budgets";
+import {
   GenerationError,
   toGenerationError,
 } from "@/lib/generation-errors";
@@ -16,8 +21,9 @@ import {
   MAX_CARDED_ITEMS,
   MAX_GENERATED_JSON_CHARS,
   MAX_GENERATED_MARKDOWN_CHARS,
-  MAX_GENERATION_JSON_OUTPUT_TOKENS,
-  MAX_GENERATION_TEXT_OUTPUT_TOKENS,
+  GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
+  GENERATION_STEP_DEADLINE_MS,
+  MAX_GENERATION_ATTEMPTS,
   MAX_LEARNING_ID_CHARS,
   MAX_TEST_ME_ANSWER_CHARS,
   MAX_TEST_ME_CHOICE_CHARS,
@@ -90,8 +96,6 @@ const cardedItemSchema = z.object({
   }
 });
 
-const MAX_ATTEMPTS = 3;
-
 function modelIdForPurpose(purpose: GenerationPurpose): string {
   const env = getEnv();
   switch (purpose) {
@@ -108,7 +112,7 @@ function modelIdForPurpose(purpose: GenerationPurpose): string {
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) {
-    return Promise.reject(new Error("aborted"));
+    return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -118,7 +122,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     const onAbort = () => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      reject(new Error("aborted"));
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -130,20 +134,48 @@ function jitterDelay(attempt: number): number {
   return base + jitter;
 }
 
-async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+async function withRetry<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  options: {
+    signal?: AbortSignal;
+    attempts: number;
+    deadlineMs: number;
+  },
+): Promise<T> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(new Error("aborted"));
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  const timeout = setTimeout(
+    () => controller.abort(new GenerationError("timeout", "Generation timed out.", true)),
+    options.deadlineMs,
+  );
   let lastError: unknown;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    if (signal?.aborted) throw new Error("aborted");
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      const classified = toGenerationError(err);
-      if (!classified.retryable || attempt === MAX_ATTEMPTS) {
-        throw classified;
+  try {
+    for (let attempt = 1; attempt <= options.attempts; attempt++) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new Error("aborted");
       }
-      await sleep(jitterDelay(attempt), signal);
+      try {
+        return await fn(controller.signal);
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw controller.signal.reason instanceof Error
+            ? controller.signal.reason
+            : err;
+        }
+        lastError = err;
+        const classified = toGenerationError(err);
+        if (!classified.retryable || attempt === options.attempts) {
+          throw classified;
+        }
+        await sleep(jitterDelay(attempt), controller.signal);
+      }
     }
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", onAbort);
   }
   throw toGenerationError(lastError);
 }
@@ -172,20 +204,33 @@ export function getModelId(purpose: GenerationPurpose = "locked_in"): string {
 
 export async function generateTextFromPrompt(
   prompt: string,
-  options: { purpose: GenerationPurpose; signal?: AbortSignal } = { purpose: "locked_in" },
+  options: {
+    purpose: GenerationPurpose;
+    signal?: AbortSignal;
+    sourceTokens?: number;
+  } = { purpose: "locked_in" },
 ): Promise<{ text: string; modelUsed: string }> {
   assertPromptWithinLimit(prompt);
   const modelId = modelIdForPurpose(options.purpose);
   const healJson = options.purpose === "json";
+  const budget = generationBudget(
+    options.purpose,
+    options.sourceTokens ?? estimateTokensFromText(prompt),
+    {
+      attempts: MAX_GENERATION_ATTEMPTS,
+      deadlineMs: GENERATION_STEP_DEADLINE_MS,
+      safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
+    },
+  );
+  assertGenerationBudget(prompt, budget);
 
-  return withRetry(async () => {
+  return withRetry(async (signal) => {
     const { text, response, providerMetadata } = await generateText({
       model: getOpenRouterModel(modelId, { healJson }),
       prompt,
-      maxOutputTokens: options.purpose === "json"
-        ? MAX_GENERATION_JSON_OUTPUT_TOKENS
-        : MAX_GENERATION_TEXT_OUTPUT_TOKENS,
-      abortSignal: options.signal,
+      maxRetries: 0,
+      maxOutputTokens: budget.maxOutputTokens,
+      abortSignal: signal,
     });
     const normalizedText = text.trim();
     if (normalizedText.length > MAX_GENERATED_MARKDOWN_CHARS) {
@@ -199,7 +244,11 @@ export async function generateTextFromPrompt(
       text: normalizedText,
       modelUsed: extractModelUsed({ response, providerMetadata }, modelId),
     };
-  }, options.signal);
+  }, {
+    signal: options.signal,
+    attempts: budget.attempts,
+    deadlineMs: budget.deadlineMs,
+  });
 }
 
 export async function visionReadImages(
@@ -213,10 +262,11 @@ export async function visionReadImages(
 
   const modelId = modelIdForPurpose("vision");
 
-  const result = await withRetry(async () => {
+  const result = await withRetry(async (signal) => {
     const { text } = await generateText({
       model: getOpenRouterModel(modelId),
-      abortSignal: options.signal,
+      maxRetries: 0,
+      abortSignal: signal,
       maxOutputTokens: MAX_VISION_OUTPUT_TOKENS,
       messages: [
         {
@@ -241,7 +291,11 @@ export async function visionReadImages(
       );
     }
     return normalizedText;
-  }, options.signal);
+  }, {
+    signal: options.signal,
+    attempts: MAX_GENERATION_ATTEMPTS,
+    deadlineMs: GENERATION_STEP_DEADLINE_MS,
+  });
 
   return result;
 }
@@ -291,8 +345,9 @@ export function normalizeGeneratedIds<T extends { id: string }>(items: T[]): T[]
 function normalizeGeneratedItems<T extends { id: string }>(
   kind: "test_me" | "carded",
   items: T[],
+  maxItemsOverride?: number,
 ): { items: T[]; raw: string } {
-  const maxItems = kind === "test_me" ? MAX_TEST_ME_ITEMS : MAX_CARDED_ITEMS;
+  const maxItems = maxItemsOverride ?? (kind === "test_me" ? MAX_TEST_ME_ITEMS : MAX_CARDED_ITEMS);
   if (items.length === 0) {
     throw new GenerationError(
       "json_parse",
@@ -333,20 +388,33 @@ async function generateJsonArray<T extends { id: string }>(args: {
 }): Promise<{ items: T[]; modelUsed: string; raw: string }> {
   assertPromptWithinLimit(args.prompt);
   const modelId = modelIdForPurpose("json");
-  const maxItems = args.kind === "test_me" ? MAX_TEST_ME_ITEMS : MAX_CARDED_ITEMS;
+  const hardMaxItems = args.kind === "test_me" ? MAX_TEST_ME_ITEMS : MAX_CARDED_ITEMS;
+  const budget = generationBudget(
+    args.kind,
+    estimateTokensFromText(args.prompt),
+    {
+      attempts: MAX_GENERATION_ATTEMPTS,
+      deadlineMs: GENERATION_STEP_DEADLINE_MS,
+      safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
+    },
+  );
+  assertGenerationBudget(args.prompt, budget);
+  const maxItems = Math.min(budget.maxItems ?? hardMaxItems, hardMaxItems);
   let lastRaw = "";
 
   try {
-    return await withRetry(async () => {
+    return await withRetry(async (signal) => {
       try {
         const result = await generateObject({
           model: getOpenRouterModel(modelId, { healJson: true }),
           output: "array",
           schema: args.elementSchema,
           prompt: args.prompt,
-          maxOutputTokens: MAX_GENERATION_JSON_OUTPUT_TOKENS,
+          maxRetries: 0,
+          maxOutputTokens: budget.maxOutputTokens,
+          abortSignal: signal,
         });
-        const normalized = normalizeGeneratedItems(args.kind, result.object as T[]);
+        const normalized = normalizeGeneratedItems(args.kind, result.object as T[], maxItems);
         return {
           ...normalized,
           modelUsed: extractModelUsed(result, modelId),
@@ -359,7 +427,7 @@ async function generateJsonArray<T extends { id: string }>(args: {
             : err.text;
           const parsed = tryParseJsonArrayLocally(args.elementSchema, err.text, maxItems);
           if (parsed) {
-            const normalized = normalizeGeneratedItems(args.kind, parsed);
+            const normalized = normalizeGeneratedItems(args.kind, parsed, maxItems);
             return {
               ...normalized,
               modelUsed: extractModelUsed(
@@ -371,11 +439,14 @@ async function generateJsonArray<T extends { id: string }>(args: {
         }
         throw err;
       }
+    }, {
+      attempts: budget.attempts,
+      deadlineMs: budget.deadlineMs,
     });
   } catch (objectError) {
     const parsed = tryParseJsonArrayLocally(args.elementSchema, lastRaw, maxItems);
     if (parsed) {
-      const normalized = normalizeGeneratedItems(args.kind, parsed);
+      const normalized = normalizeGeneratedItems(args.kind, parsed, maxItems);
       return { ...normalized, modelUsed: modelId };
     }
     const detail =

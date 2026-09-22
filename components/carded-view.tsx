@@ -15,6 +15,11 @@ import { MarkdownBody } from "@/components/study-markdown";
 import { Button } from "@/components/ui/button";
 import { parseCardedItems } from "@/lib/learning";
 import { isClozeCardFront, renderClozeText } from "@/lib/learning";
+import {
+  captureDueQueue,
+  type CapturedCard,
+  reconcileDueSession,
+} from "@/lib/practice-session";
 import type { CardedItem } from "@/lib/types";
 import { cn, readApiError } from "@/lib/utils";
 
@@ -45,8 +50,8 @@ function parseCards(
   return parseCardedItems(contentJson, content ?? "");
 }
 
-function isDurableCard(value: CardedItem | DurableCardView): value is DurableCardView {
-  return "revision" in value && typeof value.revision === "number";
+function isDurableCard(value: CardedItem | DurableCardView | null | undefined): value is DurableCardView {
+  return value != null && "revision" in value && typeof value.revision === "number";
 }
 
 function isDueNow(dueAt: string, now: number) {
@@ -72,7 +77,10 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
     return durableCards.filter((item) => isDueNow(item.dueAt, now)).length;
   }, [durableCards]);
   /* eslint-enable react-hooks/purity */
-  const [index, setIndex] = useState(0);
+  const [mode, setMode] = useState<"due" | "browse">("due");
+  const [queue, setQueue] = useState<CapturedCard[]>(() => captureDueQueue(durableCards, Date.now()));
+  const [ratedIds, setRatedIds] = useState<string[]>([]);
+  const [browseIndex, setBrowseIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [clozeRevealed, setClozeRevealed] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -84,6 +92,8 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
   const [error, setError] = useState<string | null>(null);
   const [scheduleHint, setScheduleHint] = useState<string | null>(null);
   const advanceTimer = useRef<number | null>(null);
+  const reviewEpoch = useRef(0);
+  const requestIds = useRef(new Map<string, string>());
 
   useEffect(() => {
     return () => {
@@ -91,70 +101,114 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
     };
   }, []);
 
-  const safeIndex = Math.min(index, Math.max(0, cards.length - 1));
-  const card = cards[safeIndex];
+  function captureQueue() {
+    setQueue(captureDueQueue(durableCards, Date.now()));
+    setRatedIds([]);
+    setFlipped(false);
+    setClozeRevealed(false);
+    setScheduleHint(null);
+    setError(null);
+  }
+
+  const ratedSet = useMemo(() => new Set(ratedIds), [ratedIds]);
+  const dueSession = useMemo(
+    () => reconcileDueSession({
+      queue,
+      cards: durableCards,
+      ratedIds: ratedSet,
+    }),
+    [durableCards, queue, ratedSet],
+  );
+
+  const browsing = mode === "browse";
+  const browseCards = durableCards.length > 0 ? durableCards : generatedCards;
+  const safeBrowseIndex = Math.min(browseIndex, Math.max(0, browseCards.length - 1));
+  const currentDue = dueSession.current?.card ?? null;
+  const card = browsing ? browseCards[safeBrowseIndex] ?? null : currentDue;
+  const dueStale = !browsing && Boolean(dueSession.current?.stale);
   const isCloze = Boolean(card && (card.kind === "cloze" || isClozeCardFront(card.front)));
   const draftIsStale =
     editing &&
     (!isDurableCard(card) || draftCardId !== card.id || draftRevision !== card.revision);
 
-  if (!card) {
-    return (
-      <EmptyState
-        icon={<Cards weight="duotone" className="size-5" />}
-        title="Carded is empty"
-        description="Generate the pack to build flashcards from the Summary. Flip a card, then step previous or next."
-      />
-    );
-  }
+  const packEmpty = cards.length === 0;
 
-  function go(delta: number) {
+  function enterBrowse() {
+    setMode("browse");
+    setBrowseIndex(0);
     setFlipped(false);
     setClozeRevealed(false);
     setScheduleHint(null);
-    setIndex((prev) => {
+    setError(null);
+  }
+
+  function enterDue() {
+    setMode("due");
+    captureQueue();
+  }
+
+  function go(delta: number) {
+    if (!browsing) return;
+    setFlipped(false);
+    setClozeRevealed(false);
+    setScheduleHint(null);
+    setBrowseIndex((prev) => {
       const next = prev + delta;
       if (next < 0) return 0;
-      if (next >= cards.length) return cards.length - 1;
+      if (next >= browseCards.length) return browseCards.length - 1;
       return next;
     });
   }
 
   function toggleFlip() {
-    if (busy || scheduleHint) return;
+    if (busy || scheduleHint || dueStale) return;
     setFlipped((open) => !open);
   }
 
   async function review(rating: "again" | "good") {
-    if (!isDurableCard(card)) return;
+    if (browsing || !card || !isDurableCard(card) || busy || dueStale) return;
+    const expectedRevision = dueSession.current?.stale
+      ? dueSession.current.capturedRevision
+      : card.revision;
+    if (dueSession.current && card.revision !== dueSession.current.capturedRevision) {
+      setError("This card changed. Start a new due session before rating it.");
+      return;
+    }
+    const requestId = requestIds.current.get(card.id) ?? crypto.randomUUID();
+    requestIds.current.set(card.id, requestId);
+    const epoch = ++reviewEpoch.current;
     setBusy(true);
     setError(null);
     try {
       const response = await fetch(`/api/reviewers/${reviewerId}/cards/${card.id}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedRevision: card.revision, rating }),
+        body: JSON.stringify({
+          expectedRevision,
+          rating,
+          clientRequestId: requestId,
+        }),
       });
+      if (epoch !== reviewEpoch.current) return;
       if (!response.ok) throw new Error(await readApiError(response));
       const data = (await response.json()) as { card: DurableCardView };
       onCardsChange(durableCards.map((item) => item.id === data.card.id ? data.card : item));
+      setRatedIds((current) => current.includes(card.id) ? current : [...current, card.id]);
+      requestIds.current.delete(card.id);
       setScheduleHint(nextIntervalCopy(rating, data.card.intervalDays));
       if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
       advanceTimer.current = window.setTimeout(() => {
+        if (epoch !== reviewEpoch.current) return;
         setScheduleHint(null);
         setFlipped(false);
         setClozeRevealed(false);
-        setIndex((prev) => {
-          if (cards.length <= 1) return 0;
-          const next = prev + 1;
-          return next >= cards.length ? 0 : next;
-        });
         advanceTimer.current = null;
       }, 700);
     } catch (caught) {
+      if (epoch !== reviewEpoch.current) return;
       setError(caught instanceof Error ? caught.message : "Could not save review.");
     } finally {
-      setBusy(false);
+      if (epoch === reviewEpoch.current) setBusy(false);
     }
   }
 
@@ -208,39 +262,77 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
     }
   }
 
-  const frontSource =
-    isCloze && !clozeRevealed ? renderClozeText(card.front) : card.front;
+  const frontSource = card && isCloze && !clozeRevealed ? renderClozeText(card.front) : card?.front ?? "";
+
+  if (packEmpty) {
+    return (
+      <EmptyState
+        icon={<Cards weight="duotone" className="size-5" />}
+        title="Carded is empty"
+        description="Generate the pack to build flashcards from the Summary. Flip a card, then step previous or next."
+      />
+    );
+  }
+
+  const sessionLabel = browsing
+    ? `Browsing ${browseCards.length === 0 ? 0 : safeBrowseIndex + 1} of ${browseCards.length}`
+    : dueSession.empty
+      ? "0 of 0 due"
+      : `${dueSession.completed} of ${dueSession.total}`;
 
   return (
     <div className="mx-auto flex w-full max-w-lg flex-col gap-4">
       <div className="flex items-start justify-between gap-2 text-sm text-muted-foreground">
         <div className="space-y-1">
           <p className="text-foreground">Memorize. No choices.</p>
+          <p>{sessionLabel}</p>
           <p>Remaining {remainingDue} due</p>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setIndex(0);
-            setFlipped(false);
-            setClozeRevealed(false);
-            setScheduleHint(null);
-          }}
-        >
-          <ArrowCounterClockwise weight="bold" />
-          Restart
-        </Button>
+        <div className="flex flex-wrap justify-end gap-2">
+          {browsing ? (
+            <Button type="button" variant="ghost" size="sm" onClick={enterDue}>
+              Study due
+            </Button>
+          ) : (
+            <Button type="button" variant="ghost" size="sm" onClick={enterBrowse}>
+              <Eye weight="bold" />
+              Browse all
+            </Button>
+          )}
+          {!browsing ? (
+            <Button type="button" variant="ghost" size="sm" onClick={enterDue}>
+              <ArrowCounterClockwise weight="bold" />
+              Restart
+            </Button>
+          ) : null}
+        </div>
       </div>
+      {!browsing && dueSession.empty ? (
+        <EmptyState
+          icon={<Cards weight="duotone" className="size-5" />}
+          title="No cards due"
+          description="Nothing is due in this session. Browse all to inspect cards without scheduling, or start again later."
+        />
+      ) : null}
+      {!browsing && dueSession.finished ? (
+        <EmptyState
+          icon={<Cards weight="duotone" className="size-5" />}
+          title="Session complete"
+          description={`${dueSession.completed} of ${dueSession.total} cards rated. Newly due cards wait for the next session.`}
+        />
+      ) : null}
+
+      {card ? (
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         {isDurableCard(card) ? <span>Due {new Date(card.dueAt).toLocaleDateString()}</span> : null}
-        {isDurableCard(card) && (card.isEdited || card.isPinned) ? <span className="text-amber-200">Protected from silent overwrite</span> : null}
+        {isDurableCard(card) && (card.isEdited || card.isPinned) ? <span className="text-warning">Protected from silent overwrite</span> : null}
+        {dueStale ? <span className="text-warning">This card changed. Start a new due session before rating it.</span> : null}
         {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
         {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
       </div>
+      ) : null}
 
-      {isCloze ? (
+      {card && isCloze ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
@@ -258,6 +350,7 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
         </div>
       ) : null}
 
+      {card ? (
       <div className="carded-scene">
         <div
           role="button"
@@ -292,13 +385,15 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
           </div>
         </div>
       </div>
+      ) : null}
 
+      {browsing ? (
       <div className="flex items-center justify-between gap-3">
         <Button
           type="button"
           variant="outline"
           onClick={() => go(-1)}
-          disabled={safeIndex === 0}
+          disabled={safeBrowseIndex === 0}
         >
           <CaretLeft weight="bold" />
           Previous
@@ -307,14 +402,15 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
           type="button"
           variant="outline"
           onClick={() => go(1)}
-          disabled={safeIndex >= cards.length - 1}
+          disabled={safeBrowseIndex >= browseCards.length - 1}
         >
           Next
           <CaretRight weight="bold" />
         </Button>
       </div>
+      ) : null}
 
-      {editing ? (
+      {card && editing ? (
         <div className="space-y-2 rounded-xl border border-border/80 bg-surface/50 p-4">
           <label className="grid gap-1 text-xs text-muted-foreground">Front<textarea value={frontDraft} onChange={(event) => setFrontDraft(event.target.value)} className="min-h-20 rounded-md border border-border bg-background p-2 text-sm text-foreground" /></label>
           <p className="text-xs text-muted-foreground">Use balanced {"{{answer}}"} placeholders for a cloze card.</p>
@@ -322,7 +418,7 @@ export function CardedView({ contentJson, content, reviewerId, durableCards, onC
           <Button type="button" onClick={() => void saveEdit()} disabled={busy || !frontDraft.trim() || !backDraft.trim()}>{busy ? "Saving" : "Save card"}</Button>
         </div>
       ) : null}
-      {isDurableCard(card) && flipped ? (
+      {!browsing && isDurableCard(card) && flipped && !dueStale ? (
         <div className="flex flex-wrap gap-2 rounded-xl border border-border/80 bg-surface/50 p-4">
           {scheduleHint ? (
             <p className="w-full text-sm text-foreground">{scheduleHint}</p>

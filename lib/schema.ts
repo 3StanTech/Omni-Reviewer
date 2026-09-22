@@ -16,6 +16,8 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
+import type { GenerateKind } from "@/lib/generation-plan";
+
 export const sourceKindEnum = pgEnum("source_kind", [
   "pdf",
   "image",
@@ -46,6 +48,12 @@ export const viewKindEnum = pgEnum("view_kind", [
   "carded",
 ]);
 
+/** Study documents that support user annotations. */
+export const annotationViewKindEnum = pgEnum("annotation_view_kind", [
+  "locked_in",
+  "summary",
+]);
+
 export const generationJobStatusEnum = pgEnum("generation_job_status", [
   "queued",
   "running",
@@ -66,12 +74,22 @@ export const generationJobModeEnum = pgEnum("generation_job_mode", [
   "single",
 ]);
 
+export const generationJobIntentEnum = pgEnum("generation_job_intent", [
+  "generate_missing",
+  "redo",
+]);
+
 export const cardRatingEnum = pgEnum("card_rating", ["again", "good"]);
 
 export const testSessionStatusEnum = pgEnum("test_session_status", [
   "active",
   "completed",
   "expired",
+]);
+
+export const testSessionModeEnum = pgEnum("test_session_mode", [
+  "timed",
+  "untimed",
 ]);
 
 export const users = pgTable("users", {
@@ -212,11 +230,15 @@ export const views = pgTable(
       .references(() => reviewers.id, { onDelete: "cascade" }),
     kind: viewKindEnum("kind").notNull(),
     content: text("content").notNull().default(""),
-    contentJson: jsonb("content_json"),
-    modelId: text("model_id"),
-    /** The generation run that produced this view. Null is retained for pre-run rows. */
-    generationRunId: uuid("generation_run_id"),
-    revision: integer("revision").notNull().default(1),
+  contentJson: jsonb("content_json"),
+  modelId: text("model_id"),
+  /** The generation run that produced this view. Null is retained for pre-run rows. */
+  generationRunId: uuid("generation_run_id"),
+  /** Canonical document revision; annotation anchors refer to this value. */
+  contentRevision: integer("content_revision").notNull().default(1),
+  /** Monotonic annotation-set revision used by batch-save compare-and-set. */
+  annotationRevision: integer("annotation_revision").notNull().default(1),
+  revision: integer("revision").notNull().default(1),
     isEdited: boolean("is_edited").notNull().default(false),
     isPinned: boolean("is_pinned").notNull().default(false),
     generatedAt: timestamp("generated_at", { withTimezone: true })
@@ -229,6 +251,51 @@ export const views = pgTable(
   (table) => [unique("views_reviewer_id_kind_unique").on(table.reviewerId, table.kind)],
 );
 
+export const annotationColorEnum = pgEnum("annotation_color", [
+  "sun",
+  "sky",
+  "mint",
+  "rose",
+]);
+
+/** User-created highlights/notes are separate from generated Markdown. */
+export const annotations = pgTable("study_annotations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  reviewerId: uuid("reviewer_id")
+    .notNull()
+    .references(() => reviewers.id, { onDelete: "cascade" }),
+  viewId: uuid("view_id")
+    .notNull()
+    .references(() => views.id, { onDelete: "cascade" }),
+  kind: annotationViewKindEnum("kind").notNull(),
+  contentRevision: integer("content_revision").notNull(),
+  startOffset: integer("start_offset").notNull(),
+  endOffset: integer("end_offset").notNull(),
+  quote: text("quote").notNull(),
+  prefix: text("prefix").notNull().default(""),
+  suffix: text("suffix").notNull().default(""),
+  color: annotationColorEnum("color").notNull().default("sun"),
+  note: text("note"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  archiveReason: text("archive_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+}, (table) => [
+  index("study_annotations_view_active_idx").on(table.viewId, table.archivedAt),
+  index("study_annotations_reviewer_idx").on(table.reviewerId, table.createdAt),
+  check(
+    "study_annotations_bounds_valid",
+    sql`${table.startOffset} >= 0 AND ${table.endOffset} > ${table.startOffset} AND length(${table.quote}) > 0 AND length(${table.quote}) <= 10000`,
+  ),
+]);
+
 export const generationJobs = pgTable("generation_jobs", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id")
@@ -240,6 +307,23 @@ export const generationJobs = pgTable("generation_jobs", {
   status: generationJobStatusEnum("status").notNull(),
   step: generationJobStepEnum("step"),
   mode: generationJobModeEnum("mode").notNull().default("full"),
+  /** Explicit user action. Legacy rows default to redo and are reconstructed by mode/step. */
+  intent: generationJobIntentEnum("intent").notNull().default("redo"),
+  /** Frozen server-computed targets. Empty means a legacy row awaiting reconstruction. */
+  targetKinds: jsonb("target_kinds")
+    .$type<GenerateKind[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  /** Steps whose view/card persistence completed before the latest response. */
+  completedKinds: jsonb("completed_kinds")
+    .$type<GenerateKind[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  /** Revisions for upstream inputs that existed when the run was created. */
+  upstreamRevisions: jsonb("upstream_revisions")
+    .$type<Partial<Record<GenerateKind, number>>>()
+    .notNull()
+    .default(sql`'{}'::jsonb`),
   /** Stable identity shared by every step in one full generation run. */
   generationRunId: uuid("generation_run_id").defaultRandom().notNull(),
   /** Active jobs are unique per reviewer; terminal jobs are retained for history. */
@@ -304,7 +388,7 @@ export const cards = pgTable(
   ],
 );
 
-/** Durable timed Test Me nonce/session state. */
+/** Durable timed and untimed Test Me sitting state. */
 export const testSessions = pgTable("test_sessions", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: uuid("user_id")
@@ -314,8 +398,13 @@ export const testSessions = pgTable("test_sessions", {
     .notNull()
     .references(() => reviewers.id, { onDelete: "cascade" }),
   viewRevision: integer("view_revision").notNull(),
+  mode: testSessionModeEnum("mode").notNull().default("timed"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  /** Required for timed runs; null only for untimed sittings. */
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  /** Ordered item-id snapshot for untimed sittings; empty for timed runs. */
+  itemIds: jsonb("item_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  originSessionId: uuid("origin_session_id"),
   /** Monotonic count of unique answers committed for this session. */
   answeredCount: integer("answered_count").notNull().default(0),
   status: testSessionStatusEnum("status").notNull().default("active"),
@@ -327,12 +416,16 @@ export const testSessions = pgTable("test_sessions", {
     .notNull()
     .defaultNow(),
 }, (table) => [
-  uniqueIndex("test_sessions_active_owner_unique")
-    .on(table.userId, table.reviewerId)
+  uniqueIndex("test_sessions_active_owner_mode_unique")
+    .on(table.userId, table.reviewerId, table.mode)
     .where(sql`${table.status} = 'active'`),
   index("test_sessions_expiry_idx").on(table.status, table.expiresAt),
   index("test_sessions_reviewer_idx").on(table.reviewerId, table.createdAt),
   check("test_sessions_answered_count_nonnegative", sql`${table.answeredCount} >= 0`),
+  check(
+    "test_sessions_timed_requires_deadline",
+    sql`(${table.mode} = 'timed' AND ${table.expiresAt} IS NOT NULL) OR (${table.mode} = 'untimed' AND ${table.expiresAt} IS NULL)`,
+  ),
 ]);
 
 export const testAttempts = pgTable("test_attempts", {
@@ -371,6 +464,7 @@ export const cardReviews = pgTable("card_reviews", {
     .notNull()
     .references(() => cards.id, { onDelete: "cascade" }),
   rating: cardRatingEnum("rating").notNull(),
+  clientRequestId: text("client_request_id"),
   dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
   intervalDays: integer("interval_days").notNull(),
   repetitions: integer("repetitions").notNull(),
@@ -378,7 +472,12 @@ export const cardReviews = pgTable("card_reviews", {
   reviewedAt: timestamp("reviewed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
-}, (table) => [index("card_reviews_card_idx").on(table.cardId, table.reviewedAt)]);
+}, (table) => [
+  index("card_reviews_card_idx").on(table.cardId, table.reviewedAt),
+  uniqueIndex("card_reviews_request_id_unique")
+    .on(table.cardId, table.clientRequestId)
+    .where(sql`${table.clientRequestId} IS NOT NULL`),
+]);
 
 export const usersRelations = relations(users, ({ many }) => ({
   topics: many(topics),
@@ -386,6 +485,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   testSessions: many(testSessions),
   testAttempts: many(testAttempts),
   cardReviews: many(cardReviews),
+  annotations: many(annotations),
 }));
 
 export const topicsRelations = relations(topics, ({ one, many }) => ({
@@ -403,6 +503,7 @@ export const reviewersRelations = relations(reviewers, ({ one, many }) => ({
   }),
   sources: many(sources),
   views: many(views),
+  annotations: many(annotations),
   generationJobs: many(generationJobs),
   testSessions: many(testSessions),
   cards: many(cards),
@@ -417,10 +518,26 @@ export const sourcesRelations = relations(sources, ({ one }) => ({
   }),
 }));
 
-export const viewsRelations = relations(views, ({ one }) => ({
+export const viewsRelations = relations(views, ({ one, many }) => ({
   reviewer: one(reviewers, {
     fields: [views.reviewerId],
     references: [reviewers.id],
+  }),
+  annotations: many(annotations),
+}));
+
+export const annotationsRelations = relations(annotations, ({ one }) => ({
+  user: one(users, {
+    fields: [annotations.userId],
+    references: [users.id],
+  }),
+  reviewer: one(reviewers, {
+    fields: [annotations.reviewerId],
+    references: [reviewers.id],
+  }),
+  view: one(views, {
+    fields: [annotations.viewId],
+    references: [views.id],
   }),
 }));
 
@@ -500,6 +617,8 @@ export type NewSource = typeof sources.$inferInsert;
 export type BlobReservation = typeof blobReservations.$inferSelect;
 export type StudyView = typeof views.$inferSelect;
 export type NewStudyView = typeof views.$inferInsert;
+export type StudyAnnotation = typeof annotations.$inferSelect;
+export type NewStudyAnnotation = typeof annotations.$inferInsert;
 export type GenerationJob = typeof generationJobs.$inferSelect;
 export type NewGenerationJob = typeof generationJobs.$inferInsert;
 export type Card = typeof cards.$inferSelect;

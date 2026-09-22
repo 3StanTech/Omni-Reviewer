@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, use, useMemo, useRef, useState } from "react";
 import {
   ArrowCounterClockwise,
   ArrowRight,
@@ -15,6 +15,18 @@ import { MarkdownBody } from "@/components/study-markdown";
 import { TimedTestMe } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
 import { parseTestMeItems } from "@/lib/learning";
+import {
+  canRetryMissed,
+  sittingItemsForIds,
+  sittingProgress,
+  type PracticeAnswer,
+} from "@/lib/practice-session";
+import {
+  sittingLoadForIdentity,
+  type UntimedSittingLoad,
+  type UntimedSittingLoadResult,
+  type UntimedSittingPayload,
+} from "@/lib/untimed-sitting-load";
 import type { TestMeItem } from "@/lib/types";
 import { cn, readApiError } from "@/lib/utils";
 
@@ -64,6 +76,14 @@ export function TestMeView({
     [contentJson, content],
   );
   const [timed, setTimed] = useState(false);
+  const [sittingLoad, setSittingLoad] = useState<UntimedSittingLoad | null>(null);
+  const shouldLoad = items.length > 0 && !timed;
+  const nextSittingLoad = shouldLoad
+    ? sittingLoadForIdentity(sittingLoad, reviewerId, viewRevision)
+    : sittingLoad;
+  if (nextSittingLoad !== sittingLoad) {
+    setSittingLoad(nextSittingLoad);
+  }
 
   if (items.length === 0) {
     return (
@@ -88,20 +108,51 @@ export function TestMeView({
     );
   }
 
+  if (!sittingLoad || sittingLoad.key !== `${reviewerId}:${viewRevision}`) {
+    return <SittingFallback />;
+  }
+
   return (
-    <UntimedSitting
-      key={viewRevision}
-      items={items}
-      reviewerId={reviewerId}
-      viewRevision={viewRevision}
-      attemptStats={attemptStats}
-      onAttemptStatsChange={onAttemptStatsChange}
-      onStartTimed={() => setTimed(true)}
-    />
+    <Suspense fallback={<SittingFallback />}>
+      <UntimedSitting
+        key={sittingLoad.key}
+        load={sittingLoad.promise}
+        items={items}
+        reviewerId={reviewerId}
+        viewRevision={viewRevision}
+        attemptStats={attemptStats}
+        onAttemptStatsChange={onAttemptStatsChange}
+        onStartTimed={() => setTimed(true)}
+      />
+    </Suspense>
   );
 }
 
+function SittingFallback() {
+  return (
+    <section className="space-y-4" aria-labelledby="test-me-sitting-title">
+      <h2 id="test-me-sitting-title" className="text-base font-semibold text-foreground">
+        Exam sitting. Pick an answer.
+      </h2>
+      <p className="text-sm text-muted-foreground">Opening the sitting.</p>
+    </section>
+  );
+}
+
+function sittingView(payload: UntimedSittingPayload, items: TestMeItem[]) {
+  const next = sittingProgress(payload.itemIds, payload.answers);
+  const complete = next.complete || payload.status === "completed";
+  const viewIndex = complete ? Math.max(0, payload.itemIds.length - 1) : next.nextIndex;
+  const nextItem = sittingItemsForIds(items, payload.itemIds)[viewIndex];
+  return {
+    viewIndex,
+    finished: complete,
+    selected: nextItem ? next.answersByItemId[nextItem.id]?.selectedAnswer ?? "" : "",
+  };
+}
+
 function UntimedSitting({
+  load,
   items,
   reviewerId,
   viewRevision,
@@ -109,6 +160,7 @@ function UntimedSitting({
   onAttemptStatsChange,
   onStartTimed,
 }: {
+  load: Promise<UntimedSittingLoadResult>;
   items: TestMeItem[];
   reviewerId: string;
   viewRevision: number;
@@ -116,35 +168,89 @@ function UntimedSitting({
   onAttemptStatsChange: (stats: AttemptStats[]) => void;
   onStartTimed: () => void;
 }) {
-  const [index, setIndex] = useState(0);
-  const [selected, setSelected] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const [results, setResults] = useState<Record<string, boolean>>({});
-  const [complete, setComplete] = useState(false);
+  const loaded = use(load);
+  const initialSession = "sessionId" in loaded ? loaded : null;
+  const initialView = initialSession
+    ? sittingView(initialSession, items)
+    : { viewIndex: 0, finished: false, selected: "" };
+  const [session, setSession] = useState<UntimedSittingPayload | null>(initialSession);
+  const [viewIndex, setViewIndex] = useState(initialView.viewIndex);
+  const [selected, setSelected] = useState(initialView.selected);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState(
+    "error" in loaded
+      ? (loaded.aborted ? "Could not open this sitting." : loaded.error)
+      : null,
+  );
+  const [finished, setFinished] = useState(initialView.finished);
+  const inFlight = useRef(false);
 
-  const item = items[Math.min(index, items.length - 1)];
-  const score = Object.values(results).filter(Boolean).length;
-  const missedItems = items.filter((candidate) => results[candidate.id] === false);
+  const sittingItems = useMemo(
+    () => session ? sittingItemsForIds(items, session.itemIds) : items,
+    [items, session],
+  );
+  const progress = useMemo(
+    () => sittingProgress(session?.itemIds ?? sittingItems.map((item) => item.id), session?.answers ?? []),
+    [session, sittingItems],
+  );
+  const item = sittingItems[Math.min(viewIndex, Math.max(0, sittingItems.length - 1))];
+  const submitted = Boolean(item && progress.answersByItemId[item.id]);
+  const complete = Boolean(
+    finished
+    || (session && (session.complete || progress.complete || session.status === "completed") && viewIndex >= sittingItems.length - 1 && submitted),
+  );
+  const score = progress.correctCount;
+  const missedItems = sittingItems.filter((candidate) => progress.answersByItemId[candidate.id]?.correct === false);
+  const retryAvailable = session
+    ? canRetryMissed({
+      status: complete ? "completed" : session.status,
+      viewRevision: session.viewRevision,
+      expectedRevision: viewRevision,
+      itemIds: session.itemIds,
+      answers: session.answers,
+    })
+    : false;
   const savedMisses = attemptStats.reduce((sum, stats) => sum + stats.misses, 0);
 
-  function resetSitting() {
-    setIndex(0);
-    setSelected("");
-    setSubmitted(false);
-    setResults({});
-    setComplete(false);
+  function applySession(payload: UntimedSittingPayload) {
+    const next = sittingView(payload, items);
+    setSession(payload);
+    setViewIndex(next.viewIndex);
+    setFinished(next.finished);
+    setSelected(next.selected);
     setSaveMessage(null);
   }
 
+  async function mutateSession(intent: "start_again" | "retry_missed") {
+    setSaveBusy(true);
+    setSaveMessage(null);
+    try {
+      const response = await fetch(`/api/reviewers/${reviewerId}/practice-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expectedRevision: viewRevision,
+          intent,
+          originSessionId: intent === "retry_missed" ? session?.sessionId : undefined,
+        }),
+      });
+      if (!response.ok) throw new Error(await readApiError(response));
+      applySession((await response.json()) as UntimedSittingPayload);
+    } catch (caught) {
+      setSaveMessage(caught instanceof Error ? caught.message : "Could not start that sitting.");
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
   async function submitAnswer() {
-    if (!item || submitted || saveBusy) return;
+    if (!session || !item || submitted || saveBusy || inFlight.current) return;
     const answer = selected.trim();
     if (!answer) {
       setSaveMessage("Choose or enter an answer before continuing.");
       return;
     }
+    inFlight.current = true;
     setSaveBusy(true);
     setSaveMessage(null);
     try {
@@ -152,31 +258,71 @@ function UntimedSitting({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: "untimed",
+          sessionId: session.sessionId,
           expectedRevision: viewRevision,
-          answers: [{ itemId: item.id, selectedAnswer: answer }],
+          itemId: item.id,
+          selectedAnswer: answer,
         }),
       });
+      if (response.status === 409) {
+        const body = await response.json() as { error?: string; conflict?: boolean; stale?: boolean };
+        if (body.conflict) throw new Error(body.error ?? "This answer was already saved in another tab.");
+        throw new Error(body.error ?? "This test changed elsewhere. Reload before saving.");
+      }
       if (!response.ok) throw new Error(await readApiError(response));
-      const data = (await response.json()) as { stats: AttemptStats[] };
+      const data = (await response.json()) as {
+        stats: AttemptStats[];
+        alreadySaved?: boolean;
+        completed?: boolean;
+        answer?: PracticeAnswer;
+      };
       onAttemptStatsChange(data.stats);
-      setResults((previous) => ({ ...previous, [item.id]: isCorrect(answer, item.answer) }));
-      setSubmitted(true);
+      const accepted: PracticeAnswer = data.answer ?? {
+        itemId: item.id,
+        selectedAnswer: answer,
+        correct: isCorrect(answer, item.answer),
+      };
+      setSession((current) => {
+        if (!current) return current;
+        const answers = current.answers.some((entry) => entry.itemId === accepted.itemId)
+          ? current.answers.map((entry) => entry.itemId === accepted.itemId ? accepted : entry)
+          : [...current.answers, accepted];
+        const next = sittingProgress(current.itemIds, answers);
+        return {
+          ...current,
+          answers,
+          complete: data.completed === true || next.complete,
+          status: data.completed === true || next.complete ? "completed" : current.status,
+          correctCount: next.correctCount,
+          nextItemId: next.nextItemId,
+          nextIndex: next.nextIndex,
+          canRetryMissed: canRetryMissed({
+            status: data.completed === true || next.complete ? "completed" : current.status,
+            viewRevision: current.viewRevision,
+            expectedRevision: viewRevision,
+            itemIds: current.itemIds,
+            answers,
+          }),
+        };
+      });
     } catch (caught) {
       setSaveMessage(caught instanceof Error ? caught.message : "Could not save this answer.");
     } finally {
+      inFlight.current = false;
       setSaveBusy(false);
     }
   }
 
   function nextQuestion() {
-    if (!submitted) return;
-    if (index >= items.length - 1) {
-      setComplete(true);
+    if (!submitted || !session) return;
+    const next = sittingProgress(session.itemIds, session.answers);
+    if (next.complete || viewIndex >= sittingItems.length - 1) {
+      setFinished(true);
       return;
     }
-    setIndex((current) => current + 1);
+    setViewIndex(next.nextIndex);
     setSelected("");
-    setSubmitted(false);
     setSaveMessage(null);
   }
 
@@ -186,6 +332,21 @@ function UntimedSitting({
       Timed run
     </Button>
   );
+
+  if (!session) {
+    return (
+      <section className="space-y-4" aria-labelledby="test-me-sitting-title">
+        <h2 id="test-me-sitting-title" className="text-base font-semibold text-foreground">
+          Exam sitting. Pick an answer.
+        </h2>
+        {saveMessage ? (
+          <p role="alert" className="text-sm text-destructive">{saveMessage}</p>
+        ) : (
+          <p className="text-sm text-muted-foreground">Opening the sitting.</p>
+        )}
+      </section>
+    );
+  }
 
   if (complete || !item) {
     return (
@@ -199,7 +360,7 @@ function UntimedSitting({
 
         <div className="rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6">
           <p className="text-sm font-medium text-foreground">
-            {score} of {items.length} correct.
+            {score} of {sittingItems.length} correct.
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             Attempts and misses are saved.
@@ -232,16 +393,28 @@ function UntimedSitting({
           </div>
         </div>
 
-        <Button type="button" onClick={resetSitting}>
-          <ArrowCounterClockwise weight="bold" />
-          Start again
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {retryAvailable ? (
+            <Button type="button" variant="outline" onClick={() => void mutateSession("retry_missed")} disabled={saveBusy}>
+              Retry missed
+            </Button>
+          ) : null}
+          <Button type="button" onClick={() => void mutateSession("start_again")} disabled={saveBusy}>
+            <ArrowCounterClockwise weight="bold" />
+            Start again
+          </Button>
+        </div>
+        {saveMessage ? (
+          <p role="alert" className="text-sm text-destructive">
+            {saveMessage}
+          </p>
+        ) : null}
       </section>
     );
   }
 
   const questionId = controlId(item.id, "question");
-  const correct = results[item.id];
+  const correct = item ? progress.answersByItemId[item.id]?.correct : undefined;
 
   return (
     <section className="space-y-4" aria-labelledby="test-me-sitting-title">
@@ -251,7 +424,7 @@ function UntimedSitting({
             Exam sitting. Pick an answer.
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Question {index + 1} of {items.length}
+            Question {viewIndex + 1} of {sittingItems.length}
           </p>
         </div>
         {timedRunButton}
@@ -274,7 +447,7 @@ function UntimedSitting({
         {submitted ? (
           <Button type="button" onClick={nextQuestion}>
             <ArrowRight weight="bold" />
-            {index >= items.length - 1 ? "Finish" : "Next question"}
+            {viewIndex >= sittingItems.length - 1 ? "Finish" : "Next question"}
           </Button>
         ) : (
           <Button

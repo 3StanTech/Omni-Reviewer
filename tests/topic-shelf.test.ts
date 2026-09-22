@@ -10,15 +10,13 @@ function read(rel: string) {
   return readFileSync(path.join(root, rel), "utf8");
 }
 
-describe("RemNote-Style topic shelf", () => {
+describe("topic shelf", () => {
   const shelf = read("components/topic-shelf.tsx");
   const shell = read("components/app-shell.tsx");
   const home = read("components/study-home.tsx");
   const page = read("app/page.tsx");
 
-  it("renders only when useLook is remnote and is md+ only", () => {
-    expect(shelf).toContain('import { useLook } from "@/components/look-provider"');
-    expect(shelf).toContain('if (look !== "remnote") return null');
+  it("is available as a collapsible library surface and is md+ only", () => {
     expect(shelf).toContain("hidden");
     expect(shelf).toContain("md:flex");
   });
@@ -37,9 +35,7 @@ describe("RemNote-Style topic shelf", () => {
     expect(shelf).toContain("{dueTodayCount}");
   });
 
-  it("keeps TopicTabs below md when remnote and for other looks", () => {
-    expect(home).toContain('look === "remnote"');
-    expect(home).toContain("md:hidden");
+  it("keeps TopicTabs on the home surface", () => {
     expect(home).toContain("TopicTabs");
   });
 

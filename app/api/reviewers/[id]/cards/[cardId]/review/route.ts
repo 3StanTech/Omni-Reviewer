@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 const bodySchema = z.object({
   expectedRevision: z.number().int().positive(),
   rating: z.enum(["again", "good"]),
+  clientRequestId: z.string().uuid().optional(),
 }).strict();
 
 export async function POST(

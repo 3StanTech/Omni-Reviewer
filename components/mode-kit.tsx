@@ -3,7 +3,6 @@
 import { BookOpen, Cards, ListChecks, Note } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 
-import { useLook } from "@/components/look-provider";
 import type { ViewKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -45,9 +44,6 @@ type ModeKitProps = {
 };
 
 export function ModeKit({ value, onChange }: ModeKitProps) {
-  const look = useLook();
-  if (look !== "thea") return null;
-
   return (
     <div
       role="group"

@@ -8,6 +8,7 @@ import {
   getLatestFullGenerationJobForReviewer,
   getLatestGenerationJobForReviewer,
   getReviewer,
+  listAnnotationPageForReviewer,
 } from "@/lib/queries";
 import { views } from "@/lib/schema";
 import {
@@ -57,10 +58,23 @@ export async function GET(
     .select()
     .from(views)
     .where(eq(views.reviewerId, reviewerId));
+  const [lockedAnnotations, summaryAnnotations] = await Promise.all([
+    listAnnotationPageForReviewer(reviewerId, userId, "locked_in"),
+    listAnnotationPageForReviewer(reviewerId, userId, "summary"),
+  ]);
+  const annotationRows = [...lockedAnnotations.annotations, ...summaryAnnotations.annotations];
+  const annotationNextCursors = {
+    locked_in: lockedAnnotations.nextCursor,
+    summary: summaryAnnotations.nextCursor,
+  };
 
   if (!latestJob) {
     return NextResponse.json(
-      viewsPayloadFromRows(rows, { staleKinds: manualStaleKinds(rows) }),
+      viewsPayloadFromRows(rows, {
+        staleKinds: manualStaleKinds(rows),
+        annotations: annotationRows,
+        annotationNextCursors,
+      }),
     );
   }
 
@@ -70,6 +84,8 @@ export async function GET(
     viewsPayloadFromRows(visible.rows, {
       currentGenerationRunId: visible.currentGenerationRunId,
       staleKinds: [...new Set([...visible.staleKinds, ...manualStaleKinds(rows)])],
+      annotations: annotationRows,
+      annotationNextCursors,
     }),
   );
 }

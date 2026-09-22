@@ -61,7 +61,8 @@ describe("Carded recall flip", () => {
     expect(src).toContain("data.card.intervalDays");
     expect(src).toContain("setScheduleHint(nextIntervalCopy(rating, data.card.intervalDays))");
     expect(src).toContain("setTimeout");
-    expect(src).toContain("setIndex");
+    expect(src).toContain("setRatedIds");
+    expect(src).toContain("clientRequestId");
   });
 
   it("keeps the Carded name, Flip hint, cloze reveal, and previous/next", () => {

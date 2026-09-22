@@ -23,6 +23,10 @@ export const MAX_TEST_ATTEMPT_SELECTED_ANSWER_CHARS = 20_000;
 export const MAX_GENERATION_PROMPT_TOKENS = 165_000;
 export const MAX_GENERATION_TEXT_OUTPUT_TOKENS = 40_000;
 export const MAX_GENERATION_JSON_OUTPUT_TOKENS = 50_000;
+export const MAX_GENERATION_ATTEMPTS = 2;
+export const GENERATION_STEP_DEADLINE_MS = 270_000;
+export const GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS = 1_024;
+export const CONSERVATIVE_GENERATION_CONTEXT_TOKENS = 32_768;
 
 /** Vision transcription is bounded independently of general text generation. */
 export const MAX_VISION_TEXT_CHARS = 100_000;

@@ -31,7 +31,7 @@ Tristan and invited friends studying late at night from notes, PDFs, slides, and
 - `/` - topic tabs, create/rename/delete topic, list of reviewers in the selected topic, create/rename/delete reviewer.
 - `/topics/[topicId]/reviewers/[reviewerId]` - pack workspace: sources behind a drawer once generated, generate/regenerate, four study modes.
 
-Topic tabs are primary navigation (RemNote-Style uses a left shelf at md+). A reviewer is a workspace, not a metrics dashboard.
+Topic tabs are primary navigation. The reviewer workspace collapses the library while studying and exposes sources through one labelled control. A reviewer is a workspace, not a metrics dashboard.
 
 ## Ingest rules (v1)
 
@@ -55,12 +55,16 @@ Failed sources keep an error message. Video/audio-only packs cannot generate in 
 
 Generated only on explicit Generate or Redo. Tab changes never call the model. Study modes reload from persistence.
 
-1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables, KaTeX, and optional semantic ink spans). Source of truth.
-2. **Summary** - detailed summary of Locked In for last-minute review (same Markdown surface, including ink).
+1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables, KaTeX, and legacy semantic ink spans rendered neutrally; GFM footnotes are unsupported). Source of truth. It supports explicit Edit, Save changes, and Cancel.
+2. **Summary** - detailed summary of Locked In for last-minute review. It uses the same explicit Markdown editor and save/revision contract as Locked In.
 3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains. This mode has a last question. It does not schedule tomorrow's work.
 4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome and next interval. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
 
-Looks (Night, Day, Thea-Style, RemNote-Style) are chrome only. They do not add objects.
+Looks (Night and Day) are chrome only. Legacy Thea-Style and RemNote-Style values in local storage normalize to Day; they do not add objects or layouts.
+
+Highlights and notes are separate owner-scoped annotations on Locked In and Summary. They store normalized quoted text, context, color, note, and content revision. Editing or regeneration preserves a unique surviving quote and moves deleted or ambiguous quotes to Earlier version instead of guessing. Notes are inert text and do not become Markdown HTML. GFM footnote markers are not an annotation surface and are omitted from the study text model.
+
+During reading, select text to Highlight or Add note. Contents, Notes, Earlier version, and the current reading position are progressive disclosures. Reading positions are local-only and keyed by owner, reviewer, mode, and content revision.
 
 Test Me answer attempts and misses are persisted per reviewer so missed items can
 be revisited. Card ratings use a small two-button SM-2 schedule and are stored
@@ -69,15 +73,14 @@ countdown on the pack. Pack rows show how many cards are due today.
 
 ## Generation
 
-- First-time **Generate** writes all four study modes. After that the button is hidden.
+- First-time **Generate** writes all four study modes. When all four exist, the control stays visible, reads **All generated**, and does not call a model. **Generate missing** fills only modes that are not stored yet.
 - **Redo** lives on the active study mode. Confirm when that mode already has content.
 - Redo Locked In rebuilds Locked In, then Summary, Test Me, and Carded from current sources.
 - Redo Summary / Test Me / Carded rewrites only that mode from persisted upstream (Locked In or Summary).
 - Disabled when the required upstream is missing, or when no source is `ready` for Locked In / Generate.
-- Locked In and individual card faces can be edited. A saved edit increments its
-  revision and can be pinned; edited or pinned content is never silently
-  overwritten. Redo requires an explicit confirmation and reports downstream
-  modes as stale after a Locked In edit.
+- Locked In, Summary, and individual card faces can be edited. Save and Cancel are explicit. A failed save keeps the draft on screen. A saved edit increments its revision. Edited or pinned content is never silently overwritten. Redo requires an explicit confirmation and reports downstream modes as stale after a Locked In edit.
+- One untimed Test Me sitting is active at a time. The same answer saved twice is kept once. A different answer from another tab is rejected and the first answer stays. Retry missed opens only the misses from the completed sitting, and it refuses while a different sitting is still in progress. Start again replaces the active sitting on purpose.
+- Same-document Back and Forward keep a dirty Locked In or Summary draft where the browser allows that interception. Other browsers still warn on leave and on in-app links.
 - Clear error when the pack is video/audio only or has no ingested text.
 - Pipeline (server, full pack): ready sources → Locked In → Summary → Test Me → Carded; each mode is saved as it finishes.
 - Models are OpenRouter `:free` ids (defaults and optional fallbacks). Do not use `openrouter/auto` as a primary model.

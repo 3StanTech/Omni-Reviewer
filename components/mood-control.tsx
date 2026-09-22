@@ -14,8 +14,6 @@ import { cn } from "@/lib/utils";
 const LOOK_MENU: { id: LookId; label: string }[] = [
   { id: "day", label: "Day" },
   { id: "night", label: "Night" },
-  { id: "thea", label: "Thea-Style" },
-  { id: "remnote", label: "RemNote-Style" },
 ];
 
 const MOOD_LABEL = "Change today's mood";
@@ -89,12 +87,14 @@ export function MoodControl() {
         variant="ghost"
         size="sm"
         className="text-muted-foreground hover:text-foreground"
+        aria-label={MOOD_LABEL}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
         onClick={() => setOpen((current) => !current)}
       >
-        {MOOD_LABEL}
+        <span className="hidden sm:inline">{MOOD_LABEL}</span>
+        <span className="sm:hidden">Mood</span>
       </Button>
       <div
         id={menuId}
@@ -112,7 +112,7 @@ export function MoodControl() {
               role="menuitemradio"
               aria-checked={selected}
               className={cn(
-                "flex min-h-9 w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors duration-150",
+                "flex min-h-11 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm outline-none transition-colors duration-150",
                 "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground",
                 selected && "bg-accent/70 text-accent-foreground",
               )}

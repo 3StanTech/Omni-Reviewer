@@ -1,4 +1,5 @@
 import { getTableName } from "drizzle-orm";
+import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,11 +19,14 @@ import {
   testAttempts,
   testSessions,
   testSessionStatusEnum,
+  testSessionModeEnum,
   cardRatingEnum,
   blobReservations,
   blobReservationStateEnum,
   loginThrottles,
   passwordResetTokens,
+  annotations,
+  annotationViewKindEnum,
 } from "@/lib/schema";
 
 describe("schema", () => {
@@ -50,6 +54,9 @@ describe("schema", () => {
     expect(getTableName(testSessions)).toBe("test_sessions");
     expect(getTableName(cardReviews)).toBe("card_reviews");
     expect(getTableName(blobReservations)).toBe("blob_reservations");
+    expect(getTableName(annotations)).toBe("study_annotations");
+    expect(annotations.contentRevision).toBeDefined();
+    expect(annotations.archivedAt).toBeDefined();
     expect(getTableName(loginThrottles)).toBe("login_throttles");
     expect(loginThrottles.email).toBeDefined();
     expect(loginThrottles.failedCount).toBeDefined();
@@ -77,6 +84,10 @@ describe("schema", () => {
     expect(generationJobs.status).toBeDefined();
     expect(generationJobs.step).toBeDefined();
     expect(generationJobs.mode).toBeDefined();
+    expect(generationJobs.intent).toBeDefined();
+    expect(generationJobs.targetKinds).toBeDefined();
+    expect(generationJobs.completedKinds).toBeDefined();
+    expect(generationJobs.upstreamRevisions).toBeDefined();
     expect(generationJobs.generationRunId).toBeDefined();
     expect(generationJobs.active).toBeDefined();
     expect(generationJobs.claimToken).toBeDefined();
@@ -92,9 +103,13 @@ describe("schema", () => {
     expect(testAttempts.sessionId).toBeDefined();
     expect(testSessions.viewRevision).toBeDefined();
     expect(testSessions.expiresAt).toBeDefined();
+    expect(testSessions.mode).toBeDefined();
+    expect(testSessions.itemIds).toBeDefined();
+    expect(testSessions.originSessionId).toBeDefined();
     expect(testSessions.answeredCount).toBeDefined();
     expect(testSessions.status).toBeDefined();
     expect(cardReviews.rating).toBeDefined();
+    expect(cardReviews.clientRequestId).toBeDefined();
   });
 
   it("supports the two-button card ratings", () => {
@@ -107,6 +122,14 @@ describe("schema", () => {
 
   it("has durable timed session states", () => {
     expect(testSessionStatusEnum.enumValues).toEqual(["active", "completed", "expired"]);
+  });
+
+  it("distinguishes timed and untimed sittings", () => {
+    expect(testSessionModeEnum.enumValues).toEqual(["timed", "untimed"]);
+    const config = getTableConfig(testSessions);
+    expect(config.indexes.some((index) => index.config.name === "test_sessions_active_owner_mode_unique")).toBe(true);
+    expect(config.checks.some((check) => check.name === "test_sessions_timed_requires_deadline")).toBe(true);
+    expect(config.indexes.some((index) => index.config.name === "test_sessions_active_owner_unique")).toBe(false);
   });
 
   it("source kinds include file, paste, and deferred media kinds", () => {
@@ -129,6 +152,10 @@ describe("schema", () => {
       "test_me",
       "carded",
     ]);
+  });
+
+  it("restricts annotations to editable study documents", () => {
+    expect(annotationViewKindEnum.enumValues).toEqual(["locked_in", "summary"]);
   });
 
   it("unprocessed is a valid ingest status", () => {

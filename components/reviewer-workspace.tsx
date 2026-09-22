@@ -1,26 +1,47 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { CaretDown, CaretUp } from "@phosphor-icons/react";
 
-import {
-  GenerateButton,
-  type ViewsPayload,
-} from "@/components/generate-button";
+import type { ViewsPayload } from "@/lib/serialize-view";
 import {
   SourcePanel,
   type SourceListItem,
 } from "@/components/source-panel";
-import { useLook } from "@/components/look-provider";
-import { ModeKit } from "@/components/mode-kit";
 import { ViewTabs } from "@/components/view-tabs";
+import { GenerationControls } from "@/components/generation-controls";
+import { GenerationStatus } from "@/components/generation-status";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { formatStampLocal, formatStampUtc } from "@/lib/format-generated-at";
 import type { ViewKind } from "@/lib/types";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
+import { useGeneration } from "@/lib/use-generation";
+import type { GenerationRequest } from "@/lib/generation-plan";
+import type { LockedInDraftController } from "@/components/locked-in-editor";
+import {
+  attachDraftHistoryGuard,
+  browserDraftNavigation,
+  browserSupportsPrecommitHandler,
+  type DraftHistoryGuard,
+} from "@/lib/draft-history-guard";
+
+type PendingDraftAction =
+  | { type: "mode"; kind: ViewKind }
+  | { type: "redo"; kind: ViewKind; forceOverwrite: boolean }
+  | { type: "href"; href: string }
+  | { type: "history"; delta: number };
 
 type ReviewerWorkspaceProps = {
   userId: string;
@@ -130,9 +151,6 @@ export function ReviewerWorkspace({
   );
   const [viewsError, setViewsError] = useState<string | null>(null);
   const [viewsReload, setViewsReload] = useState(0);
-  const [redoBusy, setRedoBusy] = useState(false);
-  const [redoError, setRedoError] = useState<string | null>(null);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cards, setCards] = useState(initialCards);
   const [testAttemptStats, setTestAttemptStats] = useState(initialTestAttemptStats);
   const [currentExamDate, setCurrentExamDate] = useState(examDate);
@@ -141,7 +159,11 @@ export function ReviewerWorkspace({
   const [examDateError, setExamDateError] = useState<string | null>(null);
   const [sourcesUserOpen, setSourcesUserOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<ViewKind>("locked_in");
-  const look = useLook();
+  const [documentDraftDirty, setDocumentDraftDirty] = useState(false);
+  const [draftDialogOpen, setDraftDialogOpen] = useState(false);
+  const [pendingDraftAction, setPendingDraftAction] = useState<PendingDraftAction | null>(null);
+  const documentDraftControllerRef = useRef<LockedInDraftController | null>(null);
+  const router = useRouter();
   const isClient = useIsClient();
   const generatedStamp = generatedAt
     ? isClient
@@ -160,7 +182,13 @@ export function ReviewerWorkspace({
   );
 
   const hasViews = useMemo(() => viewsExist(views), [views]);
-  const showModeKit = look === "thea" && hasViews;
+  const hasCompleteViews = useMemo(
+    () =>
+      (["locked_in", "summary", "test_me", "carded"] as const).every(
+        (kind) => Boolean(views[kind]),
+      ),
+    [views],
+  );
   const sourcesExpanded = hasViews ? sourcesUserOpen : true;
   const examCountdown = currentExamDate
     ? examCountdownCopy(currentExamDate)
@@ -172,36 +200,6 @@ export function ReviewerWorkspace({
       (s) => s.kind === "video" || s.kind === "audio" || s.ingestStatus === "unprocessed",
     );
   }, [sources]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadActiveGeneration() {
-      try {
-        const res = await fetch(`/api/reviewers/${reviewerId}/generation`);
-        if (!res.ok) return;
-        const data = (await res.json()) as {
-          job: { id: string } | null;
-          views: ViewsPayload | null;
-        };
-        if (cancelled || !data.job) return;
-        setActiveJobId(data.job.id);
-        if (data.views) {
-          setViews(data.views);
-          const stamp = stampFromViews(data.views);
-          if (stamp) setGeneratedAt(stamp);
-        }
-      } catch {
-        // Active-job discovery is advisory; the explicit Generate action can
-        // still start or resume a run if this read is temporarily unavailable.
-      }
-    }
-
-    void loadActiveGeneration();
-    return () => {
-      cancelled = true;
-    };
-  }, [reviewerId]);
 
   useEffect(() => {
     if (!needsViewBodies(initialViews)) return;
@@ -243,101 +241,156 @@ export function ReviewerWorkspace({
   function applyGenerated(next: ViewsPayload) {
     setViews(next);
     setGeneratedAt(stampFromViews(next) ?? new Date().toISOString());
-    if (next.carded) {
+  }
+
+  const generation = useGeneration({
+    userId,
+    reviewerId,
+    onViews: applyGenerated,
+    onCardsRefresh: () => {
       void fetch(`/api/reviewers/${reviewerId}/cards`)
-        .then(async (response) => {
-          if (!response.ok) return null;
-          return (await response.json()) as { cards: SerializedCard[] };
-        })
+        .then(async (response) => (response.ok ? (await response.json()) as { cards: SerializedCard[] } : null))
         .then((data) => {
           if (data) setCards(data.cards);
         })
         .catch(() => undefined);
-    }
+    },
+  });
+
+  function protectedRevisionSnapshot() {
+    return [
+      ...(["locked_in", "summary", "test_me", "carded"] as const)
+        .map((viewKind) => views[viewKind])
+        .filter((view): view is NonNullable<typeof view> => Boolean(view))
+        .flatMap((view) => [
+          { key: `view:${view.kind}`, revision: view.revision },
+          ...((view.annotations?.some((annotation) => !annotation.archivedAt))
+            ? [{ key: `annotations:${view.kind}`, revision: view.annotationRevision }]
+            : []),
+        ]),
+      ...cards.map((card) => ({ key: `card:${card.sourceKey}`, revision: card.revision })),
+    ];
   }
 
-  async function redo(kind: ViewKind, forceOverwrite = false) {
-    setRedoBusy(true);
-    setRedoError(null);
-    try {
-      const expectedProtected = [
-        ...(["locked_in", "summary", "test_me", "carded"] as const)
-          .map((viewKind) => views[viewKind])
-          .filter((view): view is NonNullable<typeof view> => Boolean(view))
-          .map((view) => ({ key: `view:${view.kind}`, revision: view.revision })),
-        ...cards.map((card) => ({ key: `card:${card.id}`, revision: card.revision })),
-      ];
-      const res = await fetch(`/api/reviewers/${reviewerId}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, forceOverwrite, expectedProtected }),
-      });
-      if (!res.ok) {
-        setRedoError(await readApiError(res));
-        return;
-      }
-      const data = (await res.json()) as ViewsPayload & {
-        jobId?: string;
-        views?: ViewsPayload;
-      };
-      if (data.jobId) {
-        setActiveJobId(data.jobId);
-        const maxAttempts = 180;
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          const poll = await fetch(
-            `/api/reviewers/${reviewerId}/generation/${data.jobId}`,
-            { method: "POST" },
-          );
-          let job: {
-            status: string;
-            views?: ViewsPayload;
-            error?: { message?: string } | string | null;
-          } | null = null;
-          try {
-            job = (await poll.json()) as {
-              status: string;
-              views?: ViewsPayload;
-              error?: { message?: string } | string | null;
-            };
-          } catch {
-            job = null;
-          }
-          if (!poll.ok && !job?.status) {
-            setRedoError(await readApiError(poll));
-            return;
-          }
-          if (!job) {
-            setRedoError("Generation returned an invalid response.");
-            return;
-          }
-          if (
-            job.status === "succeeded" ||
-            job.status === "failed" ||
-            job.status === "partial"
-          ) {
-            if (job.views) applyGenerated(job.views);
-            if (job.status !== "succeeded") {
-              const msg =
-                typeof job.error === "string"
-                  ? job.error
-                  : job.error?.message;
-              if (msg) setRedoError(msg);
-            }
-            setActiveJobId(null);
-            return;
-          }
-          await new Promise((r) => setTimeout(r, 1500));
-        }
-        setRedoError("Generation is taking too long. Refresh and check views.");
-        return;
-      }
-      applyGenerated(data);
-    } catch {
-      setRedoError("Generation failed. Try again in a moment.");
-    } finally {
-      setRedoBusy(false);
-    }
+  function startRedo(kind: ViewKind, forceOverwrite = false) {
+    const request: GenerationRequest = {
+      intent: "redo",
+      kind,
+      scope: kind === "locked_in" ? "full" : "selected",
+      forceOverwrite,
+      expectedProtected: protectedRevisionSnapshot(),
+    };
+    void generation.start(request);
   }
+
+  function requestDraftAction(action: PendingDraftAction): boolean {
+    if (!documentDraftDirty) return true;
+    setPendingDraftAction(action);
+    setDraftDialogOpen(true);
+    return false;
+  }
+
+  function requestModeChange(kind: ViewKind): boolean {
+    if (kind === activeMode) return true;
+    if (!requestDraftAction({ type: "mode", kind })) return false;
+    setActiveMode(kind);
+    return true;
+  }
+
+  function requestRedo(kind: ViewKind, forceOverwrite: boolean): boolean {
+    return requestDraftAction({ type: "redo", kind, forceOverwrite });
+  }
+
+  const historyGuardRef = useRef<DraftHistoryGuard | null>(null);
+
+  const historyContinueRef = useRef(false);
+
+  function performDraftAction(action: PendingDraftAction) {
+    if (action.type === "mode") setActiveMode(action.kind);
+    else if (action.type === "redo") startRedo(action.kind, action.forceOverwrite);
+    else if (action.type === "history") historyGuardRef.current?.confirm();
+    else router.push(action.href);
+  }
+
+  async function saveDraftAndContinue() {
+    const saved = await documentDraftControllerRef.current?.save();
+    if (saved !== true) return;
+    const action = pendingDraftAction;
+    historyContinueRef.current = true;
+    setPendingDraftAction(null);
+    setDraftDialogOpen(false);
+    if (action) performDraftAction(action);
+    setDocumentDraftDirty(false);
+  }
+
+  function discardDraftAndContinue() {
+    documentDraftControllerRef.current?.discard();
+    const action = pendingDraftAction;
+    historyContinueRef.current = true;
+    setPendingDraftAction(null);
+    setDraftDialogOpen(false);
+    if (action) performDraftAction(action);
+    setDocumentDraftDirty(false);
+  }
+
+  useEffect(() => {
+    if (!documentDraftDirty) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [documentDraftDirty]);
+
+  // The shell logo and topic shelf live above this client workspace and do not
+  // know about its draft controller. Capture same-origin link clicks here so a
+  // dirty Summary or Locked In draft gets the same Save/Discard/Cancel choice
+  // as the in-workspace mode and breadcrumb controls.
+  useEffect(() => {
+    if (!documentDraftDirty) return;
+    function guardShellNavigation(event: MouseEvent) {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!target || target.closest("[data-draft-guarded]")) return;
+      const href = target.getAttribute("href");
+      if (!href || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) return;
+      let url: URL;
+      try { url = new URL(href, window.location.href); } catch { return; }
+      if (url.origin !== window.location.origin) return;
+      event.preventDefault();
+      setPendingDraftAction({ type: "href", href: `${url.pathname}${url.search}${url.hash}` });
+      setDraftDialogOpen(true);
+    }
+    document.addEventListener("click", guardShellNavigation, true);
+    return () => document.removeEventListener("click", guardShellNavigation, true);
+  }, [documentDraftDirty]);
+
+  useEffect(() => {
+    if (!documentDraftDirty) {
+      historyGuardRef.current?.dispose();
+      historyGuardRef.current = null;
+      return;
+    }
+    const guard = attachDraftHistoryGuard(
+      {
+        navigation: browserDraftNavigation(),
+        supportsPrecommitHandler: browserSupportsPrecommitHandler(),
+      },
+      {
+        isDirty: () => documentDraftDirty,
+        onBlock(intent) {
+          setPendingDraftAction(intent);
+          setDraftDialogOpen(true);
+        },
+      },
+    );
+    historyGuardRef.current = guard;
+    return () => {
+      guard.dispose();
+      if (historyGuardRef.current === guard) historyGuardRef.current = null;
+    };
+  }, [documentDraftDirty]);
 
   async function saveExamDate() {
     setExamDateBusy(true);
@@ -384,14 +437,19 @@ export function ReviewerWorkspace({
             : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
         </p>
       </div>
-      <GenerateButton
-        reviewerId={reviewerId}
+      <GenerationControls
+        state={generation.state}
         hasReadySource={hasReadySource}
         hasViews={hasViews}
+        hasCompleteViews={hasCompleteViews}
         sourcesAreMediaOnly={sourcesAreMediaOnly}
-        activeJobId={activeJobId}
-        onGenerated={applyGenerated}
-        onGenerationFinished={() => setActiveJobId(null)}
+        onGenerate={() => void generation.start({ intent: "generate_missing" })}
+        onResume={() => void generation.resume()}
+      />
+      <GenerationStatus
+        state={generation.state}
+        onDismiss={generation.dismiss}
+        onResume={() => void generation.resume()}
       />
     </section>
   );
@@ -418,24 +476,25 @@ export function ReviewerWorkspace({
           </button>
         </div>
       ) : null}
-      {showModeKit ? (
-        <ModeKit value={activeMode} onChange={setActiveMode} />
-      ) : null}
       <ViewTabs
         views={views}
+        userId={userId}
         viewsLoading={viewsLoading}
         hasReadySource={hasReadySource}
         showRedo={hasViews}
-        busy={redoBusy}
-        error={redoError}
+        busy={generation.state.busy}
         cards={cards}
         testAttemptStats={testAttemptStats}
         reviewerId={reviewerId}
         onCardsChange={setCards}
         onTestAttemptStatsChange={setTestAttemptStats}
         onViewsChange={setViews}
-        onRedo={(kind, forceOverwrite) => void redo(kind, forceOverwrite)}
-        compact={showModeKit}
+        onRedo={startRedo}
+        onDraftDirtyChange={setDocumentDraftDirty}
+        draftControllerRef={documentDraftControllerRef}
+        onNavigateRequest={requestModeChange}
+        onRedoRequest={requestRedo}
+        compact
         value={activeMode}
         onValueChange={setActiveMode}
       />
@@ -443,7 +502,7 @@ export function ReviewerWorkspace({
   );
 
   return (
-    <div className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
+    <div data-draft-guarded className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
       <div className="space-y-1">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 space-y-1">
@@ -451,6 +510,11 @@ export function ReviewerWorkspace({
               <Link
                 href={`/?topic=${topicId}`}
                 className="rounded outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
+                onClick={(event) => {
+                  if (!requestDraftAction({ type: "href", href: `/?topic=${topicId}` })) {
+                    event.preventDefault();
+                  }
+                }}
               >
                 {topicName}
               </Link>
@@ -487,32 +551,20 @@ export function ReviewerWorkspace({
             </Button>
           ) : null}
         </div>
-        <div className="flex flex-wrap items-end gap-2 pt-3">
-          <label
-            htmlFor="exam-date"
-            className="grid gap-1 text-xs text-muted-foreground"
-          >
-            Exam date
-            <input
-              id="exam-date"
-              name="examDate"
-              type="date"
-              value={examDateDraft}
-              onChange={(event) => setExamDateDraft(event.target.value)}
-              className="h-9 rounded-md border border-border bg-background px-2 text-sm text-foreground"
-            />
-          </label>
-          <button
-            type="button"
-            className="h-9 rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"
-            onClick={() => void saveExamDate()}
-            disabled={examDateBusy || examDateDraft === (currentExamDate ?? "")}
-          >
-            {examDateBusy ? "Saving" : "Save date"}
-          </button>
-          {currentExamDate ? <p className="pb-2 text-xs text-muted-foreground">Cards will be scheduled no later than this date.</p> : null}
-          {examDateError ? <p role="alert" className="basis-full text-xs text-destructive">{examDateError}</p> : null}
-        </div>
+        <details className="mt-3 max-w-md rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+          <summary className="cursor-pointer text-sm font-medium text-foreground">Exam date {currentExamDate ? `· ${currentExamDate}` : ""}</summary>
+          <div className="flex flex-wrap items-end gap-2 pt-3">
+            <label htmlFor="exam-date" className="grid gap-1 text-xs text-muted-foreground">
+              Exam date
+              <input id="exam-date" name="examDate" type="date" value={examDateDraft} onChange={(event) => setExamDateDraft(event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-sm text-foreground" />
+            </label>
+            <button type="button" className="h-9 rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50" onClick={() => void saveExamDate()} disabled={examDateBusy || examDateDraft === (currentExamDate ?? "")}>
+              {examDateBusy ? "Saving" : "Save date"}
+            </button>
+            {currentExamDate ? <p className="basis-full text-xs text-muted-foreground">Cards will be scheduled no later than this date.</p> : null}
+            {examDateError ? <p role="alert" className="basis-full text-xs text-destructive">{examDateError}</p> : null}
+          </div>
+        </details>
       </div>
 
       {hasViews ? (
@@ -529,6 +581,37 @@ export function ReviewerWorkspace({
           {studySection}
         </>
       )}
+      <Dialog
+        open={draftDialogOpen}
+        onOpenChange={(open) => {
+          setDraftDialogOpen(open);
+          if (!open) {
+            if (!historyContinueRef.current) historyGuardRef.current?.cancel();
+            historyContinueRef.current = false;
+            setPendingDraftAction(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unsaved study document changes</DialogTitle>
+            <DialogDescription>
+              Save this draft before leaving or redoing the study mode, discard it, or cancel to keep editing.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => { historyGuardRef.current?.cancel(); setDraftDialogOpen(false); setPendingDraftAction(null); }}>
+              Cancel
+            </Button>
+            <Button type="button" variant="outline" onClick={discardDraftAndContinue}>
+              Discard
+            </Button>
+            <Button type="button" onClick={() => void saveDraftAndContinue()}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

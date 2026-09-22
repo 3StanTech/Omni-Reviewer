@@ -21,6 +21,7 @@ type AppShellProps = {
   topics?: TopicListItem[];
   selectedTopicId?: string | null;
   dueTodayCount?: number;
+  showTopicShelf?: boolean;
 };
 
 export function AppShell({
@@ -33,11 +34,12 @@ export function AppShell({
   topics,
   selectedTopicId = null,
   dueTodayCount = 0,
+  showTopicShelf = true,
 }: AppShellProps) {
   return (
     <TopicNavProvider>
       <div className="flex min-h-full flex-1">
-        {topics ? (
+        {topics && showTopicShelf ? (
           <TopicShelf
             topics={topics}
             selectedId={selectedTopicId}

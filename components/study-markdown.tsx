@@ -9,6 +9,13 @@ import remarkMath from "remark-math";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 
 import { prepareStudyMarkdown } from "@/lib/study-markdown";
+import {
+  normalizeDocumentText,
+  remarkDropStudyFootnotes,
+  remarkStudyAnnotations,
+  type AnnotationRecord,
+} from "@/lib/annotations";
+import { remarkStudyHeadingIds, STUDY_HEADING_CLOBBER_PREFIX, STUDY_HEADING_ID_PATTERN } from "@/lib/study-outline";
 import { sanitizeMarkdownUrl } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
@@ -52,7 +59,7 @@ const MATH_TAGS = [
 ] as const;
 
 const SAFE_STUDY_SPAN_CLASS =
-  /^(?:katex|katex-error|ink-idea|ink-example|ink-fact|ink-warning|ink-exam)$/;
+  /^(?:katex|katex-error|ink-idea|ink-example|ink-fact|ink-warning|ink-exam|user-annotation-(?:sun|sky|mint|rose))$/;
 const SAFE_MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
 const INK_CLASS_NAMES = [
   "ink-idea",
@@ -62,12 +69,17 @@ const INK_CLASS_NAMES = [
   "ink-exam",
 ] as const;
 const INK_CLASS_GROUP = INK_CLASS_NAMES.join("|");
+const ANNOTATION_CLASS_GROUP = "user-annotation-(?:sun|sky|mint|rose)";
 const OPEN_INK_SPAN = new RegExp(
   `^<span\\s+class=["'](${INK_CLASS_GROUP})["']\\s*>$`,
   "i",
 );
 const FULL_INK_SPAN = new RegExp(
   `^<span\\s+class=["'](${INK_CLASS_GROUP})["']\\s*>([\\s\\S]*?)</span\\s*>$`,
+  "i",
+);
+const FULL_ANNOTATION_SPAN = new RegExp(
+  `^<span\\s+class=["'](${ANNOTATION_CLASS_GROUP})["']\\s*>([\\s\\S]*?)</span\\s*>$`,
   "i",
 );
 const CLOSE_SPAN = /^<\/span\s*>$/i;
@@ -85,6 +97,17 @@ type MdastNode = {
 function inkSpanNode(className: string, children: MdastNode[]): MdastNode {
   return {
     type: "inkSpan",
+    data: {
+      hName: "span",
+      hProperties: { className: [className] },
+    },
+    children,
+  };
+}
+
+function annotationSpanNode(className: string, children: MdastNode[]): MdastNode {
+  return {
+    type: "annotationSpan",
     data: {
       hName: "span",
       hProperties: { className: [className] },
@@ -116,6 +139,12 @@ function rewriteInkHtml(node: MdastNode) {
       const full = FULL_INK_SPAN.exec(trimmed);
       if (full) {
         next.push(inkSpanNode(full[1].toLowerCase(), [{ type: "text", value: full[2] }]));
+        index += 1;
+        continue;
+      }
+      const annotation = FULL_ANNOTATION_SPAN.exec(trimmed);
+      if (annotation) {
+        next.push(annotationSpanNode(annotation[1].toLowerCase(), [{ type: "text", value: annotation[2] }]));
         index += 1;
         continue;
       }
@@ -158,26 +187,6 @@ function rewriteInkHtml(node: MdastNode) {
   node.children = next;
 }
 
-export const INK_LEGEND_ITEMS = [
-  { className: "ink-idea", label: "Main idea" },
-  { className: "ink-example", label: "Example" },
-  { className: "ink-fact", label: "Fact" },
-  { className: "ink-warning", label: "Warning" },
-  { className: "ink-exam", label: "Exam likely" },
-] as const;
-
-export function InkLegend() {
-  return (
-    <ul className="ink-legend" aria-label="Ink marks">
-      {INK_LEGEND_ITEMS.map((item) => (
-        <li key={item.className}>
-          <span className={item.className}>{item.label}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 /**
  * Allow normal study Markdown plus the small MathML surface emitted by
  * KaTeX's mathml renderer. Raw HTML, images, styles, event handlers, and
@@ -204,8 +213,15 @@ const studySanitizeSchema: Schema = {
     ],
     annotation: [["encoding", "application/x-tex"]],
     mo: [["stretchy", "false"]],
+    h1: [...(defaultSchema.attributes?.h1 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
+    h2: [...(defaultSchema.attributes?.h2 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
+    h3: [...(defaultSchema.attributes?.h3 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
+    h4: [...(defaultSchema.attributes?.h4 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
+    h5: [...(defaultSchema.attributes?.h5 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
+    h6: [...(defaultSchema.attributes?.h6 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
   },
   strip: ["script", "style"],
+  clobberPrefix: STUDY_HEADING_CLOBBER_PREFIX,
 };
 
 const components: Components = {
@@ -252,7 +268,7 @@ const inlineComponents: Components = {
   hr: () => <span aria-hidden="true" />,
 };
 
-export function MarkdownBody({ source, inline = false }: { source: string; inline?: boolean }) {
+export function MarkdownBody({ source, inline = false, annotations }: { source: string; inline?: boolean; annotations?: AnnotationRecord[] }) {
   const prepared = prepareStudyMarkdown(source);
   if (!prepared) {
     return (
@@ -263,6 +279,24 @@ export function MarkdownBody({ source, inline = false }: { source: string; inlin
   }
 
   const Wrapper = inline ? "span" : "div";
+  const renderedSource = normalizeDocumentText(prepared.source);
+  const heading = (Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6") => {
+    function Heading({ id, children }: { id?: string; children?: React.ReactNode }) {
+      return <Tag id={id || "section"}>{children}</Tag>;
+    }
+    return Heading;
+  };
+  const renderedComponents = inline
+    ? inlineComponents
+    : {
+      ...components,
+      h1: heading("h1"),
+      h2: heading("h2"),
+      h3: heading("h3"),
+      h4: heading("h4"),
+      h5: heading("h5"),
+      h6: heading("h6"),
+    };
   return (
     <Wrapper className={inline ? "prose-study prose-study-inline" : "prose-study"}>
       <ReactMarkdown
@@ -270,8 +304,11 @@ export function MarkdownBody({ source, inline = false }: { source: string; inlin
         urlTransform={(url) => sanitizeMarkdownUrl(url) ?? ""}
         remarkPlugins={[
           [remarkGfm],
+          remarkDropStudyFootnotes,
           [remarkMath, { singleDollarTextMath: true }],
+          remarkStudyHeadingIds,
           remarkInkSpans,
+          remarkStudyAnnotations(annotations ?? []),
         ]}
         rehypePlugins={[
           [
@@ -285,9 +322,9 @@ export function MarkdownBody({ source, inline = false }: { source: string; inlin
           ],
           [rehypeSanitize, studySanitizeSchema],
         ]}
-        components={inline ? inlineComponents : components}
+        components={renderedComponents}
       >
-        {prepared.source}
+        {renderedSource}
       </ReactMarkdown>
     </Wrapper>
   );

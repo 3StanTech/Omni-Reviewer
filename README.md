@@ -28,6 +28,17 @@ warnings after a Locked In edit.
 
 Study modes are persisted. Generate or regenerate only on an explicit action.
 
+Locked In and Summary share an explicit Markdown editor with Save changes and
+Cancel. Tables and ordinary Markdown use the formatted editor; documents with
+math or legacy semantic ink use a labelled source-preserving fallback. In
+reading mode, select text to add an allowlisted highlight or note. Annotations
+are owner- and revision-scoped, and displaced quotes remain available under
+Earlier version. Contents, Notes, and reading position are optional disclosures.
+
+The active visual choices are Day and Night. Existing Thea-Style or
+RemNote-Style local preferences are normalized to Day without changing study
+data.
+
 ### v1 ingest rules
 
 | Upload kind | Behavior |

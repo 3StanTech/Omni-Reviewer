@@ -23,6 +23,7 @@ import {
 } from "@/lib/password-reset";
 import {
   cards,
+  annotations,
   blobReservations,
   generationJobs,
   loginThrottles,
@@ -32,6 +33,7 @@ import {
   sources,
   testSessions,
   testAttempts,
+  cardReviews,
   topics,
   views,
   type GenerationJob,
@@ -42,6 +44,18 @@ import {
   type Source,
   type Topic,
 } from "@/lib/schema";
+import {
+  annotationRemapRows,
+  annotationSaveRows,
+  MAX_ACTIVE_ANNOTATIONS,
+  normalizeDocumentText,
+  remapAnnotation,
+  renderedStudyTextModel,
+  selectRenderableAnnotations,
+  type AnnotationColor,
+  type AnnotationRecord,
+  type RemappedAnnotation,
+} from "@/lib/annotations";
 import type { CardRating, DurableCard, GenerationJobStep, TestAttemptStats } from "@/lib/types";
 import {
   isClozeCardFront,
@@ -62,6 +76,15 @@ import {
 } from "@/lib/learning-limits";
 import { publicSourceErrorMessage, PublicError } from "@/lib/public-errors";
 import { scheduleCardReview } from "@/lib/sm2";
+import {
+  missedItemIds,
+  resolveUntimedAttemptReread,
+  sameItemSnapshot,
+  snapshotTestItemIds,
+} from "@/lib/practice-session";
+import {
+  type GenerateKind,
+} from "@/lib/generation-plan";
 
 export async function listTopics(userId: string): Promise<Topic[]> {
   return db
@@ -808,6 +831,8 @@ export async function listViewMetaByReviewer(reviewerId: string, userId: string)
       kind: views.kind,
       modelId: views.modelId,
       generatedAt: views.generatedAt,
+      contentRevision: views.contentRevision,
+      annotationRevision: views.annotationRevision,
       revision: views.revision,
       isEdited: views.isEdited,
       isPinned: views.isPinned,
@@ -815,6 +840,325 @@ export async function listViewMetaByReviewer(reviewerId: string, userId: string)
     })
     .from(views)
     .where(eq(views.reviewerId, reviewerId));
+}
+
+function serializeAnnotationRow(row: {
+  id: string;
+  reviewerId: string;
+  viewId: string;
+  kind: "locked_in" | "summary";
+  contentRevision: number;
+  startOffset: number;
+  endOffset: number;
+  quote: string;
+  prefix: string;
+  suffix: string;
+  color: AnnotationColor;
+  note: string | null;
+  archivedAt: Date | null;
+  archiveReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): AnnotationRecord {
+  return {
+    ...row,
+    archivedAt: row.archivedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/** List annotations only through the authenticated reviewer's owner boundary. */
+export async function listAnnotationsForReviewer(
+  reviewerId: string,
+  userId: string,
+  kind?: "locked_in" | "summary",
+  options?: { activeOnly?: boolean },
+): Promise<AnnotationRecord[]> {
+  const reviewer = await getReviewer(reviewerId, userId);
+  if (!reviewer) return [];
+  const rows = await db
+    .select({
+      id: annotations.id,
+      reviewerId: annotations.reviewerId,
+      viewId: annotations.viewId,
+      kind: annotations.kind,
+      contentRevision: annotations.contentRevision,
+      startOffset: annotations.startOffset,
+      endOffset: annotations.endOffset,
+      quote: annotations.quote,
+      prefix: annotations.prefix,
+      suffix: annotations.suffix,
+      color: annotations.color,
+      note: annotations.note,
+      archivedAt: annotations.archivedAt,
+      archiveReason: annotations.archiveReason,
+      createdAt: annotations.createdAt,
+      updatedAt: annotations.updatedAt,
+    })
+    .from(annotations)
+    .innerJoin(views, eq(views.id, annotations.viewId))
+    .where(
+      and(
+        eq(annotations.reviewerId, reviewerId),
+        eq(annotations.userId, userId),
+        kind ? eq(views.kind, kind) : undefined,
+        options?.activeOnly ? isNull(annotations.archivedAt) : undefined,
+      ),
+    )
+    .orderBy(asc(annotations.createdAt));
+  return rows.map((row) => serializeAnnotationRow(row));
+}
+
+type AnnotationPageOptions = {
+  earlierOnly?: boolean;
+  cursor?: string;
+  limit?: number;
+};
+
+function decodeAnnotationCursor(cursor: string | undefined): { archivedAt: Date; id: string } | null {
+  if (!cursor) return null;
+  const separator = cursor.lastIndexOf("|");
+  if (separator <= 0) return null;
+  const archivedAt = new Date(cursor.slice(0, separator));
+  const id = cursor.slice(separator + 1);
+  return Number.isNaN(archivedAt.getTime()) || !id ? null : { archivedAt, id };
+}
+
+/**
+ * Return active annotations plus a bounded page of Earlier version rows. The
+ * cursor is an opaque timestamp/id pair; rows are never dropped to fit the
+ * UI limit and can be fetched again from the authenticated owner boundary.
+ */
+export async function listAnnotationPageForReviewer(
+  reviewerId: string,
+  userId: string,
+  kind: "locked_in" | "summary",
+  options: AnnotationPageOptions = {},
+): Promise<{ annotations: AnnotationRecord[]; nextCursor: string | null }> {
+  const reviewer = await getReviewer(reviewerId, userId);
+  if (!reviewer) return { annotations: [], nextCursor: null };
+  const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 50)));
+  const cursor = decodeAnnotationCursor(options.cursor);
+  const ownerWhere = and(
+    eq(annotations.reviewerId, reviewerId),
+    eq(annotations.userId, userId),
+    eq(annotations.kind, kind),
+  );
+
+  const selectRows = () => db.select({
+    id: annotations.id,
+    reviewerId: annotations.reviewerId,
+    viewId: annotations.viewId,
+    kind: annotations.kind,
+    contentRevision: annotations.contentRevision,
+    startOffset: annotations.startOffset,
+    endOffset: annotations.endOffset,
+    quote: annotations.quote,
+    prefix: annotations.prefix,
+    suffix: annotations.suffix,
+    color: annotations.color,
+    note: annotations.note,
+    archivedAt: annotations.archivedAt,
+    archiveReason: annotations.archiveReason,
+    createdAt: annotations.createdAt,
+    updatedAt: annotations.updatedAt,
+  }).from(annotations);
+
+  if (options.earlierOnly) {
+    const rows = await selectRows()
+      .where(and(ownerWhere, sql`${annotations.archivedAt} IS NOT NULL`, cursor ? sql`(
+        ${annotations.archivedAt} < ${cursor.archivedAt}
+        OR (${annotations.archivedAt} = ${cursor.archivedAt} AND ${annotations.id} < ${cursor.id})
+      )` : undefined))
+      .orderBy(desc(annotations.archivedAt), desc(annotations.id))
+      .limit(limit + 1);
+    const hasMore = rows.length > limit;
+    const visibleRows = rows.slice(0, limit);
+    const last = visibleRows[visibleRows.length - 1];
+    return {
+      annotations: visibleRows.map((row) => serializeAnnotationRow(row)),
+      nextCursor: hasMore && last?.archivedAt ? `${last.archivedAt.toISOString()}|${last.id}` : null,
+    };
+  }
+
+  const [activeRows, earlierPage] = await Promise.all([
+    selectRows()
+      .where(and(ownerWhere, isNull(annotations.archivedAt)))
+      .orderBy(asc(annotations.createdAt)),
+    listAnnotationPageForReviewer(reviewerId, userId, kind, { ...options, earlierOnly: true }),
+  ]);
+  return {
+    annotations: [...activeRows.map((row) => serializeAnnotationRow(row)), ...earlierPage.annotations],
+    nextCursor: earlierPage.nextCursor,
+  };
+}
+
+export async function saveAnnotations(args: {
+  reviewerId: string;
+  userId: string;
+  kind: "locked_in" | "summary";
+  expectedRevision: number;
+  expectedContentRevision: number;
+  expectedAnnotationRevision: number;
+  items: Array<{
+    startOffset: number;
+    endOffset: number;
+    quote: string;
+    prefix: string;
+    suffix: string;
+    color: AnnotationColor;
+    note: string | null;
+  }>;
+}): Promise<{
+  viewRevision: number;
+  contentRevision: number;
+  annotationRevision: number;
+} | null> {
+  if (args.items.length === 0 || args.items.length > MAX_ACTIVE_ANNOTATIONS) return null;
+  const result = await db.execute(sql`
+    WITH input AS (
+      SELECT item.start_offset,
+        item.end_offset,
+        item.quote,
+        item.prefix,
+        item.suffix,
+        item.color::annotation_color AS color,
+        NULLIF(item.note, '') AS note,
+        item.ordinality
+      FROM ROWS FROM(
+        jsonb_to_recordset(CAST(${JSON.stringify(annotationSaveRows(args.items))} AS jsonb))
+          AS (
+            start_offset integer,
+            end_offset integer,
+            quote text,
+            prefix text,
+            suffix text,
+            color text,
+            note text
+          )
+      ) WITH ORDINALITY AS item(
+        start_offset,
+        end_offset,
+        quote,
+        prefix,
+        suffix,
+        color,
+        note,
+        ordinality
+      )
+    ), target AS MATERIALIZED (
+      SELECT v.id,
+        v.reviewer_id,
+        v.kind,
+        v.content_revision,
+        v.annotation_revision,
+        v.revision
+      FROM views v
+      INNER JOIN reviewers r ON r.id = v.reviewer_id
+      INNER JOIN topics t ON t.id = r.topic_id
+      WHERE v.reviewer_id = ${args.reviewerId}
+        AND t.user_id = ${args.userId}
+        AND v.kind = ${args.kind}::view_kind
+        AND v.revision = ${args.expectedRevision}
+        AND v.content_revision = ${args.expectedContentRevision}
+        AND v.annotation_revision = ${args.expectedAnnotationRevision}
+      FOR UPDATE OF v
+    ), active_count AS (
+      SELECT COUNT(*)::integer AS count
+      FROM study_annotations a
+      INNER JOIN target ON target.id = a.view_id
+      WHERE a.archived_at IS NULL
+    ), overlap_guard AS (
+      SELECT target.id
+      FROM target
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM input left_input
+        INNER JOIN input right_input
+          ON left_input.start_offset < right_input.end_offset
+         AND right_input.start_offset < left_input.end_offset
+         AND left_input.ordinality < right_input.ordinality
+      )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM input
+          INNER JOIN study_annotations existing
+            ON existing.view_id = target.id
+           AND existing.archived_at IS NULL
+           AND input.start_offset < existing.end_offset
+           AND existing.start_offset < input.end_offset
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM input
+          WHERE input.start_offset < 0
+             OR input.end_offset <= input.start_offset
+             OR input.quote = ''
+        )
+    ), updated_view AS (
+      UPDATE views v
+      SET revision = v.revision + 1,
+          annotation_revision = v.annotation_revision + 1,
+          updated_at = NOW()
+      FROM target, active_count, overlap_guard
+      WHERE v.id = target.id
+        AND overlap_guard.id = target.id
+        AND active_count.count + (SELECT COUNT(*)::integer FROM input) <= ${MAX_ACTIVE_ANNOTATIONS}
+      RETURNING v.revision, v.content_revision, v.annotation_revision
+    ), inserted AS (
+      INSERT INTO study_annotations (
+        user_id,
+        reviewer_id,
+        view_id,
+        kind,
+        content_revision,
+        start_offset,
+        end_offset,
+        quote,
+        prefix,
+        suffix,
+        color,
+        note
+      )
+      SELECT ${args.userId},
+        ${args.reviewerId},
+        target.id,
+        ${args.kind}::annotation_view_kind,
+        target.content_revision,
+        input.start_offset,
+        input.end_offset,
+        input.quote,
+        input.prefix,
+        input.suffix,
+        input.color,
+        input.note
+      FROM target
+      INNER JOIN updated_view ON TRUE
+      CROSS JOIN input
+      RETURNING id
+    )
+    SELECT updated_view.revision,
+      updated_view.content_revision,
+      updated_view.annotation_revision,
+      (SELECT COUNT(*)::integer FROM inserted) AS inserted_count
+    FROM updated_view
+  `);
+  const row = result.rows[0] as {
+    revision?: number;
+    content_revision?: number;
+    annotation_revision?: number;
+  } | undefined;
+  if (
+    typeof row?.revision !== "number" ||
+    typeof row.content_revision !== "number" ||
+    typeof row.annotation_revision !== "number"
+  ) return null;
+  return {
+    viewRevision: row.revision,
+    contentRevision: row.content_revision,
+    annotationRevision: row.annotation_revision,
+  };
 }
 
 export async function getViewForReviewer(
@@ -903,7 +1247,14 @@ async function expireTimedSessions(
     WHERE user_id = ${userId}
       AND reviewer_id = ${reviewerId}
       AND status = 'active'::test_session_status
-      AND (expires_at <= NOW() OR view_revision <> ${expectedRevision})
+      AND (
+        view_revision <> ${expectedRevision}
+        OR (
+          mode = 'timed'::test_session_mode
+          AND expires_at IS NOT NULL
+          AND expires_at <= NOW()
+        )
+      )
   `);
 }
 
@@ -915,6 +1266,8 @@ export async function cleanupExpiredTimedTestSessions(): Promise<number> {
         completed_at = COALESCE(completed_at, NOW()),
         updated_at = NOW()
     WHERE status = 'active'::test_session_status
+      AND mode = 'timed'::test_session_mode
+      AND expires_at IS NOT NULL
       AND expires_at <= NOW()
     RETURNING id
   `);
@@ -939,12 +1292,13 @@ export async function getActiveTimedTestSession(args: {
         eq(testSessions.reviewerId, args.reviewerId),
         eq(testSessions.viewRevision, args.expectedRevision),
         eq(testSessions.status, "active"),
+        eq(testSessions.mode, "timed"),
         gt(testSessions.expiresAt, new Date()),
       ),
     )
     .orderBy(desc(testSessions.startedAt))
     .limit(1);
-  if (!row) return null;
+  if (!row || !row.expiresAt) return null;
   const attempts = await db
     .select({ itemId: testAttempts.itemId })
     .from(testAttempts)
@@ -982,7 +1336,14 @@ export async function createOrResumeTimedTestSession(args: {
       WHERE user_id = ${args.userId}
         AND reviewer_id = ${args.reviewerId}
         AND status = 'active'::test_session_status
-        AND (expires_at <= NOW() OR view_revision <> ${args.expectedRevision})
+        AND (
+          view_revision <> ${args.expectedRevision}
+          OR (
+            mode = 'timed'::test_session_mode
+            AND expires_at IS NOT NULL
+            AND expires_at <= NOW()
+          )
+        )
       RETURNING id
     ),
     current_view AS MATERIALIZED (
@@ -998,8 +1359,10 @@ export async function createOrResumeTimedTestSession(args: {
         user_id,
         reviewer_id,
         view_revision,
+        mode,
         started_at,
         expires_at,
+        item_ids,
         status,
         created_at,
         updated_at
@@ -1008,14 +1371,16 @@ export async function createOrResumeTimedTestSession(args: {
         ${args.userId},
         ${args.reviewerId},
         current_view.revision,
+        'timed'::test_session_mode,
         NOW(),
         NOW() + (${args.durationSeconds} * INTERVAL '1 second'),
+        '[]'::jsonb,
         'active'::test_session_status,
         NOW(),
         NOW()
       FROM current_view
       CROSS JOIN (SELECT COUNT(*) AS cleanup_count FROM expired) AS cleanup
-      ON CONFLICT (user_id, reviewer_id)
+      ON CONFLICT (user_id, reviewer_id, mode)
         WHERE status = 'active'::test_session_status
       DO UPDATE SET updated_at = test_sessions.updated_at
       RETURNING
@@ -1093,6 +1458,8 @@ export async function recordTimedTestAttempt(args: {
         AND user_id = ${args.userId}
         AND reviewer_id = ${args.reviewerId}
         AND status = 'active'::test_session_status
+        AND mode = 'timed'::test_session_mode
+        AND expires_at IS NOT NULL
         AND expires_at <= NOW()
       RETURNING id
     ),
@@ -1103,7 +1470,9 @@ export async function recordTimedTestAttempt(args: {
         AND ts.user_id = ${args.userId}
         AND ts.reviewer_id = ${args.reviewerId}
         AND ts.view_revision = ${args.expectedRevision}
+        AND ts.mode = 'timed'::test_session_mode
         AND ts.status = 'active'::test_session_status
+        AND ts.expires_at IS NOT NULL
         AND ts.expires_at > NOW()
       FOR UPDATE
     ),
@@ -1229,7 +1598,10 @@ export async function recordTimedTestAttempt(args: {
       .limit(1);
     if (!currentSession) return { missing: true };
     if (currentSession.viewRevision !== args.expectedRevision) return { stale: true };
-    if (currentSession.status === "expired" || currentSession.expiresAt <= new Date()) {
+    if (
+      currentSession.status === "expired"
+      || (currentSession.expiresAt != null && currentSession.expiresAt <= new Date())
+    ) {
       return { expired: true };
     }
     const [existing] = await db
@@ -1280,6 +1652,593 @@ export async function recordTimedTestAttempt(args: {
   };
 }
 
+export type UntimedPracticeAnswerRow = {
+  itemId: string;
+  selectedAnswer: string;
+  correct: boolean;
+};
+
+export type UntimedPracticeSessionRow = {
+  id: string;
+  userId: string;
+  reviewerId: string;
+  viewRevision: number;
+  startedAt: Date;
+  expiresAt: null;
+  status: "active" | "completed" | "expired";
+  completedAt: Date | null;
+  answeredCount: number;
+  itemIds: string[];
+  originSessionId: string | null;
+  answers: UntimedPracticeAnswerRow[];
+};
+
+function asItemIds(value: unknown): string[] {
+  return asAnsweredItemIds(value);
+}
+
+async function loadUntimedSessionAnswers(sessionId: string): Promise<UntimedPracticeAnswerRow[]> {
+  const rows = await db
+    .select({
+      itemId: testAttempts.itemId,
+      selectedAnswer: testAttempts.selectedAnswer,
+      correct: testAttempts.correct,
+    })
+    .from(testAttempts)
+    .where(eq(testAttempts.sessionId, sessionId))
+    .orderBy(asc(testAttempts.attemptedAt));
+  return rows;
+}
+
+function normalizeUntimedSessionRow(
+  row: {
+    id: string;
+    userId: string;
+    reviewerId: string;
+    viewRevision: number;
+    startedAt: Date;
+    expiresAt: Date | null;
+    status: "active" | "completed" | "expired";
+    completedAt: Date | null;
+    answeredCount: number;
+    itemIds: unknown;
+    originSessionId: string | null;
+  },
+  answers: UntimedPracticeAnswerRow[],
+): UntimedPracticeSessionRow | null {
+  if (row.expiresAt != null) return null;
+  return {
+    id: row.id,
+    userId: row.userId,
+    reviewerId: row.reviewerId,
+    viewRevision: row.viewRevision,
+    startedAt: row.startedAt,
+    expiresAt: null,
+    status: row.status,
+    completedAt: row.completedAt,
+    answeredCount: row.answeredCount,
+    itemIds: asItemIds(row.itemIds),
+    originSessionId: row.originSessionId,
+    answers,
+  };
+}
+
+async function hydrateUntimedSession(
+  row: {
+    id: string;
+    userId: string;
+    reviewerId: string;
+    viewRevision: number;
+    startedAt: Date;
+    expiresAt: Date | null;
+    status: "active" | "completed" | "expired";
+    completedAt: Date | null;
+    answeredCount: number;
+    itemIds: unknown;
+    originSessionId: string | null;
+  } | undefined,
+): Promise<UntimedPracticeSessionRow | null> {
+  if (!row || row.expiresAt != null) return null;
+  return normalizeUntimedSessionRow(row, await loadUntimedSessionAnswers(row.id));
+}
+
+/** Resume the active untimed sitting, or the latest completed one at this revision. */
+export async function getUntimedPracticeSession(args: {
+  userId: string;
+  reviewerId: string;
+  expectedRevision: number;
+}): Promise<UntimedPracticeSessionRow | null> {
+  const view = await getViewForReviewer(args.reviewerId, args.userId, "test_me");
+  if (!view || view.revision !== args.expectedRevision) return null;
+  await expireTimedSessions(args.userId, args.reviewerId, args.expectedRevision);
+  const [active] = await db
+    .select()
+    .from(testSessions)
+    .where(
+      and(
+        eq(testSessions.userId, args.userId),
+        eq(testSessions.reviewerId, args.reviewerId),
+        eq(testSessions.viewRevision, args.expectedRevision),
+        eq(testSessions.status, "active"),
+        eq(testSessions.mode, "untimed"),
+        isNull(testSessions.expiresAt),
+      ),
+    )
+    .orderBy(desc(testSessions.startedAt))
+    .limit(1);
+  if (active) return hydrateUntimedSession(active);
+  const [completed] = await db
+    .select()
+    .from(testSessions)
+    .where(
+      and(
+        eq(testSessions.userId, args.userId),
+        eq(testSessions.reviewerId, args.reviewerId),
+        eq(testSessions.viewRevision, args.expectedRevision),
+        eq(testSessions.status, "completed"),
+        eq(testSessions.mode, "untimed"),
+        isNull(testSessions.expiresAt),
+      ),
+    )
+    .orderBy(desc(testSessions.completedAt), desc(testSessions.startedAt))
+    .limit(1);
+  return hydrateUntimedSession(completed);
+}
+
+async function insertUntimedPracticeSession(args: {
+  userId: string;
+  reviewerId: string;
+  expectedRevision: number;
+  itemIds: string[];
+  originSessionId?: string | null;
+  replaceActive?: boolean;
+}): Promise<UntimedPracticeSessionRow | null> {
+  const itemIdsJson = JSON.stringify(args.itemIds);
+  const replaceActive = args.replaceActive === true ? sql`TRUE` : sql`FALSE`;
+  const result = await db.execute(sql`
+    WITH expired AS MATERIALIZED (
+      UPDATE test_sessions
+      SET status = 'expired'::test_session_status,
+          completed_at = COALESCE(completed_at, NOW()),
+          updated_at = NOW()
+      WHERE user_id = ${args.userId}
+        AND reviewer_id = ${args.reviewerId}
+        AND status = 'active'::test_session_status
+        AND (
+          view_revision <> ${args.expectedRevision}
+          OR (
+            mode = 'timed'::test_session_mode
+            AND expires_at IS NOT NULL
+            AND expires_at <= NOW()
+          )
+          OR (
+            ${replaceActive}
+            AND mode = 'untimed'::test_session_mode
+          )
+        )
+      RETURNING id
+    ),
+    current_view AS MATERIALIZED (
+      SELECT v.revision
+      FROM views AS v
+      WHERE v.reviewer_id = ${args.reviewerId}
+        AND v.kind = 'test_me'::view_kind
+        AND v.revision = ${args.expectedRevision}
+      FOR UPDATE
+    ),
+    claimed AS (
+      INSERT INTO test_sessions (
+        user_id,
+        reviewer_id,
+        view_revision,
+        mode,
+        started_at,
+        expires_at,
+        item_ids,
+        origin_session_id,
+        status,
+        created_at,
+        updated_at
+      )
+      SELECT
+        ${args.userId},
+        ${args.reviewerId},
+        current_view.revision,
+        'untimed'::test_session_mode,
+        NOW(),
+        NULL,
+        CAST(${itemIdsJson} AS jsonb),
+        ${args.originSessionId ?? null},
+        'active'::test_session_status,
+        NOW(),
+        NOW()
+      FROM current_view
+      CROSS JOIN (SELECT COUNT(*) AS cleanup_count FROM expired) AS cleanup
+      ON CONFLICT (user_id, reviewer_id, mode)
+        WHERE status = 'active'::test_session_status
+      DO UPDATE SET updated_at = test_sessions.updated_at
+      RETURNING
+        id,
+        user_id,
+        reviewer_id,
+        view_revision,
+        started_at,
+        expires_at,
+        item_ids,
+        origin_session_id,
+        status,
+        completed_at,
+        answered_count
+    )
+    SELECT * FROM claimed
+  `);
+  const raw = result.rows[0] as Record<string, unknown> | undefined;
+  if (!raw) return null;
+  const id = String(raw.id);
+  const status = raw.status;
+  if (status !== "active" && status !== "completed" && status !== "expired") return null;
+  return hydrateUntimedSession({
+    id,
+    userId: String(raw.user_id ?? raw.userId),
+    reviewerId: String(raw.reviewer_id ?? raw.reviewerId),
+    viewRevision: Number(raw.view_revision ?? raw.viewRevision),
+    startedAt: asSessionDate(raw.started_at ?? raw.startedAt, "start"),
+    expiresAt: raw.expires_at ?? raw.expiresAt
+      ? asSessionDate(raw.expires_at ?? raw.expiresAt, "deadline")
+      : null,
+    status,
+    completedAt: raw.completed_at ?? raw.completedAt
+      ? asSessionDate(raw.completed_at ?? raw.completedAt, "completion")
+      : null,
+    answeredCount: Number(raw.answered_count ?? raw.answeredCount ?? 0),
+    itemIds: raw.item_ids ?? raw.itemIds,
+    originSessionId: raw.origin_session_id == null && raw.originSessionId == null
+      ? null
+      : String(raw.origin_session_id ?? raw.originSessionId),
+  });
+}
+
+export async function createOrResumeUntimedPracticeSession(args: {
+  userId: string;
+  reviewerId: string;
+  expectedRevision: number;
+}): Promise<UntimedPracticeSessionRow | null> {
+  const existing = await getUntimedPracticeSession(args);
+  if (existing) return existing;
+  const view = await getViewForReviewer(args.reviewerId, args.userId, "test_me");
+  if (!view || view.revision !== args.expectedRevision) return null;
+  const itemIds = snapshotTestItemIds(parseTestMeItems(view.contentJson, view.content));
+  if (itemIds.length === 0) return null;
+  return insertUntimedPracticeSession({ ...args, itemIds });
+}
+
+export async function restartUntimedPracticeSession(args: {
+  userId: string;
+  reviewerId: string;
+  expectedRevision: number;
+}): Promise<UntimedPracticeSessionRow | null> {
+  const view = await getViewForReviewer(args.reviewerId, args.userId, "test_me");
+  if (!view || view.revision !== args.expectedRevision) return null;
+  const itemIds = snapshotTestItemIds(parseTestMeItems(view.contentJson, view.content));
+  if (itemIds.length === 0) return null;
+  return insertUntimedPracticeSession({ ...args, itemIds, replaceActive: true });
+}
+
+export async function retryMissedUntimedPracticeSession(args: {
+  userId: string;
+  reviewerId: string;
+  expectedRevision: number;
+  originSessionId?: string;
+}): Promise<UntimedPracticeSessionRow | { missing: true } | { empty: true } | { stale: true } | { conflict: true }> {
+  const view = await getViewForReviewer(args.reviewerId, args.userId, "test_me");
+  if (!view) return { missing: true };
+  if (view.revision !== args.expectedRevision) return { stale: true };
+  await expireTimedSessions(args.userId, args.reviewerId, args.expectedRevision);
+  const origin = args.originSessionId
+    ? await hydrateUntimedSession(
+      (await db
+        .select()
+        .from(testSessions)
+        .where(
+          and(
+            eq(testSessions.id, args.originSessionId),
+            eq(testSessions.userId, args.userId),
+            eq(testSessions.reviewerId, args.reviewerId),
+            eq(testSessions.mode, "untimed"),
+          ),
+        )
+        .limit(1))[0],
+    )
+    : await getUntimedPracticeSession(args);
+  if (!origin) return { missing: true };
+  if (origin.viewRevision !== args.expectedRevision) return { stale: true };
+  if (origin.status !== "completed") return { missing: true };
+  const itemIds = missedItemIds(origin.itemIds, origin.answers);
+  if (itemIds.length === 0) return { empty: true };
+  const [activeRow] = await db
+    .select()
+    .from(testSessions)
+    .where(
+      and(
+        eq(testSessions.userId, args.userId),
+        eq(testSessions.reviewerId, args.reviewerId),
+        eq(testSessions.mode, "untimed"),
+        eq(testSessions.status, "active"),
+        isNull(testSessions.expiresAt),
+      ),
+    )
+    .limit(1);
+  if (activeRow && activeRow.id !== origin.id) {
+    const active = await hydrateUntimedSession(activeRow);
+    const sameRetry = Boolean(
+      active
+      && active.originSessionId === origin.id
+      && sameItemSnapshot(active.itemIds, itemIds),
+    );
+    if (sameRetry && active) return active;
+    return { conflict: true };
+  }
+  const created = await insertUntimedPracticeSession({
+    ...args,
+    itemIds,
+    originSessionId: origin.id,
+    replaceActive: true,
+  });
+  return created ?? { missing: true };
+}
+
+export type UntimedTestAttemptResult =
+  | { stats: TestAttemptStats[]; alreadySaved: boolean; completed: boolean; answer: UntimedPracticeAnswerRow }
+  | { missing: true }
+  | { stale: true }
+  | { conflict: true }
+  | { invalid: true };
+
+export async function recordUntimedTestAttempt(args: {
+  reviewerId: string;
+  userId: string;
+  sessionId: string;
+  expectedRevision: number;
+  itemId: string;
+  selectedAnswer: string;
+}): Promise<UntimedTestAttemptResult> {
+  if (args.selectedAnswer.length > MAX_TEST_ATTEMPT_SELECTED_ANSWER_CHARS) {
+    throw new Error("Selected answer exceeds the safe size limit");
+  }
+  const view = await getViewForReviewer(args.reviewerId, args.userId, "test_me");
+  if (!view) return { missing: true };
+  if (view.revision !== args.expectedRevision) return { stale: true };
+  const items = parseTestMeItems(view.contentJson, view.content);
+  const item = items.find((candidate) => candidate.id === args.itemId);
+  if (!item) throw new Error("Unknown test item");
+  const correct = args.selectedAnswer.trim().toLowerCase() === item.answer.trim().toLowerCase();
+  const result = await db.execute(sql`
+    WITH locked_session AS MATERIALIZED (
+      SELECT ts.id, ts.item_ids
+      FROM test_sessions AS ts
+      WHERE ts.id = ${args.sessionId}
+        AND ts.user_id = ${args.userId}
+        AND ts.reviewer_id = ${args.reviewerId}
+        AND ts.view_revision = ${args.expectedRevision}
+        AND ts.mode = 'untimed'::test_session_mode
+        AND ts.expires_at IS NULL
+        AND ts.status = 'active'::test_session_status
+        AND ts.item_ids @> CAST(${JSON.stringify([args.itemId])} AS jsonb)
+      FOR UPDATE
+    ),
+    existing_attempt AS MATERIALIZED (
+      SELECT a.selected_answer, a.correct
+      FROM test_attempts AS a
+      WHERE a.session_id = ${args.sessionId}
+        AND a.item_id = ${args.itemId}
+      LIMIT 1
+    ),
+    current_view AS MATERIALIZED (
+      SELECT v.revision
+      FROM views AS v
+      WHERE v.reviewer_id = ${args.reviewerId}
+        AND v.kind = 'test_me'::view_kind
+        AND v.revision = ${args.expectedRevision}
+      FOR UPDATE
+    ),
+    written AS (
+      INSERT INTO test_attempts (
+        user_id,
+        reviewer_id,
+        session_id,
+        view_revision,
+        item_id,
+        selected_answer,
+        correct
+      )
+      SELECT
+        ${args.userId},
+        ${args.reviewerId},
+        locked_session.id,
+        current_view.revision,
+        ${args.itemId},
+        ${args.selectedAnswer},
+        ${correct}
+      FROM locked_session
+      CROSS JOIN current_view
+      ON CONFLICT (session_id, item_id)
+        WHERE session_id IS NOT NULL
+      DO UPDATE SET
+        selected_answer = test_attempts.selected_answer,
+        correct = test_attempts.correct,
+        attempted_at = test_attempts.attempted_at
+      RETURNING
+        id,
+        selected_answer,
+        correct,
+        (xmax = 0) AS inserted
+    ),
+    progressed AS (
+      UPDATE test_sessions AS ts
+      SET answered_count = ts.answered_count + 1,
+          status = CASE
+            WHEN ts.answered_count + 1 >= COALESCE(jsonb_array_length(ts.item_ids), 0)
+              THEN 'completed'::test_session_status
+            ELSE 'active'::test_session_status
+          END,
+          completed_at = CASE
+            WHEN ts.answered_count + 1 >= COALESCE(jsonb_array_length(ts.item_ids), 0)
+              THEN NOW()
+            ELSE ts.completed_at
+          END,
+          updated_at = NOW()
+      WHERE ts.id = ${args.sessionId}
+        AND ts.status = 'active'::test_session_status
+        AND EXISTS (SELECT 1 FROM written AS w WHERE w.inserted)
+      RETURNING status, answered_count, completed_at
+    )
+    SELECT
+      CASE
+        WHEN EXISTS (SELECT 1 FROM written)
+          THEN 'written'
+        WHEN EXISTS (
+          SELECT 1 FROM test_sessions AS ts
+          WHERE ts.id = ${args.sessionId}
+            AND ts.user_id = ${args.userId}
+            AND ts.reviewer_id = ${args.reviewerId}
+            AND ts.mode = 'untimed'::test_session_mode
+            AND ts.view_revision <> ${args.expectedRevision}
+        ) THEN 'stale'
+        WHEN EXISTS (
+          SELECT 1 FROM test_sessions AS ts
+          WHERE ts.id = ${args.sessionId}
+            AND ts.user_id = ${args.userId}
+            AND ts.reviewer_id = ${args.reviewerId}
+            AND ts.mode = 'untimed'::test_session_mode
+            AND ts.view_revision = ${args.expectedRevision}
+            AND NOT (ts.item_ids @> CAST(${JSON.stringify([args.itemId])} AS jsonb))
+        ) THEN 'invalid'
+        WHEN EXISTS (
+          SELECT 1 FROM test_sessions AS ts
+          WHERE ts.id = ${args.sessionId}
+            AND ts.user_id = ${args.userId}
+            AND ts.reviewer_id = ${args.reviewerId}
+            AND ts.status = 'completed'::test_session_status
+        ) THEN 'completed'
+        WHEN EXISTS (SELECT 1 FROM locked_session)
+          THEN 'stale'
+        ELSE 'missing'
+      END AS outcome,
+      COALESCE(
+        (SELECT w.selected_answer FROM written AS w LIMIT 1),
+        (SELECT a.selected_answer FROM existing_attempt AS a LIMIT 1)
+      ) AS selected_answer,
+      COALESCE(
+        (SELECT w.correct FROM written AS w LIMIT 1),
+        (SELECT a.correct FROM existing_attempt AS a LIMIT 1)
+      ) AS correct,
+      COALESCE((SELECT w.inserted FROM written AS w LIMIT 1), FALSE) AS inserted,
+      EXISTS (
+        SELECT 1
+        FROM progressed AS p
+        WHERE p.status = 'completed'::test_session_status
+      ) AS completed
+  `);
+  const row = result.rows[0] as
+    | {
+      outcome?: string;
+      selected_answer?: string;
+      correct?: boolean;
+      inserted?: boolean;
+      completed?: boolean;
+    }
+    | undefined;
+
+  async function reread(): Promise<UntimedTestAttemptResult> {
+    const [currentSession] = await db
+      .select({
+        status: testSessions.status,
+        viewRevision: testSessions.viewRevision,
+        itemIds: testSessions.itemIds,
+      })
+      .from(testSessions)
+      .where(
+        and(
+          eq(testSessions.id, args.sessionId),
+          eq(testSessions.userId, args.userId),
+          eq(testSessions.reviewerId, args.reviewerId),
+          eq(testSessions.mode, "untimed"),
+        ),
+      )
+      .limit(1);
+    const [existing] = await db
+      .select({
+        selectedAnswer: testAttempts.selectedAnswer,
+        correct: testAttempts.correct,
+      })
+      .from(testAttempts)
+      .where(
+        and(
+          eq(testAttempts.sessionId, args.sessionId),
+          eq(testAttempts.itemId, args.itemId),
+        ),
+      )
+      .limit(1);
+    const decision = resolveUntimedAttemptReread({
+      session: currentSession
+        ? {
+          status: currentSession.status,
+          viewRevision: currentSession.viewRevision,
+          itemIds: asItemIds(currentSession.itemIds),
+        }
+        : null,
+      existing: existing ? { selectedAnswer: existing.selectedAnswer } : null,
+      expectedRevision: args.expectedRevision,
+      itemId: args.itemId,
+      submitted: args.selectedAnswer,
+    });
+    if (decision === "missing") return { missing: true };
+    if (decision === "stale") return { stale: true };
+    if (decision === "invalid") return { invalid: true };
+    if (decision === "conflict" || !existing) return { conflict: true };
+    return {
+      stats: await listTestAttemptStats(args.reviewerId, args.userId),
+      alreadySaved: true,
+      completed: currentSession?.status === "completed",
+      answer: { itemId: args.itemId, selectedAnswer: existing.selectedAnswer, correct: existing.correct },
+    };
+  }
+
+  if (row?.outcome === "invalid") return { invalid: true };
+  // Keep a superseded sitting as stale. The follow-up read reports missing
+  // when the stored revision still matches the caller and no answer row exists.
+  if (row?.outcome === "stale") return { stale: true };
+  if (row?.outcome !== "written" || typeof row.selected_answer !== "string") {
+    return reread();
+  }
+  if (row.selected_answer !== args.selectedAnswer) return { conflict: true };
+  let completed = row.completed === true;
+  if (!completed) {
+    const [currentSession] = await db
+      .select({ status: testSessions.status })
+      .from(testSessions)
+      .where(
+        and(
+          eq(testSessions.id, args.sessionId),
+          eq(testSessions.userId, args.userId),
+          eq(testSessions.reviewerId, args.reviewerId),
+        ),
+      )
+      .limit(1);
+    completed = currentSession?.status === "completed";
+  }
+  return {
+    stats: await listTestAttemptStats(args.reviewerId, args.userId),
+    alreadySaved: row.inserted !== true,
+    completed,
+    answer: {
+      itemId: args.itemId,
+      selectedAnswer: row.selected_answer,
+      correct: row.correct === true,
+    },
+  };
+}
+
 export async function updateStudyView(args: {
   reviewerId: string;
   userId: string;
@@ -1290,6 +2249,101 @@ export async function updateStudyView(args: {
 }) {
   const reviewer = await getReviewer(args.reviewerId, args.userId);
   if (!reviewer) return null;
+  if (args.content !== undefined) {
+    const normalizedContent = normalizeDocumentText(args.content);
+    const current = await getViewForReviewer(args.reviewerId, args.userId, args.kind);
+    if (!current || current.revision !== args.expectedRevision) return { stale: true as const };
+    const activeAnnotations = args.kind === "locked_in" || args.kind === "summary"
+      ? await listAnnotationsForReviewer(args.reviewerId, args.userId, args.kind, { activeOnly: true })
+      : [];
+    const nextContentRevision = current.contentRevision + 1;
+    const remapModel = renderedStudyTextModel(normalizedContent);
+    const initialMappings: Array<({ mapped: true } & RemappedAnnotation) | { id: string; mapped: false }> = activeAnnotations.map((annotation) => {
+      const mapped = remapAnnotation(annotation, normalizedContent, nextContentRevision, remapModel);
+      return mapped
+        ? { mapped: true as const, ...mapped }
+        : { id: annotation.id, mapped: false as const };
+    });
+    const acceptedMappedIds = new Set(
+      selectRenderableAnnotations(
+        initialMappings
+          .filter((mapping): mapping is ({ mapped: true } & RemappedAnnotation) => mapping.mapped)
+          .map((mapping) => ({ ...mapping, archivedAt: null })),
+      ).map((mapping) => mapping.id),
+    );
+    const annotationMappings = initialMappings.map((mapping) =>
+      mapping.mapped && !acceptedMappedIds.has(mapping.id)
+        ? { id: mapping.id, mapped: false }
+        : mapping,
+    );
+    const result = await db.execute(sql`
+      WITH target AS MATERIALIZED (
+        SELECT v.id,
+          v.revision,
+          v.content_revision,
+          v.annotation_revision
+        FROM views v
+        INNER JOIN reviewers r ON r.id = v.reviewer_id
+        INNER JOIN topics t ON t.id = r.topic_id
+        WHERE v.reviewer_id = ${args.reviewerId}
+          AND t.user_id = ${args.userId}
+          AND v.kind = ${args.kind}::view_kind
+          AND v.revision = ${args.expectedRevision}
+        FOR UPDATE OF v
+      ), updated_view AS (
+        UPDATE views v
+        SET content = ${normalizedContent},
+            revision = v.revision + 1,
+            content_revision = v.content_revision + 1,
+            annotation_revision = v.annotation_revision + 1,
+            is_edited = TRUE,
+            updated_at = NOW()
+        FROM target
+        WHERE v.id = target.id
+        RETURNING v.id, v.content_revision
+      ), input_mappings AS (
+        SELECT item.id,
+          item.mapped,
+          item.start_offset,
+          item.end_offset,
+          item.quote,
+          item.prefix,
+          item.suffix,
+          item.content_revision
+        FROM jsonb_to_recordset(CAST(${JSON.stringify(annotationRemapRows(annotationMappings))} AS jsonb))
+          AS item(
+            id uuid,
+            mapped boolean,
+            start_offset integer,
+            end_offset integer,
+            quote text,
+            prefix text,
+            suffix text,
+            content_revision integer
+          )
+      ), updated_annotations AS (
+        UPDATE study_annotations a
+        SET content_revision = CASE WHEN m.mapped THEN m.content_revision ELSE a.content_revision END,
+            start_offset = CASE WHEN m.mapped THEN m.start_offset ELSE a.start_offset END,
+            end_offset = CASE WHEN m.mapped THEN m.end_offset ELSE a.end_offset END,
+            quote = CASE WHEN m.mapped THEN m.quote ELSE a.quote END,
+            prefix = CASE WHEN m.mapped THEN m.prefix ELSE a.prefix END,
+            suffix = CASE WHEN m.mapped THEN m.suffix ELSE a.suffix END,
+            archived_at = CASE WHEN m.mapped THEN NULL ELSE NOW() END,
+            archive_reason = CASE WHEN m.mapped THEN NULL ELSE 'content_changed' END,
+            updated_at = NOW()
+        FROM input_mappings m
+        CROSS JOIN updated_view
+        WHERE a.id = m.id
+          AND a.view_id = updated_view.id
+        RETURNING a.id
+      )
+      SELECT updated_view.id, updated_view.content_revision
+      FROM updated_view
+    `);
+    if (result.rows.length === 0) return { stale: true as const };
+    return getLatestView(args.reviewerId, args.kind);
+  }
   const [row] = await db
     .update(views)
     .set({
@@ -1468,6 +2522,7 @@ export async function syncGeneratedCards(args: {
         g.reviewer_id,
         g.user_id,
         g.generation_run_id,
+        g.intent,
         g.force_overwrite,
         g.expected_protected
       FROM generation_jobs AS g
@@ -1486,12 +2541,13 @@ export async function syncGeneratedCards(args: {
       FROM jsonb_to_recordset(CAST(${generatedJson} AS jsonb))
         AS item(id text, front text, back text)
     ), locked_cards AS MATERIALIZED (
-      SELECT c.id, c.revision, c.is_edited, c.is_pinned, c.archived_at
+      SELECT c.id, c.source_key, c.front, c.back, c.origin_generation_run_id,
+        c.revision, c.is_edited, c.is_pinned, c.archived_at
       FROM cards c
       INNER JOIN claimed g ON g.reviewer_id = c.reviewer_id
       FOR UPDATE
     ), current_protected AS (
-      SELECT CONCAT('card:', c.id::text) AS key, c.revision
+      SELECT CONCAT('card:', c.source_key) AS key, c.revision
       FROM locked_cards c
       WHERE c.archived_at IS NULL
         AND (c.is_edited OR c.is_pinned)
@@ -1503,32 +2559,79 @@ export async function syncGeneratedCards(args: {
       )
         AS entry(key text, revision integer)
       WHERE entry.key LIKE 'card:%'
+    ), protection_valid AS (
+      SELECT 1 AS ok
+      FROM claimed
+      WHERE (
+        NOT claimed.force_overwrite
+        OR (
+          NOT EXISTS (
+            SELECT 1
+            FROM current_protected current_row
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM expected_protected expected_row
+              WHERE expected_row.key = current_row.key
+                AND expected_row.revision = current_row.revision
+            )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM expected_protected expected_row
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM current_protected current_row
+              WHERE current_row.key = expected_row.key
+                AND current_row.revision = expected_row.revision
+            )
+          )
+        )
+      )
     ), valid AS (
       SELECT 1 AS ok
       FROM claimed
-      WHERE NOT claimed.force_overwrite
-         OR (
-           NOT EXISTS (
-             SELECT 1
-             FROM current_protected current_row
-             WHERE NOT EXISTS (
-               SELECT 1
-               FROM expected_protected expected_row
-               WHERE expected_row.key = current_row.key
-                 AND expected_row.revision = current_row.revision
-             )
-           )
-           AND NOT EXISTS (
-             SELECT 1
-             FROM expected_protected expected_row
-             WHERE NOT EXISTS (
-               SELECT 1
-               FROM current_protected current_row
-               WHERE current_row.key = expected_row.key
-                 AND current_row.revision = expected_row.revision
-             )
-           )
-         )
+      CROSS JOIN protection_valid
+      WHERE (
+        claimed.force_overwrite
+        OR NOT EXISTS (
+          SELECT 1
+          FROM locked_cards protected_card
+          INNER JOIN input ON input.id = protected_card.source_key
+          WHERE protected_card.archived_at IS NULL
+            AND (protected_card.is_edited OR protected_card.is_pinned)
+        )
+      )
+      AND (
+        claimed.intent <> 'generate_missing'::generation_job_intent
+        OR NOT EXISTS (
+          SELECT 1
+          FROM locked_cards existing_card
+          INNER JOIN input ON input.id = existing_card.source_key
+        )
+      )
+    ), already_persisted AS (
+      SELECT 1 AS ok
+      FROM claimed
+      CROSS JOIN protection_valid
+      WHERE NOT EXISTS (
+          SELECT 1
+          FROM input
+          LEFT JOIN locked_cards existing_card
+            ON existing_card.source_key = input.id
+          WHERE existing_card.id IS NULL
+             OR existing_card.archived_at IS NOT NULL
+             OR existing_card.front <> input.front
+             OR existing_card.back <> input.back
+             OR existing_card.origin_generation_run_id IS DISTINCT FROM claimed.generation_run_id
+             OR (NOT claimed.force_overwrite AND (existing_card.is_edited OR existing_card.is_pinned))
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM locked_cards extra_card
+          WHERE extra_card.archived_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM input WHERE input.id = extra_card.source_key)
+            AND (claimed.force_overwrite OR (NOT extra_card.is_edited AND NOT extra_card.is_pinned))
+        )
     ), upserted AS (
       INSERT INTO cards (
         reviewer_id,
@@ -1556,8 +2659,10 @@ export async function syncGeneratedCards(args: {
         is_pinned = CASE WHEN (SELECT force_overwrite FROM claimed) THEN FALSE ELSE cards.is_pinned END,
         revision = cards.revision + 1,
         updated_at = NOW()
-      WHERE (SELECT force_overwrite FROM claimed)
-         OR (cards.is_edited = FALSE AND cards.is_pinned = FALSE)
+      WHERE (SELECT intent FROM claimed) <> 'generate_missing'::generation_job_intent
+        AND NOT EXISTS (SELECT 1 FROM already_persisted)
+        AND ((SELECT force_overwrite FROM claimed)
+          OR (cards.is_edited = FALSE AND cards.is_pinned = FALSE))
       RETURNING id
     ), archived AS (
       UPDATE cards c
@@ -1565,11 +2670,19 @@ export async function syncGeneratedCards(args: {
       FROM valid
       WHERE c.reviewer_id = ${args.reviewerId}
         AND NOT EXISTS (SELECT 1 FROM input WHERE input.id = c.source_key)
+        AND (SELECT intent FROM claimed) <> 'generate_missing'::generation_job_intent
+        AND NOT EXISTS (SELECT 1 FROM already_persisted)
         AND ((SELECT force_overwrite FROM claimed)
           OR (c.is_edited = FALSE AND c.is_pinned = FALSE))
       RETURNING c.id
     )
-    SELECT ok FROM valid
+    SELECT ok
+    FROM valid
+    WHERE (SELECT intent FROM claimed) <> 'generate_missing'::generation_job_intent
+       OR (SELECT COUNT(*) FROM upserted) = (SELECT COUNT(*) FROM input)
+    UNION ALL
+    SELECT ok
+    FROM already_persisted
   `);
   return applied.rows.length > 0;
 }
@@ -1678,6 +2791,7 @@ export async function reviewCard(args: {
   cardId: string;
   expectedRevision: number;
   rating: CardRating;
+  clientRequestId?: string;
 }) {
   const reviewer = await getReviewer(args.reviewerId, args.userId);
   if (!reviewer) return null;
@@ -1687,7 +2801,9 @@ export async function reviewCard(args: {
     .where(and(eq(cards.id, args.cardId), eq(cards.reviewerId, args.reviewerId)))
     .limit(1);
   if (!current) return null;
-  if (current.revision !== args.expectedRevision) return { stale: true as const };
+  if (!args.clientRequestId && current.revision !== args.expectedRevision) {
+    return { stale: true as const };
+  }
   const next = scheduleCardReview(
     {
       dueAt: current.dueAt,
@@ -1700,20 +2816,8 @@ export async function reviewCard(args: {
     reviewer.examDate,
   );
   const reviewedAt = new Date();
-  const result = await db.execute(sql`
-    WITH updated AS (
-      UPDATE cards
-      SET due_at = ${next.dueAt},
-          interval_days = ${next.intervalDays},
-          repetitions = ${next.repetitions},
-          ease_factor = ${next.easeFactor},
-          last_reviewed_at = ${reviewedAt},
-          revision = revision + 1,
-          updated_at = ${reviewedAt}
-      WHERE id = ${args.cardId}
-        AND reviewer_id = ${args.reviewerId}
-        AND revision = ${args.expectedRevision}
-      RETURNING
+  const requestId = args.clientRequestId ?? null;
+  const returningCard = sql`
         id,
         reviewer_id AS "reviewerId",
         source_key AS "sourceKey",
@@ -1727,12 +2831,85 @@ export async function reviewCard(args: {
         repetitions,
         ease_factor AS "easeFactor",
         last_reviewed_at AS "lastReviewedAt"
+  `;
+  if (!requestId) {
+    const result = await db.execute(sql`
+      WITH updated AS (
+        UPDATE cards
+        SET due_at = ${next.dueAt},
+            interval_days = ${next.intervalDays},
+            repetitions = ${next.repetitions},
+            ease_factor = ${next.easeFactor},
+            last_reviewed_at = ${reviewedAt},
+            revision = revision + 1,
+            updated_at = ${reviewedAt}
+        WHERE id = ${args.cardId}
+          AND reviewer_id = ${args.reviewerId}
+          AND revision = ${args.expectedRevision}
+        RETURNING ${returningCard}
+      ), inserted AS (
+        INSERT INTO card_reviews (
+          user_id,
+          reviewer_id,
+          card_id,
+          rating,
+          due_at,
+          interval_days,
+          repetitions,
+          ease_factor,
+          reviewed_at
+        )
+        SELECT
+          ${args.userId},
+          ${args.reviewerId},
+          updated.id,
+          ${args.rating}::card_rating,
+          updated."dueAt",
+          updated."intervalDays",
+          updated.repetitions,
+          updated."easeFactor",
+          ${reviewedAt}
+        FROM updated
+        RETURNING card_id
+      )
+      SELECT updated.*
+      FROM updated
+      INNER JOIN inserted ON inserted.card_id = updated.id
+    `);
+    const [updated] = result.rows;
+    if (!updated) return { stale: true as const };
+    return normalizeReviewedCard(updated, current);
+  }
+  const result = await db.execute(sql`
+    WITH existing_request AS MATERIALIZED (
+      SELECT cr.card_id
+      FROM card_reviews AS cr
+      WHERE cr.card_id = ${args.cardId}
+        AND cr.user_id = ${args.userId}
+        AND cr.client_request_id = ${requestId}
+      LIMIT 1
+    ),
+    updated AS (
+      UPDATE cards
+      SET due_at = ${next.dueAt},
+          interval_days = ${next.intervalDays},
+          repetitions = ${next.repetitions},
+          ease_factor = ${next.easeFactor},
+          last_reviewed_at = ${reviewedAt},
+          revision = revision + 1,
+          updated_at = ${reviewedAt}
+      WHERE id = ${args.cardId}
+        AND reviewer_id = ${args.reviewerId}
+        AND revision = ${args.expectedRevision}
+        AND NOT EXISTS (SELECT 1 FROM existing_request)
+      RETURNING ${returningCard}
     ), inserted AS (
       INSERT INTO card_reviews (
         user_id,
         reviewer_id,
         card_id,
         rating,
+        client_request_id,
         due_at,
         interval_days,
         repetitions,
@@ -1744,12 +2921,16 @@ export async function reviewCard(args: {
         ${args.reviewerId},
         updated.id,
         ${args.rating}::card_rating,
+        ${requestId},
         updated."dueAt",
         updated."intervalDays",
         updated.repetitions,
         updated."easeFactor",
         ${reviewedAt}
       FROM updated
+      ON CONFLICT (card_id, client_request_id)
+        WHERE client_request_id IS NOT NULL
+      DO NOTHING
       RETURNING card_id
     )
     SELECT updated.*
@@ -1757,8 +2938,27 @@ export async function reviewCard(args: {
     INNER JOIN inserted ON inserted.card_id = updated.id
   `);
   const [updated] = result.rows;
-  if (!updated) return { stale: true as const };
-  return normalizeReviewedCard(updated, current);
+  if (updated) return normalizeReviewedCard(updated, current);
+  const [replay] = await db
+    .select({ cardId: cardReviews.cardId })
+    .from(cardReviews)
+    .where(
+      and(
+        eq(cardReviews.cardId, args.cardId),
+        eq(cardReviews.userId, args.userId),
+        eq(cardReviews.clientRequestId, requestId),
+      ),
+    )
+    .limit(1);
+  if (replay) {
+    const [latest] = await db
+      .select()
+      .from(cards)
+      .where(and(eq(cards.id, args.cardId), eq(cards.reviewerId, args.reviewerId)))
+      .limit(1);
+    return latest ?? current;
+  }
+  return { stale: true as const };
 }
 
 export async function updateReviewerExamDate(
@@ -1784,16 +2984,39 @@ export async function protectedContentForGeneration(
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer) return [];
   const rows = await db
-    .select({ kind: views.kind, revision: views.revision, isEdited: views.isEdited, isPinned: views.isPinned })
+    .select({
+      kind: views.kind,
+      revision: views.revision,
+      annotationRevision: views.annotationRevision,
+      isEdited: views.isEdited,
+      isPinned: views.isPinned,
+    })
     .from(views)
     .where(eq(views.reviewerId, reviewerId));
   const kinds = kind === "locked_in" ? ["locked_in", "summary", "test_me", "carded"] : [kind];
   const protectedKinds: Array<{ key: string; revision: number }> = rows
     .filter((row) => kinds.includes(row.kind) && (row.isEdited || row.isPinned))
     .map((row) => ({ key: `view:${row.kind}`, revision: row.revision }));
+  const annotationRows = await db
+    .select({ kind: annotations.kind, revision: views.annotationRevision })
+    .from(annotations)
+    .innerJoin(views, eq(views.id, annotations.viewId))
+    .where(
+      and(
+        eq(annotations.reviewerId, reviewerId),
+        isNull(annotations.archivedAt),
+      ),
+    );
+  const seenAnnotationKinds = new Set<string>();
+  for (const row of annotationRows) {
+    if (kinds.includes(row.kind) && !seenAnnotationKinds.has(row.kind)) {
+      protectedKinds.push({ key: `annotations:${row.kind}`, revision: row.revision });
+      seenAnnotationKinds.add(row.kind);
+    }
+  }
   if (kind === "locked_in" || kind === "carded") {
     const protectedCards = await db
-      .select({ id: cards.id, revision: cards.revision })
+      .select({ sourceKey: cards.sourceKey, revision: cards.revision })
       .from(cards)
       .where(
         and(
@@ -1803,7 +3026,7 @@ export async function protectedContentForGeneration(
         ),
       );
     protectedKinds.push(
-      ...protectedCards.map((card) => ({ key: `card:${card.id}`, revision: card.revision })),
+      ...protectedCards.map((card) => ({ key: `card:${card.sourceKey}`, revision: card.revision })),
     );
   }
   return protectedKinds;
@@ -2039,6 +3262,50 @@ export async function createGenerationJob(
   return row;
 }
 
+/** Return persisted mode presence for server-side missing-mode planning. */
+export async function getGenerationExistingKinds(
+  reviewerId: string,
+  userId: string,
+): Promise<Partial<Record<GenerateKind, boolean>>> {
+  const reviewer = await getReviewer(reviewerId, userId);
+  if (!reviewer) return {};
+  const rows = await db
+    .select({ kind: views.kind, content: views.content, contentJson: views.contentJson })
+    .from(views)
+    .where(eq(views.reviewerId, reviewerId));
+  return Object.fromEntries(
+    rows.map((row) => [
+      row.kind,
+      Boolean(row.content?.trim()) || (Array.isArray(row.contentJson) && row.contentJson.length > 0),
+    ]),
+  ) as Partial<Record<GenerateKind, boolean>>;
+}
+
+/** Snapshot revisions for dependencies that are not part of this run. */
+export async function getGenerationUpstreamRevisions(
+  reviewerId: string,
+  userId: string,
+  targetKinds: readonly GenerateKind[],
+): Promise<Partial<Record<GenerateKind, number>>> {
+  const reviewer = await getReviewer(reviewerId, userId);
+  if (!reviewer) return {};
+  const target = new Set(targetKinds);
+  const upstreamKinds = new Set<GenerateKind>();
+  for (const kind of targetKinds) {
+    if (kind === "summary" || kind === "test_me") upstreamKinds.add("locked_in");
+    if (kind === "carded") upstreamKinds.add("summary");
+  }
+  const rows = await db
+    .select({ kind: views.kind, revision: views.revision })
+    .from(views)
+    .where(eq(views.reviewerId, reviewerId));
+  return Object.fromEntries(
+    rows
+      .filter((row) => upstreamKinds.has(row.kind) && !target.has(row.kind))
+      .map((row) => [row.kind, row.revision]),
+  ) as Partial<Record<GenerateKind, number>>;
+}
+
 /**
  * Return the one resumable job for a reviewer. Terminal jobs are marked
  * inactive and remain available as history without blocking a new run.
@@ -2104,6 +3371,73 @@ export async function getLatestFullGenerationJobForReviewer(
   return row ?? null;
 }
 
+/** Reactivate a terminal run so Retry/Resume preserves its frozen scope. */
+export async function reactivateGenerationJobForResume(args: {
+  id: string;
+  reviewerId: string;
+  userId: string;
+}): Promise<GenerationJob | null> {
+  try {
+    const [row] = await db
+      .update(generationJobs)
+      .set({
+        status: "queued",
+        active: true,
+        errorCode: null,
+        errorMessage: null,
+        finishedAt: null,
+        claimToken: null,
+        claimExpiresAt: null,
+        claimedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(generationJobs.id, args.id),
+          eq(generationJobs.reviewerId, args.reviewerId),
+          eq(generationJobs.userId, args.userId),
+          eq(generationJobs.active, false),
+          sql`${generationJobs.step} IS NOT NULL`,
+          or(eq(generationJobs.status, "partial"), eq(generationJobs.status, "failed")),
+        ),
+      )
+      .returning();
+    if (row) return row;
+
+    // A concurrent request can win the same terminal-row update without
+    // colliding with the active-job partial index. Re-read this exact row so
+    // the caller adopts its now-active state instead of returning the stale
+    // terminal snapshot it already had.
+    const [current] = await db
+      .select()
+      .from(generationJobs)
+      .where(
+        and(
+          eq(generationJobs.id, args.id),
+          eq(generationJobs.reviewerId, args.reviewerId),
+          eq(generationJobs.userId, args.userId),
+        ),
+      )
+      .limit(1);
+    return current?.active && (current.status === "queued" || current.status === "running")
+      ? current
+      : null;
+  } catch (error) {
+    // Another request may have created/reactivated the reviewer's one active
+    // job between its read and this update. Reuse that winner rather than
+    // leaking the partial-index 23505 as an HTTP 500.
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "23505"
+    ) {
+      return getActiveGenerationJobForReviewer(args.reviewerId, args.userId);
+    }
+    throw error;
+  }
+}
+
 /**
  * Create a job unless another request won the partial unique index race.
  * This keeps the initial POST idempotent under double-clicks and retries.
@@ -2161,6 +3495,12 @@ export async function claimGenerationJobStep(args: {
         eq(generationJobs.userId, args.userId),
         eq(generationJobs.active, true),
         eq(generationJobs.step, args.step),
+        // Legacy rows have an empty target list and are reconstructed by the
+        // route; new rows must never claim a step outside their frozen scope.
+        or(
+          sql`${generationJobs.targetKinds} = '[]'::jsonb`,
+          sql`${generationJobs.targetKinds} @> ${JSON.stringify([args.step])}::jsonb`,
+        ),
         or(eq(generationJobs.status, "queued"), eq(generationJobs.status, "running")),
         or(isNull(generationJobs.claimExpiresAt), lt(generationJobs.claimExpiresAt, now)),
       ),
@@ -2178,6 +3518,8 @@ export async function updateClaimedGenerationJob(
       GenerationJob,
       | "status"
       | "step"
+      | "completedKinds"
+      | "upstreamRevisions"
       | "errorCode"
       | "errorMessage"
       | "modelUsed"
@@ -2205,6 +3547,61 @@ export async function updateClaimedGenerationJob(
 }
 
 /**
+ * Commit terminal success and the reviewer's generation timestamp together.
+ * Neon's HTTP driver does not require an interactive transaction here: one
+ * data-modifying statement makes the two writes an all-or-nothing boundary.
+ */
+export async function completeClaimedGenerationJob(args: {
+  id: string;
+  reviewerId: string;
+  userId: string;
+  claimToken: string;
+  step: GenerationJobStep;
+  completedKinds: GenerationJob["completedKinds"];
+  upstreamRevisions: GenerationJob["upstreamRevisions"];
+  modelUsed: string;
+  finishedAt: Date;
+}): Promise<GenerationJob | null> {
+  const result = await db.execute(sql`
+    WITH completed AS (
+      UPDATE generation_jobs
+      SET status = 'succeeded'::generation_job_status,
+          step = ${args.step}::generation_job_step,
+          completed_kinds = CAST(${JSON.stringify(args.completedKinds)} AS jsonb),
+          upstream_revisions = CAST(${JSON.stringify(args.upstreamRevisions)} AS jsonb),
+          model_used = ${args.modelUsed},
+          error_code = NULL,
+          error_message = NULL,
+          active = FALSE,
+          finished_at = ${args.finishedAt},
+          claim_token = NULL,
+          claim_expires_at = NULL,
+          claimed_at = NULL,
+          updated_at = NOW()
+      WHERE id = ${args.id}
+        AND reviewer_id = ${args.reviewerId}
+        AND user_id = ${args.userId}
+        AND status IN ('queued', 'running')
+        AND active = TRUE
+        AND claim_token = ${args.claimToken}
+        AND claim_expires_at > NOW()
+      RETURNING reviewer_id, finished_at
+    ), reviewer_updated AS (
+      UPDATE reviewers r
+      SET last_generated_at = completed.finished_at
+      FROM completed
+      WHERE r.id = completed.reviewer_id
+      RETURNING r.id
+    )
+    SELECT completed.reviewer_id
+    FROM completed
+    INNER JOIN reviewer_updated ON reviewer_updated.id = completed.reviewer_id
+  `);
+  if (result.rows.length === 0) return null;
+  return getGenerationJobForReviewer(args.reviewerId, args.id, args.userId);
+}
+
+/**
  * Publish a generated view only if the exact live claim still belongs to this
  * worker. The CTE updates the claim and inserts the view in one SQL statement;
  * a recovered/expired worker receives false and cannot overwrite the newer
@@ -2222,7 +3619,8 @@ export async function persistViewForActiveClaim(args: {
   modelUsed: string;
   generatedAt: Date;
   forceOverwrite: boolean;
-}): Promise<boolean> {
+  cardItems?: Array<{ id: string; front: string; back: string }>;
+}): Promise<number | null> {
   if (args.content.length > MAX_GENERATED_MARKDOWN_CHARS) {
     throw new Error("Generated text exceeds the safe output limit");
   }
@@ -2245,7 +3643,31 @@ export async function persistViewForActiveClaim(args: {
   if (contentJson && contentJson.length > MAX_GENERATED_JSON_CHARS) {
     throw new Error("Generated structured output exceeds the safe size limit");
   }
-  const result = await db.execute(sql`
+  const generatedCardItems = args.step === "carded"
+    ? normalizeLearningIds(args.cardItems ?? [])
+    : [];
+  if (args.step === "carded" && (generatedCardItems.length === 0 || generatedCardItems.length > MAX_CARDED_ITEMS)) {
+    throw new Error("Generated card output must contain 1 to 100 items");
+  }
+  if (generatedCardItems.some(
+    (item) =>
+      item.id.trim().length < 1 ||
+      item.id.length > MAX_LEARNING_ID_CHARS ||
+      !item.front.trim() ||
+      !item.back.trim() ||
+      item.front.length > MAX_CARD_FRONT_CHARS ||
+      item.back.length > MAX_CARD_BACK_CHARS ||
+      !isValidCardFront(item.front),
+  )) {
+    throw new Error("Invalid generated card content");
+  }
+  const generatedCardsJson = JSON.stringify(generatedCardItems);
+  if (generatedCardsJson.length > MAX_GENERATED_JSON_CHARS) {
+    throw new Error("Generated card output exceeds the safe size limit");
+  }
+  let result: { rows: Array<{ revision?: number }> };
+  try {
+    result = await db.execute(sql`
     WITH claimed AS (
       UPDATE generation_jobs
       SET model_used = ${args.modelUsed}, updated_at = NOW()
@@ -2256,27 +3678,50 @@ export async function persistViewForActiveClaim(args: {
         AND step = ${args.step}::generation_job_step
         AND status IN ('queued', 'running')
         AND active = TRUE
-        AND claim_token = ${args.claimToken}
-        AND claim_expires_at > NOW()
-      RETURNING reviewer_id, generation_run_id, step, force_overwrite, expected_protected
+      AND claim_token = ${args.claimToken}
+      AND claim_expires_at > NOW()
+      RETURNING reviewer_id, generation_run_id, step, intent, force_overwrite, expected_protected, upstream_revisions
+    ), input AS (
+      SELECT item.id, item.front, item.back
+      FROM jsonb_to_recordset(CAST(${generatedCardsJson} AS jsonb))
+        AS item(id text, front text, back text)
     ), locked_views AS MATERIALIZED (
-      SELECT v.id, v.kind, v.revision, v.is_edited, v.is_pinned
+      SELECT v.id, v.kind, v.revision, v.content_revision, v.annotation_revision,
+        v.is_edited, v.is_pinned
       FROM views v
       INNER JOIN claimed c ON c.reviewer_id = v.reviewer_id
       WHERE v.kind::text = c.step::text
       FOR UPDATE
     ), locked_cards AS MATERIALIZED (
-      SELECT c2.id, c2.revision, c2.is_edited, c2.is_pinned, c2.archived_at
+      SELECT c2.id, c2.source_key, c2.revision, c2.is_edited, c2.is_pinned, c2.archived_at
       FROM cards c2
       INNER JOIN claimed c ON c.reviewer_id = c2.reviewer_id
       WHERE c.step = 'carded'::generation_job_step
       FOR UPDATE
+    ), locked_upstream_views AS MATERIALIZED (
+      SELECT upstream.kind::text AS kind, upstream.revision
+      FROM views upstream
+      INNER JOIN claimed c ON c.reviewer_id = upstream.reviewer_id
+      CROSS JOIN LATERAL jsonb_each_text(
+        COALESCE(c.upstream_revisions, '{}'::jsonb)
+      ) AS expected(kind, revision)
+      WHERE upstream.kind::text = expected.kind
+      FOR UPDATE OF upstream
     ), current_protected AS (
       SELECT CONCAT('view:', v.kind::text) AS key, v.revision
       FROM locked_views v
       WHERE (v.is_edited OR v.is_pinned)
       UNION ALL
-      SELECT CONCAT('card:', c2.id::text) AS key, c2.revision
+      SELECT CONCAT('annotations:', v.kind::text) AS key, v.annotation_revision
+      FROM locked_views v
+      WHERE EXISTS (
+        SELECT 1
+        FROM study_annotations a
+        WHERE a.view_id = v.id
+          AND a.archived_at IS NULL
+      )
+      UNION ALL
+      SELECT CONCAT('card:', c2.source_key) AS key, c2.revision
       FROM locked_cards c2
       WHERE c2.archived_at IS NULL
         AND (c2.is_edited OR c2.is_pinned)
@@ -2287,74 +3732,218 @@ export async function persistViewForActiveClaim(args: {
         COALESCE(c.expected_protected, '[]'::jsonb)
       ) AS entry(key text, revision integer)
       WHERE entry.key = CONCAT('view:', c.step::text)
+         OR entry.key = CONCAT('annotations:', c.step::text)
          OR (c.step = 'carded'::generation_job_step AND entry.key LIKE 'card:%')
     ), valid_claim AS (
       SELECT c.*
       FROM claimed c
-      WHERE NOT c.force_overwrite
-         OR (
-           NOT EXISTS (
-             SELECT 1
-             FROM current_protected current_row
-             WHERE NOT EXISTS (
-               SELECT 1
-               FROM expected_protected expected_row
-               WHERE expected_row.key = current_row.key
-                 AND expected_row.revision = current_row.revision
-             )
-           )
-           AND NOT EXISTS (
-             SELECT 1
-             FROM expected_protected expected_row
-             WHERE NOT EXISTS (
-               SELECT 1
-               FROM current_protected current_row
-               WHERE current_row.key = expected_row.key
-                 AND current_row.revision = expected_row.revision
-             )
-           )
-         )
+      WHERE (
+        NOT c.force_overwrite
+        OR (
+          NOT EXISTS (
+            SELECT 1
+            FROM current_protected current_row
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM expected_protected expected_row
+              WHERE expected_row.key = current_row.key
+                AND expected_row.revision = current_row.revision
+            )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM expected_protected expected_row
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM current_protected current_row
+              WHERE current_row.key = expected_row.key
+                AND current_row.revision = expected_row.revision
+            )
+          )
+        )
+      )
+      AND (c.force_overwrite OR NOT EXISTS (
+        SELECT 1
+        FROM locked_views protected_view
+        WHERE protected_view.is_edited OR protected_view.is_pinned
+      ))
+      AND (
+        c.intent <> 'generate_missing'::generation_job_intent
+        OR NOT EXISTS (SELECT 1 FROM locked_views)
+      )
+      AND (
+        c.step <> 'carded'::generation_job_step
+        OR c.force_overwrite
+        OR NOT EXISTS (
+          SELECT 1
+          FROM locked_cards protected_card
+          INNER JOIN input ON input.id = protected_card.source_key
+          WHERE protected_card.archived_at IS NULL
+            AND (protected_card.is_edited OR protected_card.is_pinned)
+        )
+      )
+      AND (
+        c.intent <> 'generate_missing'::generation_job_intent
+        OR NOT EXISTS (
+          SELECT 1
+          FROM locked_cards existing_card
+          INNER JOIN input ON input.id = existing_card.source_key
+        )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM jsonb_each_text(COALESCE(c.upstream_revisions, '{}'::jsonb)) expected(kind, revision)
+        LEFT JOIN locked_upstream_views upstream
+          ON upstream.kind = expected.kind
+        WHERE upstream.revision IS NULL
+           OR upstream.revision <> expected.revision::integer
+      )
+      AND (
+        SELECT COUNT(*) FROM locked_upstream_views
+      ) = (
+        SELECT COUNT(*)
+        FROM claimed expected_claim
+        CROSS JOIN LATERAL jsonb_object_keys(
+          COALESCE(expected_claim.upstream_revisions, '{}'::jsonb)
+        )
+      )
+    ), archived_annotations AS (
+      UPDATE study_annotations a
+      SET archived_at = ${args.generatedAt},
+          archive_reason = 'generated_replacement',
+          updated_at = ${args.generatedAt}
+      FROM valid_claim valid
+      INNER JOIN views target_view
+        ON target_view.reviewer_id = valid.reviewer_id
+       AND target_view.kind = valid.step::view_kind
+      WHERE valid.intent <> 'generate_missing'::generation_job_intent
+        AND a.view_id = target_view.id
+        AND a.archived_at IS NULL
+      RETURNING a.id
+    ), archived_annotation_count AS (
+      SELECT COUNT(*)::integer AS count
+      FROM archived_annotations
+    ), view_gate AS (
+      INSERT INTO views (
+        reviewer_id,
+        kind,
+        content,
+        content_json,
+        model_id,
+        generation_run_id,
+        generated_at,
+        revision,
+        is_edited,
+        is_pinned,
+        updated_at
+      )
+      SELECT
+        valid.reviewer_id,
+        valid.step::view_kind,
+        ${args.content},
+        CAST(${contentJson} AS jsonb),
+        ${args.modelUsed},
+        valid.generation_run_id,
+        ${args.generatedAt},
+        1,
+        FALSE,
+        FALSE,
+        ${args.generatedAt}
+      FROM valid_claim valid
+      CROSS JOIN archived_annotation_count
+      ON CONFLICT (reviewer_id, kind) DO UPDATE SET
+        content = EXCLUDED.content,
+        content_json = EXCLUDED.content_json,
+        model_id = EXCLUDED.model_id,
+        generation_run_id = EXCLUDED.generation_run_id,
+        generated_at = EXCLUDED.generated_at,
+        content_revision = views.content_revision + 1,
+        annotation_revision = views.annotation_revision + 1,
+        revision = views.revision + 1,
+        is_edited = FALSE,
+        is_pinned = FALSE,
+        updated_at = EXCLUDED.updated_at
+      WHERE (SELECT intent FROM valid_claim) <> 'generate_missing'::generation_job_intent
+        AND ((SELECT force_overwrite FROM valid_claim)
+          OR (views.is_edited = FALSE AND views.is_pinned = FALSE))
+      RETURNING id, revision
+    ), cards_upserted AS (
+      INSERT INTO cards (
+        reviewer_id,
+        source_key,
+        front,
+        back,
+        archived_at,
+        origin_generation_run_id
+      )
+      SELECT
+        valid.reviewer_id,
+        input.id,
+        input.front,
+        input.back,
+        NULL,
+        valid.generation_run_id
+      FROM valid_claim valid
+      CROSS JOIN view_gate
+      CROSS JOIN input
+      WHERE valid.step = 'carded'::generation_job_step
+      ON CONFLICT (reviewer_id, source_key) DO UPDATE SET
+        front = EXCLUDED.front,
+        back = EXCLUDED.back,
+        archived_at = NULL,
+        origin_generation_run_id = EXCLUDED.origin_generation_run_id,
+        is_edited = CASE WHEN (SELECT force_overwrite FROM valid_claim) THEN FALSE ELSE cards.is_edited END,
+        is_pinned = CASE WHEN (SELECT force_overwrite FROM valid_claim) THEN FALSE ELSE cards.is_pinned END,
+        revision = cards.revision + 1,
+        updated_at = NOW()
+      WHERE (SELECT intent FROM valid_claim) <> 'generate_missing'::generation_job_intent
+        AND ((SELECT force_overwrite FROM valid_claim)
+          OR (cards.is_edited = FALSE AND cards.is_pinned = FALSE))
+      RETURNING id
+    ), archived_cards AS (
+      UPDATE cards existing_card
+      SET archived_at = NOW(), updated_at = NOW()
+      FROM valid_claim valid
+      CROSS JOIN view_gate
+      WHERE valid.step = 'carded'::generation_job_step
+        AND existing_card.reviewer_id = valid.reviewer_id
+        AND NOT EXISTS (SELECT 1 FROM input WHERE input.id = existing_card.source_key)
+        AND valid.intent <> 'generate_missing'::generation_job_intent
+        AND (valid.force_overwrite OR (existing_card.is_edited = FALSE AND existing_card.is_pinned = FALSE))
+      RETURNING existing_card.id
+    ), card_write_guard AS (
+      SELECT CASE
+        WHEN NOT EXISTS (SELECT 1 FROM view_gate)
+          OR (SELECT step FROM valid_claim) <> 'carded'::generation_job_step
+          OR (SELECT COUNT(*) FROM cards_upserted) = (SELECT COUNT(*) FROM input)
+          THEN 1
+        ELSE 1 / (
+          SELECT COUNT(*)::integer - COUNT(*)::integer
+          FROM input
+        )
+      END AS ok
     )
-    INSERT INTO views (
-      reviewer_id,
-      kind,
-      content,
-      content_json,
-      model_id,
-      generation_run_id,
-      generated_at,
-      revision,
-      is_edited,
-      is_pinned,
-      updated_at
-    )
-    SELECT
-      ${args.reviewerId},
-      ${args.step}::view_kind,
-      ${args.content},
-      CAST(${contentJson} AS jsonb),
-      ${args.modelUsed},
-      generation_run_id,
-      ${args.generatedAt}
-      ,1
-      ,FALSE
-      ,FALSE
-      ,${args.generatedAt}
-    FROM valid_claim
-    ON CONFLICT (reviewer_id, kind) DO UPDATE SET
-      content = EXCLUDED.content,
-      content_json = EXCLUDED.content_json,
-      model_id = EXCLUDED.model_id,
-      generation_run_id = EXCLUDED.generation_run_id,
-      generated_at = EXCLUDED.generated_at,
-      revision = views.revision + 1,
-      is_edited = FALSE,
-      is_pinned = FALSE,
-      updated_at = EXCLUDED.updated_at
-    WHERE ${args.forceOverwrite} OR (views.is_edited = FALSE AND views.is_pinned = FALSE)
-    RETURNING id
-  `);
-  return result.rows.length > 0;
+    SELECT revision
+    FROM view_gate
+    CROSS JOIN card_write_guard
+    WHERE card_write_guard.ok = 1
+    `);
+  } catch (error) {
+    // The Carded cardinality guard deliberately aborts the statement when a
+    // concurrent insert makes the write set incomplete. Treat that rollback
+    // as a stale claim instead of surfacing an opaque database error.
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "22012"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+  const row = result.rows[0] as { revision?: number } | undefined;
+  return typeof row?.revision === "number" ? row.revision : null;
 }
 
 export async function updateGenerationJob(

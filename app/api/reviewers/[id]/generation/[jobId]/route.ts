@@ -4,6 +4,11 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import {
+  completedKindsForJob,
+  nextGenerationStep,
+  targetKindsForJob,
+} from "@/lib/generation-plan";
+import {
   classifyGenerationError,
   parseProviderError,
   publicGenerationErrorMessage,
@@ -14,12 +19,14 @@ import {
 } from "@/lib/generation-jobs";
 import {
   claimGenerationJobStep,
+  completeClaimedGenerationJob,
   getGenerationJobForReviewer,
   getLatestFullGenerationJobForReviewer,
   getLatestView,
   getReviewer,
   getViewForGeneration,
   persistViewForActiveClaim,
+  reactivateGenerationJobForResume,
   syncGeneratedCards,
   updateClaimedGenerationJob,
 } from "@/lib/queries";
@@ -33,13 +40,6 @@ import { generationJobs, reviewers, sources } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-
-const NEXT_STEP: Record<StudyPackStep, StudyPackStep | null> = {
-  locked_in: "summary",
-  summary: "test_me",
-  test_me: "carded",
-  carded: null,
-};
 
 type JobRow = typeof generationJobs.$inferSelect;
 
@@ -64,6 +64,7 @@ async function responseForJob(
   const viewsPayload = await loadGenerationViews(
     reviewerId,
     {
+      userId,
       latestJob: job,
       baselineFullJob: fullBaseline?.mode === "full"
         ? { mode: "full", generationRunId: fullBaseline.generationRunId, step: fullBaseline.step }
@@ -76,6 +77,7 @@ async function responseForJob(
   );
   return NextResponse.json(
     {
+      jobId: job.id,
       job: serializeGenerationJob(job),
       status: job.status,
       step: job.step,
@@ -135,8 +137,9 @@ async function getStepInput(job: JobRow, step: StudyPackStep) {
   }
 
   const upstreamKind = step === "carded" ? "summary" : "locked_in";
+  const targetKinds = targetKindsForJob(job);
   const upstream =
-    job.mode === "full"
+    job.mode === "full" && targetKinds.includes(upstreamKind)
       ? await getViewForGeneration(
           job.reviewerId,
           upstreamKind,
@@ -190,8 +193,23 @@ export async function POST(
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer) return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
 
-  const current = await getGenerationJobForReviewer(reviewerId, jobId, userId);
+  let current = await getGenerationJobForReviewer(reviewerId, jobId, userId);
   if (!current) return NextResponse.json({ error: "Job not found" }, { status: 404 });
+  if (
+    !current.active &&
+    current.step &&
+    (current.status === "partial" || current.status === "failed")
+  ) {
+    const resumed = await reactivateGenerationJobForResume({
+      id: current.id,
+      reviewerId,
+      userId,
+    });
+    if (resumed && resumed.id !== current.id) {
+      return responseForJob(reviewerId, userId, resumed, 202);
+    }
+    current = resumed ?? current;
+  }
   if (!current.active || !current.step) return responseForJob(reviewerId, userId, current);
 
   const step = current.step as StudyPackStep;
@@ -237,24 +255,55 @@ export async function POST(
           return responseForStaleClaim(reviewerId, userId, claimed, claimToken);
         }
       }
-      const next = claimed.mode === "single" ? null : NEXT_STEP[step];
+      const targetKinds = targetKindsForJob(claimed);
+      const next = claimed.mode === "single"
+        ? null
+        : nextGenerationStep(targetKinds, step);
       const finished = next === null;
-      const completed = await updateClaimedGenerationJob(claimed.id, claimToken, {
-        status: finished ? "succeeded" : "running",
-        step: finished ? step : next,
-        modelUsed: alreadyPersisted.modelId,
-        errorCode: null,
-        errorMessage: null,
-        active: !finished,
-        finishedAt: finished ? alreadyPersisted.generatedAt : null,
-        claimToken: null,
-        claimExpiresAt: null,
-        claimedAt: null,
-      });
+      const completedKinds = [...new Set([
+        ...completedKindsForJob(claimed),
+        step,
+      ])];
+      const nextUpstreamRevisions = {
+        ...(claimed.upstreamRevisions ?? {}),
+        [step]: alreadyPersisted.revision,
+      };
+      const completed = finished
+        ? await completeClaimedGenerationJob({
+            id: claimed.id,
+            reviewerId,
+            userId,
+            claimToken,
+            step,
+            completedKinds,
+            upstreamRevisions: nextUpstreamRevisions,
+            modelUsed: alreadyPersisted.modelId ?? "unknown",
+            finishedAt: alreadyPersisted.generatedAt,
+          })
+        : await updateClaimedGenerationJob(claimed.id, claimToken, {
+            status: "running",
+            step: next,
+            completedKinds,
+            upstreamRevisions: nextUpstreamRevisions,
+            modelUsed: alreadyPersisted.modelId,
+            errorCode: null,
+            errorMessage: null,
+            active: true,
+            finishedAt: null,
+            claimToken: null,
+            claimExpiresAt: null,
+            claimedAt: null,
+          });
       if (!completed) {
         const latest = await getGenerationJobForReviewer(reviewerId, jobId, userId);
         if (!latest) return NextResponse.json({ error: "Job not found" }, { status: 404 });
         return responseForJob(reviewerId, userId, latest, latest.active ? 202 : 200);
+      }
+      if (!finished) {
+        await db
+          .update(reviewers)
+          .set({ lastGeneratedAt: alreadyPersisted.generatedAt })
+          .where(eq(reviewers.id, reviewerId));
       }
       return responseForJob(reviewerId, userId, completed);
     }
@@ -286,6 +335,7 @@ export async function POST(
       modelUsed: generated.modelUsed,
       generatedAt,
       forceOverwrite: claimed.forceOverwrite,
+      cardItems: generated.payload.kind === "carded" ? generated.payload.content : undefined,
     });
     if (!persisted) {
       const stale = await updateClaimedGenerationJob(claimed.id, claimToken, {
@@ -305,44 +355,57 @@ export async function POST(
       return responseForJob(reviewerId, userId, latest, latest.active ? 202 : 200);
     }
 
-    if (step === "carded" && generated.payload.kind === "carded") {
-      const cardsSynced = await syncGeneratedCards({
-        jobId: claimed.id,
-        claimToken,
-        reviewerId,
-        userId,
-        items: generated.payload.content,
-        generationRunId: claimed.generationRunId,
-      });
-      if (!cardsSynced) {
-        return responseForStaleClaim(reviewerId, userId, claimed, claimToken);
-      }
-    }
-
-    const next = claimed.mode === "single" ? null : NEXT_STEP[step];
+    const targetKinds = targetKindsForJob(claimed);
+    const next = claimed.mode === "single"
+      ? null
+      : nextGenerationStep(targetKinds, step);
     const finished = next === null;
-    const completed = await updateClaimedGenerationJob(claimed.id, claimToken, {
-      status: finished ? "succeeded" : "running",
-      step: finished ? step : next,
-      modelUsed: generated.modelUsed,
-      errorCode: null,
-      errorMessage: null,
-      active: !finished,
-      finishedAt: finished ? generatedAt : null,
-      claimToken: null,
-      claimExpiresAt: null,
-      claimedAt: null,
-    });
+    const completedKinds = [...new Set([
+      ...completedKindsForJob(claimed),
+      step,
+    ])];
+    const nextUpstreamRevisions = {
+      ...(claimed.upstreamRevisions ?? {}),
+      [step]: persisted,
+    };
+    const completed = finished
+      ? await completeClaimedGenerationJob({
+          id: claimed.id,
+          reviewerId,
+          userId,
+          claimToken,
+          step,
+          completedKinds,
+          upstreamRevisions: nextUpstreamRevisions,
+          modelUsed: generated.modelUsed,
+          finishedAt: generatedAt,
+        })
+      : await updateClaimedGenerationJob(claimed.id, claimToken, {
+          status: "running",
+          step: next,
+          completedKinds,
+          upstreamRevisions: nextUpstreamRevisions,
+          modelUsed: generated.modelUsed,
+          errorCode: null,
+          errorMessage: null,
+          active: true,
+          finishedAt: null,
+          claimToken: null,
+          claimExpiresAt: null,
+          claimedAt: null,
+        });
     if (!completed) {
       const latest = await getGenerationJobForReviewer(reviewerId, jobId, userId);
       if (!latest) return NextResponse.json({ error: "Job not found" }, { status: 404 });
       return responseForJob(reviewerId, userId, latest, latest.active ? 202 : 200);
     }
 
-    await db
-      .update(reviewers)
-      .set({ lastGeneratedAt: generatedAt })
-      .where(eq(reviewers.id, reviewerId));
+    if (!finished) {
+      await db
+        .update(reviewers)
+        .set({ lastGeneratedAt: generatedAt })
+        .where(eq(reviewers.id, reviewerId));
+    }
 
     return responseForJob(reviewerId, userId, completed);
   } catch (error) {
@@ -356,7 +419,7 @@ export async function POST(
       requestId: parsedError.requestId,
     });
     const classified = classifyGenerationError(error);
-    const terminal = claimed.mode === "single" || step === "locked_in";
+    const terminal = targetKindsForJob(claimed).length === 1 || step === "locked_in";
     const failed = await updateClaimedGenerationJob(claimed.id, claimToken, {
       status: terminal ? "failed" : "partial",
       step,

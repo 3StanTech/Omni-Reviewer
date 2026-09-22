@@ -1,4 +1,5 @@
 import { PromptInputLimitError } from "@/lib/prompts";
+import { GenerationBudgetError } from "@/lib/ai-budgets";
 
 export type GenerationErrorCode =
   | "payment_required"
@@ -272,6 +273,14 @@ export function classifyGenerationError(err: unknown): ClassifiedGenerationError
   }
 
   if (err instanceof PromptInputLimitError) {
+    return {
+      code: "token_limit",
+      message: PUBLIC_GENERATION_MESSAGES.token_limit,
+      retryable: false,
+    };
+  }
+
+  if (err instanceof GenerationBudgetError) {
     return {
       code: "token_limit",
       message: PUBLIC_GENERATION_MESSAGES.token_limit,

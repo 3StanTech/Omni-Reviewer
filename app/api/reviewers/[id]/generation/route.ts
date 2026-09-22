@@ -4,6 +4,8 @@ import { auth } from "@/auth";
 import { loadGenerationViews, serializeGenerationJob } from "@/lib/generation-jobs";
 import {
   getActiveGenerationJobForReviewer,
+  getLatestFullGenerationJobForReviewer,
+  getLatestGenerationJobForReviewer,
   getReviewer,
 } from "@/lib/queries";
 
@@ -22,14 +24,33 @@ export async function GET(
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer) return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
 
-  const job = await getActiveGenerationJobForReviewer(reviewerId, userId);
+  const job =
+    (await getActiveGenerationJobForReviewer(reviewerId, userId)) ??
+    (await getLatestGenerationJobForReviewer(reviewerId, userId));
   if (!job) return NextResponse.json({ job: null, views: null });
 
+  const fullBaseline = job.mode === "single"
+    ? await getLatestFullGenerationJobForReviewer(reviewerId, userId)
+    : null;
+
   return NextResponse.json({
+    jobId: job.id,
+    status: job.status,
+    step: job.step,
     job: serializeGenerationJob(job),
     views: await loadGenerationViews(
       reviewerId,
-      job.mode === "full" ? job.generationRunId : undefined,
+      {
+        userId,
+        latestJob: job,
+        baselineFullJob: fullBaseline?.mode === "full"
+          ? {
+              mode: "full",
+              generationRunId: fullBaseline.generationRunId,
+              step: fullBaseline.step,
+            }
+          : null,
+      },
     ),
   });
 }

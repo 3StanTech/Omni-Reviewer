@@ -7,6 +7,7 @@ import {
   listTestAttemptStats,
   recordTestAttempts,
   recordTimedTestAttempt,
+  recordUntimedTestAttempt,
 } from "@/lib/queries";
 import {
   cappedBodyError,
@@ -33,7 +34,15 @@ const timedBodySchema = z.object({
   selectedAnswer: z.string().min(1).max(20_000),
 }).strict();
 
-const bodySchema = z.union([legacyBodySchema, timedBodySchema]);
+const untimedBodySchema = z.object({
+  mode: z.literal("untimed"),
+  expectedRevision: z.number().int().positive(),
+  sessionId: z.string().uuid(),
+  itemId: z.string().min(1).max(200),
+  selectedAnswer: z.string().min(1).max(20_000),
+}).strict();
+
+const bodySchema = z.union([legacyBodySchema, timedBodySchema, untimedBodySchema]);
 
 export async function GET(
   _request: Request,
@@ -69,6 +78,26 @@ export async function POST(
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "answers and expectedRevision are required" }, { status: 400 });
   try {
+    if ("mode" in parsed.data && parsed.data.mode === "untimed") {
+      const result = await recordUntimedTestAttempt({
+        reviewerId,
+        userId,
+        sessionId: parsed.data.sessionId,
+        expectedRevision: parsed.data.expectedRevision,
+        itemId: parsed.data.itemId,
+        selectedAnswer: parsed.data.selectedAnswer,
+      });
+      if ("stale" in result) return NextResponse.json({ error: "This test changed elsewhere. Reload before saving.", stale: true }, { status: 409 });
+      if ("missing" in result) return NextResponse.json({ error: "Test Me is not available." }, { status: 404 });
+      if ("invalid" in result) {
+        return NextResponse.json({ error: "This question is not part of the current sitting." }, { status: 400 });
+      }
+      if ("conflict" in result) {
+        return NextResponse.json({ error: "This answer was already saved in another tab.", conflict: true }, { status: 409 });
+      }
+      return NextResponse.json(result);
+    }
+
     if ("mode" in parsed.data) {
       const verification = verifyTimedTestSession(parsed.data.sessionToken);
       if (!verification.ok) {

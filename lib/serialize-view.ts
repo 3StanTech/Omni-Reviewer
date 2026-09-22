@@ -9,10 +9,18 @@ export type SerializedView = {
   /** True when this view was produced by the active generation run. */
   stale?: boolean;
   generatedAt: string;
+  contentRevision: number;
+  annotationRevision: number;
+  annotations?: import("@/lib/annotations").AnnotationRecord[];
+  annotationsNextCursor?: string | null;
   revision: number;
   isEdited: boolean;
   isPinned: boolean;
   updatedAt: string;
+};
+
+export type StudyViewSavePatch = Partial<SerializedView> & {
+  staleKinds?: string[];
 };
 
 export type ViewsPayload = {
@@ -32,20 +40,35 @@ export type GenerationViewRow = {
   [key: string]: unknown;
 };
 
+type GenerationVisibilityJob = {
+  mode: "full" | "single";
+  generationRunId: string;
+  step: string | null;
+  intent?: "generate_missing" | "redo";
+  targetKinds?: string[] | null;
+  active?: boolean;
+};
+
 export function manualStaleKinds(
   rows: Array<{ kind: string; isEdited?: boolean; updatedAt?: Date }>,
 ): string[] {
   const locked = rows.find((row) => row.kind === "locked_in");
-  if (!locked?.isEdited || !locked.updatedAt) return [];
-  const lockedUpdatedAt = locked.updatedAt;
-  return rows
-    .filter(
-      (row) =>
-        row.kind !== "locked_in" &&
-        row.updatedAt !== undefined &&
-        row.updatedAt < lockedUpdatedAt,
-    )
-    .map((row) => row.kind);
+  const stale = new Set<string>();
+  if (locked?.isEdited && locked.updatedAt) {
+    for (const row of rows) {
+      if (row.kind !== "locked_in" && row.updatedAt && row.updatedAt < locked.updatedAt) {
+        stale.add(row.kind);
+      }
+    }
+  }
+  const summary = rows.find((row) => row.kind === "summary");
+  const carded = rows.find((row) => row.kind === "carded");
+  // Summary is an upstream source for Carded only. Test Me remains tied to
+  // Locked In per the explicit product contract.
+  if (summary?.isEdited && summary.updatedAt && carded?.updatedAt && carded.updatedAt < summary.updatedAt) {
+    stale.add("carded");
+  }
+  return [...stale];
 }
 
 /**
@@ -56,16 +79,13 @@ export function manualStaleKinds(
  */
 export function selectVisibleGenerationRows<T extends GenerationViewRow>(
   rows: T[],
-  latestJob?: {
-    mode: "full" | "single";
-    generationRunId: string;
-    step: string | null;
-    active?: boolean;
-  } | null,
+  latestJob?: GenerationVisibilityJob & { completedKinds?: string[] | null } | null,
   baselineFullJob?: {
     mode: "full";
     generationRunId: string;
     step: string | null;
+    intent?: "generate_missing" | "redo";
+    targetKinds?: string[] | null;
   } | null,
 ): {
   rows: T[];
@@ -77,6 +97,34 @@ export function selectVisibleGenerationRows<T extends GenerationViewRow>(
   }
 
   const staleKinds = new Set<string>();
+  const targetKinds = new Set(
+    latestJob.targetKinds?.length
+      ? latestJob.targetKinds
+      : latestJob.mode === "single" && latestJob.step
+        ? [latestJob.step]
+        : ["locked_in", "summary", "test_me", "carded"],
+  );
+
+  // Missing-mode runs are additive: existing rows outside the frozen target
+  // list remain visible while newly committed rows overlay their target kind.
+  // A concurrent insert into a target is preserved by the persistence CAS and
+  // is reported as a partial/stale run rather than silently replaced.
+  if (latestJob.intent === "generate_missing") {
+    const visibleRows = rows.filter(
+      (row) => !targetKinds.has(row.kind) || row.generationRunId === latestJob.generationRunId,
+    );
+    for (const kind of targetKinds) {
+      if (!visibleRows.some((row) => row.kind === kind && row.generationRunId === latestJob.generationRunId)) {
+        staleKinds.add(kind);
+      }
+    }
+    return {
+      rows: visibleRows,
+      currentGenerationRunId: latestJob.generationRunId,
+      staleKinds: [...staleKinds],
+    };
+  }
+
   const fullJob =
     latestJob.mode === "full" ? latestJob : baselineFullJob ?? null;
 
@@ -149,6 +197,8 @@ export function serializeView(row: {
   stale?: boolean;
   generatedAt: Date;
   revision?: number;
+  contentRevision?: number;
+  annotationRevision?: number;
   isEdited?: boolean;
   isPinned?: boolean;
   updatedAt?: Date;
@@ -163,6 +213,8 @@ export function serializeView(row: {
     generationRunId: row.generationRunId ?? null,
     stale: row.stale ?? false,
     generatedAt: row.generatedAt.toISOString(),
+    contentRevision: row.contentRevision ?? row.revision ?? 1,
+    annotationRevision: row.annotationRevision ?? 1,
     revision: row.revision ?? 1,
     isEdited: row.isEdited ?? false,
     isPinned: row.isPinned ?? false,
@@ -200,11 +252,21 @@ export function viewsPayloadFromRows(
   options: {
     currentGenerationRunId?: string | null;
     staleKinds?: string[];
+    annotations?: import("@/lib/annotations").AnnotationRecord[];
+    annotationNextCursors?: Record<string, string | null>;
   } = {},
 ): ViewsPayload {
   const byKind = emptyViewsPayload();
   for (const row of rows) {
     const serialized = serializeView(row);
+    if (options.annotations) {
+      serialized.annotations = options.annotations.filter(
+        (annotation) => annotation.viewId === row.id,
+      );
+    }
+    if (options.annotationNextCursors) {
+      serialized.annotationsNextCursor = options.annotationNextCursors[row.kind] ?? null;
+    }
     if (row.kind === "locked_in") byKind.locked_in = serialized;
     else if (row.kind === "summary") byKind.summary = serialized;
     else if (row.kind === "test_me") byKind.test_me = serialized;

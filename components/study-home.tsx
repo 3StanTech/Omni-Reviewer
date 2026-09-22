@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 
-import { useLook } from "@/components/look-provider";
 import {
   ReviewerList,
   type ReviewerListItem,
@@ -10,7 +9,6 @@ import {
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
 import { useTopicNav } from "@/components/topic-shelf";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 
 type StudyHomeProps = {
   topics: TopicListItem[];
@@ -45,7 +43,6 @@ export function StudyHome({
   topicName,
   reviewers,
 }: StudyHomeProps) {
-  const look = useLook();
   const topicNav = useTopicNav();
   const [localOptimisticId, setLocalOptimisticId] = useState<string | null>(
     null,
@@ -65,7 +62,7 @@ export function StudyHome({
 
   return (
     <div className="flex flex-col gap-8">
-      <div className={cn(look === "remnote" && "md:hidden")}>
+      <div>
         <TopicTabs
           topics={topics}
           selectedId={effectiveSelected}

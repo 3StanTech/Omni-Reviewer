@@ -76,6 +76,10 @@ export type GenerationJob = {
   status: GenerationJobStatus;
   step: GenerationJobStep | null;
   mode: GenerationJobMode;
+  intent: "generate_missing" | "redo";
+  targetKinds: ViewKind[];
+  completedKinds: ViewKind[];
+  upstreamRevisions: Partial<Record<ViewKind, number>>;
   generationRunId: string;
   active: boolean;
   claimToken: string | null;

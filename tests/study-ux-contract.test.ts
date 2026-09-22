@@ -90,7 +90,7 @@ describe("study Markdown and cloze contracts", () => {
     expect(css).toContain(".ink-exam");
   });
 
-  it("renders existing packs without ink spans and keeps the legend copy under paper", () => {
+  it("renders existing packs without a generated ink legend", () => {
     const lockedIn = readFileSync(path.join(root, "components/locked-in-view.tsx"), "utf8");
     const summary = readFileSync(path.join(root, "components/summary-view.tsx"), "utf8");
     const renderer = readFileSync(path.join(root, "components/study-markdown.tsx"), "utf8");
@@ -98,29 +98,27 @@ describe("study Markdown and cloze contracts", () => {
     expect(prepareStudyMarkdown("# Notes\n\nPlain study text with no ink.")).toMatchObject({
       source: "# Notes\n\nPlain study text with no ink.",
     });
-    expect(lockedIn).toContain("<InkLegend />");
-    expect(summary).toContain("<InkLegend />");
-    expect(renderer).toContain("Main idea");
-    expect(renderer).toContain("Example");
-    expect(renderer).toContain("Fact");
-    expect(renderer).toContain("Warning");
-    expect(renderer).toContain("Exam likely");
+    expect(lockedIn).not.toContain("<InkLegend />");
+    expect(summary).not.toContain("<InkLegend />");
+    expect(renderer).not.toContain("InkLegend");
     expect(renderer).not.toContain(emDash);
     expect(lockedIn).not.toContain(emDash);
     expect(summary).not.toContain(emDash);
   });
 
-  it("asks Locked In and Summary for ink spans and leaves Test Me and Carded prompts unchanged", () => {
+  it("keeps generated study documents plain for user-managed highlights", () => {
     const lockedIn = lockedInPrompt([{ filename: "notes.txt", text: "Body" }]);
     const summary = summaryPrompt("Locked In body");
     const testMe = testMePrompt("Locked In body");
     const carded = cardedPrompt("Summary body");
     for (const klass of ["ink-idea", "ink-example", "ink-fact", "ink-warning", "ink-exam"]) {
-      expect(lockedIn).toContain(`<span class="${klass}">`);
-      expect(summary).toContain(`<span class="${klass}">`);
+      expect(lockedIn).not.toContain(`<span class="${klass}">`);
+      expect(summary).not.toContain(`<span class="${klass}">`);
       expect(testMe).not.toContain(klass);
       expect(carded).not.toContain(klass);
     }
+    expect(lockedIn).toContain("Do not add HTML spans, semantic ink classes, or automatic highlighting.");
+    expect(summary).toContain("Do not add HTML spans, semantic ink classes, or automatic highlighting.");
   });
 
   it("parses and masks bounded cloze placeholders without changing legacy cards", () => {

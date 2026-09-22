@@ -9,10 +9,11 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { readLocalStorage, writeLocalStorage } from "@/lib/safe-storage";
 
-export type LookId = "day" | "night" | "thea" | "remnote";
+export type LookId = "day" | "night";
 
-export const LOOK_IDS: LookId[] = ["day", "night", "thea", "remnote"];
+export const LOOK_IDS: LookId[] = ["day", "night"];
 
 export const DEFAULT_LOOK: LookId = "night";
 export const LOOK_STORAGE_KEY = "omni-look";
@@ -30,6 +31,13 @@ export function isLookId(value: unknown): value is LookId {
   return typeof value === "string" && LOOK_IDS.includes(value as LookId);
 }
 
+/** Legacy Thea/RemNote preferences keep their user on the light layout. */
+export function normalizeLook(value: unknown): LookId {
+  if (isLookId(value)) return value;
+  if (value === "thea" || value === "remnote") return "day";
+  return DEFAULT_LOOK;
+}
+
 export function applyLookToDocument(look: LookId) {
   const root = document.documentElement;
   root.dataset.look = look;
@@ -37,12 +45,7 @@ export function applyLookToDocument(look: LookId) {
 }
 
 function readStoredLook(): LookId {
-  try {
-    const stored = window.localStorage.getItem(LOOK_STORAGE_KEY);
-    return isLookId(stored) ? stored : DEFAULT_LOOK;
-  } catch {
-    return DEFAULT_LOOK;
-  }
+  return normalizeLook(readLocalStorage(LOOK_STORAGE_KEY));
 }
 
 function subscribeLook(onStoreChange: () => void) {
@@ -66,11 +69,7 @@ export function LookProvider({ children }: { children: ReactNode }) {
   }, [look]);
 
   const setLook = useCallback((next: LookId) => {
-    try {
-      window.localStorage.setItem(LOOK_STORAGE_KEY, next);
-    } catch {
-      // Persistence is best-effort; the in-session look still applies.
-    }
+    writeLocalStorage(LOOK_STORAGE_KEY, next);
     applyLookToDocument(next);
     window.dispatchEvent(new Event(LOOK_CHANGE_EVENT));
   }, []);

@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { auth } from "@/auth";
 import { AppShell } from "@/components/app-shell";
-import type { ViewsPayload } from "@/components/generate-button";
+import type { ViewsPayload } from "@/lib/serialize-view";
 import { ReviewerWorkspace } from "@/components/reviewer-workspace";
 import type { SourceListItem } from "@/components/source-panel";
 import {
@@ -82,6 +82,8 @@ export default async function ReviewerPage({ params }: PageProps) {
       contentJson: null,
       modelId: row.modelId ?? null,
       generatedAt: row.generatedAt.toISOString(),
+      contentRevision: row.contentRevision,
+      annotationRevision: row.annotationRevision,
       revision: row.revision,
       isEdited: row.isEdited,
       isPinned: row.isPinned,
@@ -103,6 +105,7 @@ export default async function ReviewerPage({ params }: PageProps) {
       }))}
       selectedTopicId={topic.id}
       dueTodayCount={dueTodayCount}
+      showTopicShelf={false}
     >
       <ReviewerWorkspace
         userId={userId}

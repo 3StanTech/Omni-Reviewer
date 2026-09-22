@@ -18,7 +18,6 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 
-import { useLook } from "@/components/look-provider";
 import type { TopicListItem } from "@/components/topic-tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,7 +71,6 @@ export function TopicShelf({
   selectedId,
   dueTodayCount,
 }: TopicShelfProps) {
-  const look = useLook();
   const router = useRouter();
   const topicNav = useTopicNav();
   const [error, setError] = useState<string | null>(null);
@@ -82,8 +80,6 @@ export function TopicShelf({
   const [activeTopic, setActiveTopic] = useState<TopicListItem | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-
-  if (look !== "remnote") return null;
 
   function selectTopic(id: string) {
     if (id === selectedId) return;

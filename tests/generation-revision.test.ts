@@ -4,10 +4,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { manualStaleKinds, selectVisibleGenerationRows } from "@/lib/serialize-view";
+import { responseJobId } from "@/lib/use-generation";
 
 const root = path.resolve(__dirname, "..");
 
 describe("generation revision boundaries", () => {
+  it("prefers the server-authoritative winner job id", () => {
+    expect(responseJobId({ jobId: "winner", job: null }, "old")).toBe("winner");
+    expect(responseJobId({ job: null }, "old")).toBe("old");
+  });
+
   it("does not rehydrate stale downstream rows during a partial full-run refresh", () => {
     const result = selectVisibleGenerationRows(
       [
@@ -99,6 +105,31 @@ describe("generation revision boundaries", () => {
     expect(result.staleKinds).toEqual(["summary"]);
   });
 
+  it("merges untouched rows with committed missing-mode output", () => {
+    const result = selectVisibleGenerationRows(
+      [
+        { kind: "locked_in", generationRunId: "run-old" },
+        { kind: "summary", generationRunId: "run-missing" },
+        { kind: "test_me", generationRunId: "run-old" },
+      ],
+      {
+        mode: "full",
+        generationRunId: "run-missing",
+        step: "test_me",
+        intent: "generate_missing",
+        targetKinds: ["summary", "carded"],
+        active: false,
+      },
+    );
+
+    expect(result.rows.map((row) => [row.kind, row.generationRunId])).toEqual([
+      ["locked_in", "run-old"],
+      ["summary", "run-missing"],
+      ["test_me", "run-old"],
+    ]);
+    expect(result.staleKinds).toEqual(["carded"]);
+  });
+
   it("guards publication with the exact active claim and lease", () => {
     const queries = readFileSync(path.join(root, "lib/queries.ts"), "utf8");
     const route = readFileSync(
@@ -115,6 +146,33 @@ describe("generation revision boundaries", () => {
     expect(queries).toContain("FROM views v");
     expect(queries).toContain("FROM cards c2");
     expect(queries).toContain("FOR UPDATE");
+    expect(queries).toContain("upstream_revisions");
+    expect(queries).toContain("cards_upserted");
+    expect(queries).toContain("view_gate");
+    expect(queries).toContain("CROSS JOIN view_gate");
+    expect(queries).toContain("FROM view_gate");
+    expect(queries).toContain("card_write_guard");
+    expect(queries).toContain("COUNT(*)::integer - COUNT(*)::integer");
+    expect(queries).toContain('code === "22012"');
+    expect(queries).toContain("locked_upstream_views AS MATERIALIZED");
+    expect(queries).toContain("FOR UPDATE OF upstream");
+    expect(queries).toContain("completeClaimedGenerationJob");
+    expect(queries).toContain("reviewer_updated AS");
+    expect(queries).toContain("CONCAT('card:', c2.source_key)");
+    expect(queries).toContain("CONCAT('card:', c.source_key)");
+    expect(queries).toContain("already_persisted AS");
+    expect(queries).toContain("NOT EXISTS (SELECT 1 FROM already_persisted)");
+    expect(queries).toContain("existing_card.source_key");
+    expect(queries).not.toContain("protected_card.id::text");
+    expect(route).toContain("[step]: persisted");
+    expect(route).toContain("alreadyPersisted.generatedAt");
+    expect(route).toContain("completeClaimedGenerationJob");
+    expect(route).toContain("syncGeneratedCards");
+    expect(route).toContain("reactivateGenerationJobForResume");
+    expect(route).toContain("resumed.id !== current.id");
+    expect(route).toContain("jobId: job.id");
+    expect(queries).toContain('code === "23505"');
+    expect(queries).toContain("Re-read this exact row");
   });
 
   it("keeps learning writes atomic and tenant-scoped", () => {
@@ -160,6 +218,9 @@ describe("generation revision boundaries", () => {
     expect(editor).toContain("if (draftIsStale)");
     expect(editor).toContain("expectedRevision: revision");
     expect(editor).toContain("Reload the latest content before saving");
+    expect(editor).toContain("onDirtyChange");
+    expect(editor).toContain("controllerRef");
+    expect(editor).toContain("key={view.id}");
   });
 
   it("does not let a card draft save over a newer revision", () => {
@@ -168,6 +229,37 @@ describe("generation revision boundaries", () => {
     expect(editor).toContain("draftRevision !== card.revision");
     expect(editor).toContain("expectedRevision: draftRevision");
     expect(editor).toContain("This card changed elsewhere");
+  });
+
+  it("keeps client generation errors and superseded responses visible/safe", () => {
+    const controller = readFileSync(path.join(root, "lib/use-generation.ts"), "utf8");
+    expect(controller).toContain("activeJobRef");
+    expect(controller).toContain("responseJobId");
+    expect(controller).toContain("if (responseId !== jobId)");
+    expect(controller).toContain("await poll(responseId, data)");
+    expect(controller).toContain("activeJobRef.current !== jobId || controller.signal.aborted");
+    expect(controller).toContain('status: "failed"');
+    expect(controller).toContain("job: null");
+    expect(controller).toContain("return jobId ? poll(jobId) : Promise.resolve()");
+  });
+
+  it("keeps terminal full runs resumable without inventing a no-op missing run", () => {
+    const generateRoute = readFileSync(
+      path.join(root, "app/api/reviewers/[id]/generate/route.ts"),
+      "utf8",
+    );
+    const controls = readFileSync(path.join(root, "components/generation-controls.tsx"), "utf8");
+    const status = readFileSync(path.join(root, "components/generation-status.tsx"), "utf8");
+
+    expect(generateRoute).toContain("reactivateGenerationJobForResume");
+    expect(generateRoute).toContain('latest.status === "partial"');
+    expect(controls).toContain("hasTerminalResume");
+    expect(status).toContain('state.status === "partial"');
+  });
+
+  it("invokes the draft save continuation instead of passing the function", () => {
+    const workspace = readFileSync(path.join(root, "components/reviewer-workspace.tsx"), "utf8");
+    expect(workspace).toContain("onClick={() => void saveDraftAndContinue()}");
   });
 
   it("uses one parser for client card content and durable-card hydration", () => {
