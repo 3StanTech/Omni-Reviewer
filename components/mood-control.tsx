@@ -97,12 +97,15 @@ export function MoodControl() {
         <span className="sm:hidden">Mood</span>
       </Button>
       <div
-        id={menuId}
-        role="menu"
-        aria-label={MOOD_LABEL}
         hidden={!open}
-        className="absolute right-0 z-50 mt-2 min-w-44 origin-top-right rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-[0_10px_30px_oklch(0_0_0/40%)] duration-150"
+        className="absolute top-full right-0 z-50 pt-2"
       >
+        <div
+          id={menuId}
+          role="menu"
+          aria-label={MOOD_LABEL}
+          className="min-w-44 origin-top-right rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-[0_10px_30px_oklch(0_0_0/40%)] duration-150"
+        >
         {LOOK_MENU.map((item) => {
           const selected = item.id === look;
           return (
@@ -123,6 +126,7 @@ export function MoodControl() {
             </button>
           );
         })}
+        </div>
       </div>
     </div>
   );

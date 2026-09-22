@@ -47,6 +47,9 @@ describe("look tokens and mood control", () => {
     expect(mood).not.toContain("Thea-Style");
     expect(mood).not.toContain("RemNote-Style");
     expect(shell).toContain("MoodControl");
+    expect(mood).toContain("top-full");
+    expect(mood).toContain("pt-2");
+    expect(mood).not.toContain("mt-2");
   });
 
   it("defaults to night, persists omni-look, and toggles dark only for night", () => {
