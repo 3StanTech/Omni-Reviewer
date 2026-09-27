@@ -59,6 +59,10 @@ Accent is for selection and primary CTAs only, not decoration.
 - **Topic tabs**: horizontal scroll if needed; selected = amber underline or filled chip.
 - **Reviewer rows**: name + chevron; overflow menu rename/delete. Second line: generated stamp or Not generated yet, due-today count when above 0, exam date when set.
 - **Change today's mood**: not a primary CTA. Hover/focus opens the look menu on fine pointers; click toggles on coarse pointers.
+- **Citation chips**: small mono `p.14` buttons inline after a claim. They open the source modal and are never part of the annotation text.
+- **Not from your uploaded sources**: amber tag with WarningCircle after an unsupported claim. Hover or focus underlines the claim in the warning color. The popover explains and offers Keep or Delete sentence.
+- **Source modal**: built on the shared Dialog. PDF pages render to a canvas, fit to width, with Slide N of M and previous/next. It closes with Escape or the backdrop and returns focus.
+- **Print**: `.print-hide` hides chrome, `.print-document` forces a white page and dark ink, and each `h2` after the first starts a new page.
 - **Annotations**: select text in either editable reading document to highlight or add a note. Color choices are allowlisted and Earlier version keeps displaced quotes.
 - **Source rows**: filename, kind icon, status badge when Failed or Not yet processed, delete. Ready sources show no status badge.
 - **Badges**: Failed / Not yet processed are labeled. Ready badge is no longer shown.

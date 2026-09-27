@@ -1,10 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { Presentation, SealCheck } from "@phosphor-icons/react";
 
 import { AnnotationMenu } from "@/components/annotation-menu";
 import { StudyEditor } from "@/components/study-editor";
 import { MarkdownBody } from "@/components/study-markdown";
+import { SOURCE_LIST_UNAVAILABLE, useSourceViewer } from "@/components/source-modal";
+import { StudyExport } from "@/components/study-export";
+import { UnsourcedActionsProvider } from "@/components/unsourced-tag";
+import {
+  countClaims,
+  parseCitations,
+  readStudyDocumentMeta,
+  resolveUnsourcedClaim,
+  unsourcedTokenOffsets,
+  type UnsourcedResolution,
+} from "@/lib/citations";
 import type { LockedInDraftController } from "@/components/locked-in-editor";
 import {
   annotationRangeCanRender,
@@ -34,6 +46,12 @@ type StudyDocumentProps = {
   controllerRef?: MutableRefObject<LockedInDraftController | null>;
 };
 
+/** Pack-level details a study document needs but its mode views do not pass down. */
+export const StudyPackContext = createContext<{ reviewerName: string }>({ reviewerName: "" });
+
+const UNSOURCED_MISMATCH_MESSAGE =
+  "Could not match this tag to the saved document. Use Edit to change the sentence.";
+
 const UNSUPPORTED_RANGE_MESSAGE =
   "That selection includes math, a code block, or a footnote that cannot be highlighted. Select ordinary study text, or a whole inline code/math span.";
 
@@ -62,6 +80,17 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const [selection, setSelection] = useState<{ quote: string; startOffset: number; endOffset: number; prefix: string; suffix: string } | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<{ top: number; left: number } | null>(null);
   const articleRef = useRef<HTMLElement>(null);
+  const selectionOpenRef = useRef(false);
+  const { reviewerName } = useContext(StudyPackContext);
+  const { openSource, available: sourcesAvailable } = useSourceViewer();
+  const modeLabel = kind === "summary" ? "Summary" : "Locked In";
+  const claims = useMemo(() => countClaims(view.content), [view.content]);
+  const firstCitation = useMemo(() => parseCitations(view.content)[0] ?? null, [view.content]);
+  // Only a grounded document can say how many claims came from the sources:
+  // every claim without an unsourced tag passed the lexical or model check.
+  const grounding = useMemo(() => readStudyDocumentMeta(view.contentJson)?.grounding ?? null, [view.contentJson]);
+  const grounded = Boolean(grounding);
+  const showClaimCount = grounded && claims.total > 0;
   const viewIdentity = `${view.id}:${view.contentRevision}:${view.annotationRevision}`;
   const [appliedIdentity, setAppliedIdentity] = useState(viewIdentity);
   const draftIsStale = draftRevision !== view.revision;
@@ -92,6 +121,9 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     window.requestAnimationFrame(() => articleRef.current?.focus({ preventScroll: true }));
   }, []);
 
+  useEffect(() => {
+    selectionOpenRef.current = selection !== null;
+  }, [selection]);
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => {
     if (!userId || !articleRef.current) return;
@@ -185,6 +217,29 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     return () => { controllerRef.current = null; };
   }, [controllerRef, draft, save, view.annotations, view.annotationsNextCursor, view.content, view.revision]);
 
+  const resolveUnsourced = useCallback(async (occurrence: number, action: UnsourcedResolution): Promise<boolean> => {
+    if (editing || busy) return false;
+    const rendered = articleRef.current?.querySelectorAll(".study-unsourced").length ?? -1;
+    if (rendered !== unsourcedTokenOffsets(view.content).length) {
+      setError(UNSOURCED_MISMATCH_MESSAGE);
+      return false;
+    }
+    const next = resolveUnsourcedClaim(view.content, occurrence, action);
+    if (next === null || !next.trim()) {
+      setError(next === null ? UNSOURCED_MISMATCH_MESSAGE : `Deleting this sentence would leave ${modeLabel} empty. Use Edit instead.`);
+      return false;
+    }
+    return save(next);
+  }, [busy, editing, modeLabel, save, view.content]);
+  const unsourcedActions = useMemo(
+    () => ({
+      resolve: resolveUnsourced,
+      disabled: editing || busy,
+      checkIncomplete: Boolean(grounding?.verifierFailed || grounding?.truncated),
+    }),
+    [busy, editing, grounding, resolveUnsourced],
+  );
+
   const captureSelection = useCallback(() => {
     if (editing || !articleRef.current) {
       closeSelectionMenu();
@@ -193,6 +248,9 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     const currentSelection = window.getSelection();
     if (!currentSelection || currentSelection.rangeCount === 0 || currentSelection.isCollapsed) {
       if (document.activeElement?.closest(".annotation-menu")) return;
+      // A click on a citation chip or unsourced tag collapses the selection;
+      // only close (and refocus the article) when a highlight menu is open.
+      if (!selectionOpenRef.current) return;
       closeSelectionMenu();
       return;
     }
@@ -378,6 +436,12 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const earlierAnnotations = annotations.filter((annotation) => annotation.archivedAt);
   return (
     <div className="space-y-3">
+      {showClaimCount ? (
+        <p className="print-hide inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-foreground">
+          <SealCheck weight="bold" className="size-3.5 text-primary" aria-hidden />
+          {claims.total - claims.unsourced} of {claims.total} claims from your sources
+        </p>
+      ) : null}
       {!editing ? (
         <StudySidePanel
           markdown={view.content}
@@ -387,11 +451,31 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
           onLoadEarlier={() => void loadEarlier()}
         />
       ) : null}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="print-hide flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => { setError(null); setDraft(view.content); setDraftRevision(view.revision); setSelection(null); setSelectionAnchor(null); setEditing((current) => !current); }} disabled={busy}>
           {editing ? "Cancel edit" : `Edit ${kind === "summary" ? "Summary" : "Locked In"}`}
         </Button>
         {kind === "locked_in" && !editing ? <Button type="button" variant="outline" size="sm" onClick={() => void togglePinned()} disabled={busy}>{view.isPinned ? "Unpin" : "Pin"}</Button> : null}
+        {!editing ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-disabled={!sourcesAvailable || !firstCitation}
+            title={!sourcesAvailable ? SOURCE_LIST_UNAVAILABLE : !firstCitation ? "This version has no source citations." : "Open the first cited page"}
+            className={!sourcesAvailable || !firstCitation ? "cursor-not-allowed opacity-50" : undefined}
+            onClick={() => {
+              if (!sourcesAvailable || !firstCitation) return;
+              openSource({ source: firstCitation.source, page: firstCitation.pageStart });
+            }}
+          >
+            <Presentation />
+            Sources
+          </Button>
+        ) : null}
+        {!editing ? (
+          <StudyExport reviewerName={reviewerName || modeLabel} modeLabel={modeLabel} markdown={view.content} annotations={annotations} />
+        ) : null}
         {editing ? <Button type="button" size="sm" onClick={() => void save(draft)} disabled={busy || !draft.trim() || draftIsStale}>{busy ? "Saving" : "Save changes"}</Button> : null}
         {kind === "locked_in" && view.isPinned ? <span className="text-xs text-warning">Pinned and protected from silent overwrite</span> : null}
         {!editing ? <span className="text-xs text-muted-foreground">Select text to highlight or add a note.</span> : null}
@@ -406,9 +490,11 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
             onMouseUp={captureSelection}
             onKeyUp={captureSelection}
             onTouchEnd={captureSelection}
-            className="reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8"
+            className="print-document reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8"
           >
-            <MarkdownBody source={view.content} annotations={activeAnnotations} />
+            <UnsourcedActionsProvider value={unsourcedActions}>
+              <MarkdownBody source={view.content} annotations={activeAnnotations} />
+            </UnsourcedActionsProvider>
           </article>
           {selection ? (
             <>

@@ -82,8 +82,20 @@ countdown on the pack. Pack rows show how many cards are due today.
 - One untimed Test Me sitting is active at a time. The same answer saved twice is kept once. A different answer from another tab is rejected and the first answer stays. Retry missed opens only the misses from the completed sitting, and it refuses while a different sitting is still in progress. Start again replaces the active sitting on purpose.
 - Same-document Back and Forward keep a dirty Locked In or Summary draft where the browser allows that interception. Other browsers still warn on leave and on in-app links.
 - Clear error when the pack is video/audio only or has no ingested text.
-- Pipeline (server, full pack): ready sources → Locked In → Summary → Test Me → Carded; each mode is saved as it finishes.
-- Models are OpenRouter `:free` ids (defaults and optional fallbacks). Do not use `openrouter/auto` as a primary model.
+- Pipeline (server, full pack): ready sources → Locked In → Summary and Test Me together in one claimed step → Carded; each mode is saved as it finishes. If Test Me fails while Summary succeeds, Carded still runs and the job ends partial so Resume can fill Test Me.
+- Models are OpenRouter `:free` ids (defaults and optional fallbacks). Do not use `openrouter/auto` as a primary model. Defaults were probed live with `data_collection: deny` on 2026-09-27: `dots-studio/dots-3-note-preview:free`, falling back to `qwen/qwen3.8-27b:free` and `cohere/north-mini-code:free`. Requests turn model reasoning off so the output budget goes to the answer. The request budget uses the smallest verified context window among the primary and its fallbacks.
+- The free OpenRouter tier allows 50 free-model requests per day on this key. A full pack uses about six (four steps plus up to two grounding checks).
+
+## Citations and grounding
+
+- PDF pages and PPTX slides are stored with `<<<page N>>>` markers. DOCX, pasted notes, and images have no pages and are cited as a whole source. A ready PDF or PPTX stored before markers existed shows **Refresh page numbers**, which re-reads the stored file.
+- Sources are numbered S1..Sn in upload order. Locked In and Summary end each claim with `[S1 p.14]`, `[S1 pp.14-15]`, `[S1 p.2, p.3]`, or `[S2]`. The view stores which upload each S number meant (`contentJson.citationSources`), so later uploads never re-point old citations.
+- After Locked In and Summary are generated, a grounding check compares each claim with its cited pages: a free text-overlap check first, then one batched model call for the misses that must list the facts the evidence lacks. A claim with no support gets `[[unsourced]]`, shown as **Not from your uploaded sources**. The label never says "hallucination": the checker cannot tell invented facts from correct outside knowledge.
+- Keep removes the tag. Delete sentence removes the claim. Both use the normal revision-checked save.
+- The header shows "N of M claims from your sources" only for grounded documents, where N counts claims without the tag.
+- Citation chips open the source in a modal. PDFs render the cited page in the browser from the private file stream.
+- Test Me explanations and card backs end with a citation. After a wrong answer, **Open slide N** opens the cited page. Card citations appear only after the flip.
+- Locked In and Summary download as PDF (browser print) or Markdown, with options for highlights and notes and for citations.
 
 ## Auth and security facts
 

@@ -74,6 +74,22 @@ describe("study Markdown and cloze contracts", () => {
     expect(renderer).not.toContain("rehypeRaw");
   });
 
+  it("renders citations after math and heading ids with a narrow sanitize allowlist", () => {
+    const renderer = readFileSync(path.join(root, "components/study-markdown.tsx"), "utf8");
+    const math = renderer.indexOf("[remarkMath, { singleDollarTextMath: true }]");
+    const headings = renderer.indexOf("remarkStudyHeadingIds,", math);
+    const citations = renderer.indexOf("remarkCitations,", headings);
+    const annotations = renderer.indexOf("remarkStudyAnnotations(", citations);
+    expect(math).toBeGreaterThan(-1);
+    expect(headings).toBeGreaterThan(math);
+    expect(citations).toBeGreaterThan(headings);
+    expect(annotations).toBeGreaterThan(citations);
+    expect(renderer).toContain("study-cite|study-unsourced|study-claim");
+    expect(renderer).toContain('["dataStudySkip", ""]');
+    expect(renderer).toContain('["dataClaim", "unsourced"]');
+    expect(renderer).not.toMatch(/["']data\*["']/);
+  });
+
   it("allowlists semantic ink span classes with KaTeX and still skips raw HTML", () => {
     const renderer = readFileSync(path.join(root, "components/study-markdown.tsx"), "utf8");
     const css = readFileSync(path.join(root, "app/globals.css"), "utf8");

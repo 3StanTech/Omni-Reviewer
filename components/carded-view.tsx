@@ -8,11 +8,15 @@ import {
   ArrowCounterClockwise,
   Eye,
   EyeSlash,
+  Presentation,
 } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/empty-state";
+import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
+import { firstPageCitation } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
+import { stripCitations } from "@/lib/citations";
 import { parseCardedItems } from "@/lib/learning";
 import { scheduleCardReview } from "@/lib/sm2";
 import { isClozeCardFront, renderClozeText } from "@/lib/learning";
@@ -56,6 +60,12 @@ function isDurableCard(value: CardedItem | DurableCardView | null | undefined): 
   return value != null && "revision" in value && typeof value.revision === "number";
 }
 
+/** Chips inside a face act on their own; they must never flip the card. */
+function isInteractiveInsideFace(target: EventTarget | null): boolean {
+  return target instanceof Element
+    && Boolean(target.closest("button, a, [data-cite-source]"));
+}
+
 function isDueNow(dueAt: string, now: number) {
   const due = new Date(dueAt).getTime();
   return Number.isFinite(due) && due <= now;
@@ -77,7 +87,7 @@ function gradePreview(
 
 function nextIntervalCopy(rating: "again" | "good", intervalDays: number) {
   if (rating === "again") return "show tonight";
-  return `next in ${intervalDays} days`;
+  return intervalDays === 1 ? "next in 1 day" : `next in ${intervalDays} days`;
 }
 
 export function CardedView({
@@ -114,6 +124,7 @@ export function CardedView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scheduleHint, setScheduleHint] = useState<string | null>(null);
+  const sourceViewer = useSourceViewer();
   const advanceTimer = useRef<number | null>(null);
   const reviewEpoch = useRef(0);
   const requestIds = useRef(new Map<string, string>());
@@ -305,7 +316,12 @@ export function CardedView({
     }
   }
 
-  const frontSource = card && isCloze && !clozeRevealed ? renderClozeText(card.front) : card?.front ?? "";
+  // Citations belong to the answer side only.
+  const frontSource = stripCitations(
+    card && isCloze && !clozeRevealed ? renderClozeText(card.front) : card?.front ?? "",
+  );
+  const backCitation = card && flipped ? firstPageCitation([card.back]) : null;
+  const backPage = backCitation?.pageStart ?? null;
 
   if (packEmpty) {
     return (
@@ -372,6 +388,17 @@ export function CardedView({
         {dueStale ? <span className="text-warning">This card changed. Start a new due session before rating it.</span> : null}
         {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
         {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
+        {backCitation && backPage !== null && sourceViewer.available ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => sourceViewer.openSource({ source: backCitation.source, page: backPage })}
+          >
+            <Presentation weight="bold" />
+            Slide {backPage}
+          </Button>
+        ) : null}
       </div>
       ) : null}
 
@@ -419,7 +446,16 @@ export function CardedView({
             <MarkdownBody source={frontSource} />
             <span className="mt-6 text-xs text-muted-foreground">Flip</span>
           </div>
-          <div className="carded-face carded-back">
+          <div
+            className="carded-face carded-back"
+            inert={!flipped}
+            onClick={(event) => {
+              if (isInteractiveInsideFace(event.target)) event.stopPropagation();
+            }}
+            onKeyDown={(event) => {
+              if (isInteractiveInsideFace(event.target)) event.stopPropagation();
+            }}
+          >
             <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
               Back
             </span>

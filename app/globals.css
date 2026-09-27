@@ -502,3 +502,123 @@
     }
   }
 }
+
+/* Export: browser print for Locked In and Summary PDF. */
+@media print {
+  @page {
+    margin: 18mm 16mm;
+  }
+
+  html,
+  html[data-look],
+  html.dark,
+  body {
+    color-scheme: light;
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  .print-hide,
+  body header,
+  #topic-shelf,
+  .fixed,
+  [data-slot="tabs-list"],
+  [data-slot="button"],
+  [data-slot="dialog-overlay"],
+  [data-slot="dialog-content"],
+  [role="dialog"],
+  [role="menu"],
+  .study-side-panel,
+  .study-side-panel-backdrop,
+  .annotation-menu-anchor,
+  .annotation-menu-backdrop {
+    display: none !important;
+  }
+
+  .reading-surface,
+  .print-document {
+    --reading: #fff;
+    --reading-foreground: #111;
+    --muted: #f1f1f1;
+    --border: #cfcfcf;
+    --primary: #1f3a8a;
+    --chrome: #f4f4f4;
+    --foreground: #111;
+    background: #fff !important;
+    color: #111 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+  }
+
+  .prose-study {
+    max-width: none;
+  }
+
+  .prose-study h2,
+  .print-document h2 {
+    break-before: page;
+  }
+
+  .prose-study h2:first-of-type,
+  .print-document h2:first-of-type {
+    break-before: auto;
+  }
+
+  .prose-study h1,
+  .prose-study h2,
+  .prose-study h3,
+  .prose-study h4 {
+    break-after: avoid;
+  }
+
+  .prose-study pre,
+  .prose-study blockquote,
+  .prose-study table,
+  .prose-study tr {
+    break-inside: avoid;
+  }
+
+  .user-annotation-sun,
+  .user-annotation-sky,
+  .user-annotation-mint,
+  .user-annotation-rose {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body[data-export-citations="off"] .study-cite {
+    display: none !important;
+  }
+
+  body[data-export-annotations="off"] .user-annotation-sun,
+  body[data-export-annotations="off"] .user-annotation-sky,
+  body[data-export-annotations="off"] .user-annotation-mint,
+  body[data-export-annotations="off"] .user-annotation-rose {
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  body[data-export-annotations="off"] .study-note-marker,
+  body[data-export-annotations="off"] [data-annotation-note] {
+    display: none !important;
+  }
+
+  .study-unsourced {
+    font-size: 0 !important;
+    background: none !important;
+    border: 0 !important;
+  }
+
+  .study-unsourced > * {
+    display: none !important;
+  }
+
+  .study-unsourced::after {
+    content: "(not from your uploaded sources)";
+    font-family: var(--font-ui), ui-sans-serif, sans-serif;
+    font-size: 0.75rem;
+    font-style: italic;
+    color: #555;
+  }
+}

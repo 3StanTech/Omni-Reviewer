@@ -69,6 +69,7 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
     ingestStatus: s.ingestStatus as IngestStatus,
     errorMessage: s.errorMessage,
     createdAt: s.createdAt.toISOString(),
+    hasPageMarkers: s.hasPageMarkers,
   }));
 
   const initialViews: ViewsPayload = {

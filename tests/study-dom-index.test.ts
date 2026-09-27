@@ -108,4 +108,19 @@ describe("study DOM text index", () => {
     const source = "Hello[^1] world.\n\n[^1]: hidden note";
     expect(indexed("<p>Hello world.</p>")).toBe(renderedStudyText(source));
   });
+
+  it("skips citation chips and unsourced tags so offsets match the chip-free text", () => {
+    const source = "Cells divide. [S1 p.2] The nucleus stores DNA. [[unsourced]] Next.";
+    const plain = "Cells divide.  The nucleus stores DNA.  Next.";
+    const html = [
+      "<p>Cells divide. ",
+      "<button type=\"button\" data-study-skip=\"\" class=\"study-cite\" aria-label=\"Open source page 2\">p.2</button>",
+      " <span class=\"study-claim\" data-claim=\"unsourced\">The nucleus stores DNA.</span> ",
+      "<span data-study-skip=\"\" class=\"study-unsourced\"><button type=\"button\">Not from your uploaded sources</button>",
+      "<span role=\"dialog\" hidden>This sentence did not come from your uploaded sources.</span></span>",
+      " Next.</p>",
+    ].join("");
+    expect(indexed(html)).toBe(renderedStudyText(source));
+    expect(indexed(html)).toBe(renderedStudyText(plain));
+  });
 });

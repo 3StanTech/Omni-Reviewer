@@ -415,6 +415,7 @@ export function ReviewerWorkspace({
   }
 
   const sourcePanel = (
+    <div className="print-hide">
     <SourcePanel
       userId={userId}
       reviewerId={reviewerId}
@@ -422,10 +423,11 @@ export function ReviewerWorkspace({
       onSourcesChange={setSources}
       expanded={sourcesExpanded}
     />
+    </div>
   );
 
   const generateSection = (
-    <section className="space-y-3" aria-labelledby="generate-heading">
+    <section className="print-hide space-y-3" aria-labelledby="generate-heading">
       <div>
         <h2
           id="generate-heading"
@@ -460,12 +462,12 @@ export function ReviewerWorkspace({
     <section className="space-y-3" aria-labelledby="views-heading">
       <h2
         id="views-heading"
-        className="text-sm font-semibold tracking-tight text-foreground"
+        className="print-hide text-sm font-semibold tracking-tight text-foreground"
       >
         Study modes
       </h2>
       {viewsError ? (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="print-hide flex flex-wrap items-center gap-2">
           <p role="alert" className="text-sm text-destructive">
             {viewsError}
           </p>
@@ -489,6 +491,7 @@ export function ReviewerWorkspace({
         examDate={currentExamDate}
         testAttemptStats={testAttemptStats}
         reviewerId={reviewerId}
+        reviewerName={reviewerName}
         onCardsChange={setCards}
         onTestAttemptStatsChange={setTestAttemptStats}
         onViewsChange={setViews}
@@ -551,7 +554,7 @@ export function ReviewerWorkspace({
             </Button>
           ) : null}
         </div>
-        <details className="mt-3 max-w-md rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+        <details className="print-hide mt-3 max-w-md rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
           <summary className="cursor-pointer text-sm font-medium text-foreground" suppressHydrationWarning>
             {generatedLabel}. Exam date {currentExamDate ? `· ${currentExamDate}` : ""}
           </summary>

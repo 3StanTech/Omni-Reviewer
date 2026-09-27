@@ -4,6 +4,8 @@ import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import { z } from "zod";
 
+import { CITATION_NODE_TYPES, remarkCitations } from "@/lib/citations";
+
 export const ANNOTATION_COLORS = ["sun", "sky", "mint", "rose"] as const;
 export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
 
@@ -79,6 +81,14 @@ function dropUnsupportedFootnoteNodes(node: StudyNode): void {
   for (const child of node.children) dropUnsupportedFootnoteNodes(child);
 }
 
+/**
+ * Citation chips and unsourced tags carry no study text. Like footnotes they are
+ * not an annotation surface, so every text walk below treats them as empty.
+ */
+function isSkippedStudyNode(node: StudyNode): boolean {
+  return FOOTNOTE_NODE_TYPES.has(node.type) || CITATION_NODE_TYPES.has(node.type);
+}
+
 /** GFM footnotes are not an annotation surface; drop them from every study parser. */
 export function remarkDropStudyFootnotes() {
   return (tree: StudyNode) => {
@@ -89,6 +99,8 @@ export function remarkDropStudyFootnotes() {
 function parseStudyTree(source: string): StudyNode {
   const tree = markdownParser.parse(normalizeDocumentText(source)) as unknown as StudyNode;
   dropUnsupportedFootnoteNodes(tree);
+  // Same citation transform the reader runs, so chip text never enters offsets.
+  remarkCitations()(tree as Parameters<ReturnType<typeof remarkCitations>>[0]);
   return tree;
 }
 
@@ -117,7 +129,7 @@ function separatorBetween(parent: StudyNode, previous: StudyNode | undefined, ne
 }
 
 function visibleNodeText(node: StudyNode): string {
-  if (FOOTNOTE_NODE_TYPES.has(node.type)) return "";
+  if (isSkippedStudyNode(node)) return "";
   if (node.type === "text" || node.type === "inlineCode" || node.type === "code" || node.type === "inlineMath" || node.type === "math") {
     return normalizeDocumentText(node.value ?? "");
   }
@@ -427,7 +439,7 @@ function annotationRangeCanRenderModel(model: RenderedStudyTextModel, start: num
   let cursor = 0;
   let renderable = true;
   function visit(node: StudyNode) {
-    if (FOOTNOTE_NODE_TYPES.has(node.type)) return;
+    if (isSkippedStudyNode(node)) return;
     if (node.type === "text" || node.type === "inlineCode" || node.type === "code" || node.type === "inlineMath" || node.type === "math") {
       const nodeStart = cursor;
       cursor += visibleNodeText(node).length;
@@ -497,6 +509,7 @@ export function nextEarlierCursorAfterMerge(
 }
 
 function transformNode(node: StudyNode, startOffset: number, ranges: AnnotationLike[]): { nodes: StudyNode[]; endOffset: number } {
+  if (isSkippedStudyNode(node)) return { nodes: [node], endOffset: startOffset };
   if (node.type === "text") {
     const value = normalizeDocumentText(node.value ?? "");
     const endOffset = startOffset + value.length;

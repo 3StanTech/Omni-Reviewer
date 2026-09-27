@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowsClockwise, CircleNotch } from "@phosphor-icons/react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,6 +17,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
 import { LockedInView } from "@/components/locked-in-view";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
+import { SourceViewerProvider } from "@/components/source-modal";
+import { StudyPackContext } from "@/components/study-document";
+import { citationSourcesForMode } from "@/lib/citations";
 import { SummaryView } from "@/components/summary-view";
 import { TestMeView } from "@/components/test-me-view";
 import { cn } from "@/lib/utils";
@@ -35,6 +38,7 @@ type ViewTabsProps = {
   busy: boolean;
   onRedo: (kind: ViewKind, forceOverwrite?: boolean) => void;
   reviewerId: string;
+  reviewerName?: string;
   cards: SerializedCard[];
   testAttemptStats: SerializedAttemptStats[];
   onCardsChange: (cards: SerializedCard[]) => void;
@@ -134,6 +138,7 @@ export function ViewTabs({
   busy,
   onRedo,
   reviewerId,
+  reviewerName = "",
   cards,
   testAttemptStats,
   onCardsChange,
@@ -158,6 +163,10 @@ export function ViewTabs({
     onValueChange?.(next);
   }
 
+  // Each mode resolves chips against the source list of its own generation.
+  const citationSources = useMemo(() => citationSourcesForMode(views, tab), [tab, views]);
+  const studyPack = useMemo(() => ({ reviewerName }), [reviewerName]);
+
   const copy = MODE_COPY[tab];
   const blockReason = redoBlockReason(tab, views, hasReadySource);
   const redoDisabled = busy || viewsLoading || Boolean(blockReason);
@@ -180,12 +189,14 @@ export function ViewTabs({
   }
 
   return (
+    <SourceViewerProvider reviewerId={reviewerId} citationSources={citationSources}>
+    <StudyPackContext.Provider value={studyPack}>
     <Tabs
       value={tab}
       onValueChange={(next) => selectTab(next as ViewKind)}
       className="w-full gap-4"
     >
-      <div className="sticky top-14 z-20 -mx-1 overflow-x-auto bg-background/95 px-1 py-2 backdrop-blur">
+      <div className="print-hide sticky top-14 z-20 -mx-1 overflow-x-auto bg-background/95 px-1 py-2 backdrop-blur">
         <TabsList
           variant="line"
           className={cn(
@@ -210,11 +221,11 @@ export function ViewTabs({
         </TabsList>
       </div>
       {compact ? null : (
-        <p className="text-xs text-muted-foreground">{copy.jobLine}</p>
+        <p className="print-hide text-xs text-muted-foreground">{copy.jobLine}</p>
       )}
 
       {showRedo ? (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+        <div className="print-hide flex flex-col gap-2 sm:flex-row sm:items-start">
           <Button
             type="button"
             variant="outline"
@@ -242,7 +253,7 @@ export function ViewTabs({
       ) : null}
 
       {views.staleKinds?.includes(tab) ? (
-        <p role="status" className="max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+        <p role="status" className="print-hide max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           This mode is from an older generation. Redo it when you are ready.
         </p>
       ) : null}
@@ -338,5 +349,7 @@ export function ViewTabs({
         </DialogContent>
       </Dialog>
     </Tabs>
+    </StudyPackContext.Provider>
+    </SourceViewerProvider>
   );
 }

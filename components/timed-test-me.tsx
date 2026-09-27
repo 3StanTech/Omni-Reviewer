@@ -7,11 +7,14 @@ import {
   CheckCircle,
   Clock,
   Play,
+  Presentation,
   XCircle,
 } from "@phosphor-icons/react";
 
+import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
 import { Button } from "@/components/ui/button";
+import { parseCitations, type Citation } from "@/lib/citations";
 import { DEFAULT_TIMED_TEST_SECONDS } from "@/lib/test-timing-constants";
 import type { TestMeItem } from "@/lib/types";
 import { readApiError, cn } from "@/lib/utils";
@@ -370,6 +373,7 @@ export function TimedTestMe({
             </p>
             <div className="text-sm text-muted-foreground"><strong className="text-foreground">Answer:</strong> <MarkdownBody source={item.answer} inline /></div>
             {item.explanation ? <MarkdownBody source={item.explanation} /> : null}
+            {results[item.id] ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
           </div>
         ) : null}
       </article>
@@ -387,5 +391,37 @@ export function TimedTestMe({
       {message ? <p role="alert" className="text-sm text-destructive">{message}</p> : null}
       {expired && !message ? <p role="status" className="text-sm text-destructive">Time is up. Your next answer cannot be saved.</p> : null}
     </section>
+  );
+}
+
+/** First citation with a page or slide number across the given texts, in order. */
+export function firstPageCitation(texts: ReadonlyArray<string | null | undefined>): Citation | null {
+  for (const text of texts) {
+    if (!text) continue;
+    const cited = parseCitations(text).find((citation) => citation.pageStart !== null);
+    if (cited) return cited;
+  }
+  return null;
+}
+
+/**
+ * "Open slide N" after a wrong answer, for the first page cited by the
+ * explanation or answer. Renders nothing when no viewer or page is available.
+ */
+export function OpenCitedSlide({ texts }: { texts: ReadonlyArray<string | null | undefined> }) {
+  const { openSource, available } = useSourceViewer();
+  const citation = firstPageCitation(texts);
+  if (!available || !citation || citation.pageStart === null) return null;
+  const page = citation.pageStart;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={() => openSource({ source: citation.source, page })}
+    >
+      <Presentation weight="bold" />
+      Open slide {page}
+    </Button>
   );
 }

@@ -33,6 +33,8 @@ export type SourceListItem = {
   ingestStatus: IngestStatus;
   errorMessage: string | null;
   createdAt: string;
+  /** Whether stored text carries page or slide numbers. null or absent means unknown. */
+  hasPageMarkers?: boolean | null;
 };
 
 type SourcePanelProps = {
@@ -51,6 +53,16 @@ function canRetryStoredFile(source: Pick<SourceListItem, "kind" | "ingestStatus"
       || source.kind === "text"
       || source.kind === "document"
       || source.kind === "presentation");
+}
+
+/** Ready PDF/PPTX rows known to lack page numbers can be re-read from the stored file. */
+export function canRefreshPageNumbers(
+  source: Pick<SourceListItem, "kind" | "ingestStatus" | "blobPathname" | "hasPageMarkers">,
+): boolean {
+  return source.ingestStatus === "ready"
+    && Boolean(source.blobPathname)
+    && (source.kind === "pdf" || source.kind === "presentation")
+    && source.hasPageMarkers === false;
 }
 
 function statusLabel(status: IngestStatus): string {
@@ -111,6 +123,8 @@ function normalizeSource(raw: Record<string, unknown>): SourceListItem {
       (raw.error_message as string | null | undefined) ??
       null,
     createdAt: String(raw.createdAt),
+    hasPageMarkers:
+      typeof raw.hasPageMarkers === "boolean" ? raw.hasPageMarkers : null,
   };
 }
 
@@ -128,6 +142,8 @@ export function SourcePanel({
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<{ id: string; message: string } | null>(null);
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [pasteBusy, setPasteBusy] = useState(false);
@@ -263,6 +279,33 @@ export function SourcePanel({
       setError("Could not retry source. Try again.");
     } finally {
       setRetryingId(null);
+    }
+  }
+
+  async function refreshPageNumbers(sourceId: string) {
+    setRefreshingId(sourceId);
+    setRefreshError(null);
+    try {
+      const res = await fetch(
+        `/api/reviewers/${reviewerId}/sources/${sourceId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "page_markers" }),
+        },
+      );
+      if (!res.ok) {
+        setRefreshError({ id: sourceId, message: await readApiError(res) });
+        return;
+      }
+      const raw = (await res.json()) as Record<string, unknown>;
+      commit(sources.map((source) => (
+        source.id === sourceId ? normalizeSource(raw) : source
+      )));
+    } catch {
+      setRefreshError({ id: sourceId, message: "Could not refresh page numbers. Try again." });
+    } finally {
+      setRefreshingId(null);
     }
   }
 
@@ -449,8 +492,30 @@ export function SourcePanel({
                     {source.errorMessage}
                   </p>
                 ) : null}
+                {refreshError?.id === source.id ? (
+                  <p role="alert" className="text-xs text-destructive">
+                    {refreshError.message}
+                  </p>
+                ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-1">
+                {canRefreshPageNumbers(source) ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground"
+                    disabled={refreshingId === source.id || deletingId === source.id || uploading}
+                    onClick={() => void refreshPageNumbers(source.id)}
+                  >
+                    {refreshingId === source.id ? (
+                      <CircleNotch className="animate-spin" />
+                    ) : (
+                      <ArrowClockwise />
+                    )}
+                    {refreshingId === source.id ? "Refreshing" : "Refresh page numbers"}
+                  </Button>
+                ) : null}
                 {canRetryStoredFile(source) ? (
                   <Button
                     type="button"
@@ -472,7 +537,7 @@ export function SourcePanel({
                   variant="ghost"
                   size="icon-sm"
                   className="text-muted-foreground hover:text-destructive"
-                  disabled={deletingId === source.id || retryingId === source.id || uploading}
+                  disabled={deletingId === source.id || retryingId === source.id || refreshingId === source.id || uploading}
                   aria-label={`Remove ${source.filename}`}
                   onClick={() => void deleteSource(source.id)}
                 >

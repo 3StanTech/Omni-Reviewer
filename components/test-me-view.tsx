@@ -12,7 +12,7 @@ import {
 
 import { EmptyState } from "@/components/empty-state";
 import { MarkdownBody } from "@/components/study-markdown";
-import { TimedTestMe } from "@/components/timed-test-me";
+import { OpenCitedSlide, TimedTestMe } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
 import { parseTestMeItems } from "@/lib/learning";
 import {
@@ -577,6 +577,7 @@ function SittingItem({
             <MarkdownBody source={item.answer} inline />
           </div>
           {item.explanation ? <MarkdownBody source={item.explanation} /> : null}
+          {correct ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
         </div>
       ) : null}
     </article>

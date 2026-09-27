@@ -47,4 +47,27 @@ describe("study document interaction contracts", () => {
     expect(guard).not.toContain("event.preventDefault()");
     expect(guard).not.toContain(".pushState(");
   });
+
+  it("mounts citations, the source viewer, Download, and print utilities", () => {
+    const document = read("components/study-document.tsx");
+    const tabs = read("components/view-tabs.tsx");
+    const workspace = read("components/reviewer-workspace.tsx");
+    const modal = read("components/source-modal.tsx");
+    expect(document).toContain("<StudyExport");
+    expect(document).toContain("claims from your sources");
+    expect(document).toContain("print-document");
+    expect(document).toContain("expectedRevision: view.revision, content");
+    expect(document).toContain("resolveUnsourcedClaim");
+    expect(tabs).toContain("<SourceViewerProvider");
+    expect(tabs).toContain("citationSourcesForMode(views, tab)");
+    expect(tabs).toContain("print-hide");
+    expect(workspace).toContain('className="print-hide space-y-3" aria-labelledby="generate-heading"');
+    expect(modal).toContain('await import("unpdf")');
+    expect(modal).not.toMatch(/^import[^\n]*from "unpdf"/m);
+    expect(modal).toContain("finalFocus={openerRef}");
+    const emDash = "\u2014";
+    for (const file of ["components/source-modal.tsx", "components/citation-chip.tsx", "components/unsourced-tag.tsx", "components/study-document.tsx"]) {
+      expect(read(file)).not.toContain(emDash);
+    }
+  });
 });

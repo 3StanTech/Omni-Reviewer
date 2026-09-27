@@ -1,4 +1,5 @@
 import { publicSourceErrorMessage } from "@/lib/public-errors";
+import { hasPageMarkers } from "@/lib/source-markers";
 
 export function serializeSource(row: {
   id: string;
@@ -11,6 +12,10 @@ export function serializeSource(row: {
   ingestStatus: string;
   errorMessage: string | null;
   createdAt: Date;
+  /** Present on full rows. Only the marker check leaves the server. */
+  extractedText?: string | null;
+  /** Precomputed marker check for list queries that do not load the text. */
+  hasPageMarkers?: boolean | null;
 }, sourceUrl: string | null) {
   return {
     id: row.id,
@@ -29,5 +34,11 @@ export function serializeSource(row: {
     error_message: publicSourceErrorMessage(row.errorMessage),
     errorMessage: publicSourceErrorMessage(row.errorMessage),
     createdAt: row.createdAt.toISOString(),
+    // null means unknown: the row was loaded without its extracted text.
+    hasPageMarkers: typeof row.hasPageMarkers === "boolean"
+      ? row.hasPageMarkers
+      : row.extractedText !== undefined
+        ? hasPageMarkers(row.extractedText)
+        : null,
   };
 }

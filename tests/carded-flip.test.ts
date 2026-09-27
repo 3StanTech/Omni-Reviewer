@@ -59,6 +59,7 @@ describe("Carded recall flip", () => {
   it("shows the next interval from the schedule after rating, then advances", () => {
     expect(src).toContain('if (rating === "again") return "show tonight"');
     expect(src).toContain("next in ${intervalDays} days");
+    expect(src).toContain('"next in 1 day"');
     expect(src).toContain("data.card.intervalDays");
     expect(src).toContain("setScheduleHint(nextIntervalCopy(rating, data.card.intervalDays))");
     expect(src).toContain("setTimeout");
@@ -79,4 +80,20 @@ describe("Carded recall flip", () => {
   it("does not put an em dash in Carded UI copy", () => {
     expect(src).not.toContain(EM_DASH);
   });
+
+  it("shows citations on the back only and never flips when a chip is used", () => {
+    expect(src).toContain("const frontSource = stripCitations(");
+    expect(src).toContain("inert={!flipped}");
+    const back = src.slice(src.indexOf('className="carded-face carded-back"'));
+    expect(back.slice(0, 400)).toContain("event.stopPropagation()");
+    expect(src).toContain('closest("button, a, [data-cite-source]")');
+  });
+
+  it("offers a Slide button after the flip when the back cites a page", () => {
+    expect(src).toContain("card && flipped ? firstPageCitation([card.back]) : null");
+    expect(src).toContain("sourceViewer.available");
+    expect(src).toContain("Slide {backPage}");
+    expect(src).toContain("<Presentation");
+  });
 });
+

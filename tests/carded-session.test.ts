@@ -51,6 +51,16 @@ describe("untimed Test Me sitting UI", () => {
     expect(src).toContain('mode: "untimed"');
     expect(src).toContain("Timed run");
   });
+
+  it("offers the cited slide after a wrong answer in both runners", () => {
+    const timed = readFileSync(path.join(root, "components/timed-test-me.tsx"), "utf8");
+    expect(src).toContain("{correct ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}");
+    expect(timed).toContain("{results[item.id] ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}");
+    expect(timed).toContain("if (!available || !citation || citation.pageStart === null) return null;");
+    expect(timed).toContain("Open slide {page}");
+    expect(src).toContain('/^[1-4]$/.test(event.key)');
+    expect(src + timed).not.toContain("\u2014");
+  });
 });
 
 describe("untimed sitting SQL contracts", () => {

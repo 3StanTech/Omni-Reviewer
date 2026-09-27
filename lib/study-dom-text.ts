@@ -47,6 +47,11 @@ function isSkippedFootnoteSurface(node: StudyIndexableNode): boolean {
   return Boolean(node.classList?.contains("footnotes"));
 }
 
+/** Citation chips and unsourced tags (and their popovers) carry no study text. */
+function isSkippedStudySurface(node: StudyIndexableNode): boolean {
+  return Boolean(tagNameOf(node)) && attr(node, "data-study-skip") !== null;
+}
+
 function childrenOf(node: StudyIndexableNode): StudyIndexableNode[] {
   return Array.from(node.childNodes);
 }
@@ -114,7 +119,7 @@ function indexStudyDom(root: StudyIndexableNode): StudyDomTextIndex {
         ends.set(node, text.length);
         return;
       }
-      if (tagName === "ANNOTATION" || attr(node, "aria-hidden") === "true" || isSkippedFootnoteSurface(node)) {
+      if (tagName === "ANNOTATION" || attr(node, "aria-hidden") === "true" || isSkippedFootnoteSurface(node) || isSkippedStudySurface(node)) {
         ends.set(node, text.length);
         return;
       }

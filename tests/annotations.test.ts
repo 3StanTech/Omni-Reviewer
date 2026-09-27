@@ -22,6 +22,7 @@ import {
   validateAnnotationBatch,
   validateAnnotationDraft,
 } from "@/lib/annotations";
+import { remarkCitations } from "@/lib/citations";
 
 describe("annotation SQL rows", () => {
   it("maps camel-case drafts onto the snake_case columns jsonb_to_recordset reads", () => {
@@ -192,5 +193,58 @@ describe("annotation anchors", () => {
     expect(hasLossyRichMarkdown("$x^2$")) .toBe(true);
     expect(hasLossyRichMarkdown('<span class="ink-fact">Fact</span>')).toBe(true);
     expect(hasLossyRichMarkdown("# Plain\n\nText")).toBe(false);
+  });
+});
+
+describe("citation chips in the annotation text model", () => {
+  const withChips = "Cells divide. [S1 p.2] The nucleus stores DNA. [[unsourced]] Ribosomes build proteins [S2 pp.3-4].\n\n| Drug | Effect |\n| - | - |\n| Gentamicin | Ototoxicity [S1 p.15] in the ear |";
+  const withoutChips = "Cells divide.  The nucleus stores DNA.  Ribosomes build proteins .\n\n| Drug | Effect |\n| - | - |\n| Gentamicin | Ototoxicity  in the ear |";
+
+  it("skips chip labels and unsourced markers like footnotes", () => {
+    const text = renderedStudyText(withChips);
+    expect(text).toBe(renderedStudyText(withoutChips));
+    expect(text).not.toContain("p.2");
+    expect(text).not.toContain("S1");
+    expect(text).not.toContain("unsourced");
+  });
+
+  it("validates, contexts, and remaps quotes at identical offsets with or without chips", () => {
+    for (const quote of ["nucleus stores DNA", "Ribosomes build proteins", "Ototoxicity"]) {
+      const start = renderedStudyText(withoutChips).indexOf(quote);
+      const draft = { startOffset: start, endOffset: start + quote.length, quote, color: "sun" as const };
+      const plain = validateAnnotationDraft(withoutChips, draft);
+      const cited = validateAnnotationDraft(withChips, draft);
+      expect(plain).not.toBeNull();
+      expect(cited).toEqual(plain);
+      expect(remapAnnotation({ id: quote, quote, prefix: plain!.prefix, suffix: plain!.suffix }, withChips, 2)).toMatchObject({
+        startOffset: start,
+        endOffset: start + quote.length,
+        quote,
+      });
+    }
+  });
+
+  it("keeps chips out of reader highlight spans", () => {
+    const text = renderedStudyText(withChips);
+    const start = text.indexOf("divide");
+    const end = text.indexOf("stores") + "stores".length;
+    const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMath).use(remarkCitations).use(
+      remarkStudyAnnotations([
+        { id: "span", startOffset: start, endOffset: end, archivedAt: null, color: "mint" },
+      ] as unknown as AnnotationRecord[]),
+    );
+    type Node = { type: string; value?: string; children?: Node[]; data?: { hProperties?: { className?: string[] } } };
+    const tree = processor.runSync(processor.parse(withChips)) as unknown as Node;
+    const highlighted: string[] = [];
+    const chips: string[] = [];
+    const collect = (node: Node, inside: boolean) => {
+      const isHighlight = node.data?.hProperties?.className?.includes("user-annotation-mint") ?? false;
+      if (node.type === "studyCitation") chips.push((node.children ?? []).map((child) => child.value).join(""));
+      if (node.type === "text" && (inside || isHighlight)) highlighted.push(node.value ?? "");
+      for (const child of node.children ?? []) collect(child, inside || isHighlight);
+    };
+    collect(tree, false);
+    expect(highlighted.join("")).toBe(text.slice(start, end));
+    expect(chips).toEqual(["p.2", "pp.3-4", "p.15"]);
   });
 });

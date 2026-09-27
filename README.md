@@ -94,7 +94,7 @@ Names only — set values in `.env.local` (local) or your host (production):
 | `AI_MODEL_SUMMARY` | Summary model id (`:free`) |
 | `AI_MODEL_JSON` | Test Me / Carded model id (`:free`) |
 | `AI_MODEL_VISION` | Vision model id for images (`:free`) |
-| `AI_MODEL_FALLBACKS` | Comma-separated `:free` fallback model ids |
+| `AI_MODEL_FALLBACKS` | Comma-separated `:free` fallback model ids. Leave the model variables blank to use the probed defaults in `lib/env.ts`; a fallback is sent only when it is in the verified catalogue in `lib/openrouter.ts`. |
 | `DATABASE_URL` | Neon Postgres connection string |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob read/write token |
 | `AUTH_SECRET` | Session signing secret, at least 32 characters |

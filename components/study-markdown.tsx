@@ -1,6 +1,7 @@
 "use client";
 
-import type { Components } from "react-markdown";
+import type { ComponentProps } from "react";
+import type { Components, ExtraProps } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeSanitize from "rehype-sanitize";
@@ -8,6 +9,9 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 
+import { CitationChip } from "@/components/citation-chip";
+import { UNSOURCED_CLAIM_CLASS, UnsourcedTag } from "@/components/unsourced-tag";
+import { remarkCitations } from "@/lib/citations";
 import { prepareStudyMarkdown } from "@/lib/study-markdown";
 import {
   normalizeDocumentText,
@@ -59,7 +63,7 @@ const MATH_TAGS = [
 ] as const;
 
 const SAFE_STUDY_SPAN_CLASS =
-  /^(?:katex|katex-error|ink-idea|ink-example|ink-fact|ink-warning|ink-exam|user-annotation-(?:sun|sky|mint|rose))$/;
+  /^(?:katex|katex-error|ink-idea|ink-example|ink-fact|ink-warning|ink-exam|user-annotation-(?:sun|sky|mint|rose)|study-cite|study-unsourced|study-claim)$/;
 const SAFE_MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
 const INK_CLASS_NAMES = [
   "ink-idea",
@@ -187,6 +191,70 @@ function rewriteInkHtml(node: MdastNode) {
   node.children = next;
 }
 
+type UnsourcedNode = MdastNode & {
+  data?: { hName?: string; hProperties?: Record<string, unknown> };
+};
+
+/**
+ * Number rendered `[[unsourced]]` markers in document order so a tag can name
+ * which token in the Markdown it resolves (see `unsourcedTokenOffsets`).
+ */
+function remarkNumberUnsourced() {
+  return (tree: MdastNode) => {
+    let next = 0;
+    const visit = (node: UnsourcedNode) => {
+      if (node.type === "studyUnsourced") {
+        node.data = {
+          ...node.data,
+          hProperties: { ...node.data?.hProperties, dataUnsourcedIndex: String(next) },
+        };
+        next += 1;
+        return;
+      }
+      for (const child of node.children ?? []) visit(child as UnsourcedNode);
+    };
+    visit(tree as UnsourcedNode);
+  };
+}
+
+type SpanProps = ComponentProps<"span"> & ExtraProps;
+type DataAttributes = Record<`data-${string}`, string | undefined>;
+
+function pageAttribute(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const page = Number(value);
+  return Number.isInteger(page) && page > 0 ? page : null;
+}
+
+function studySpan(inline: boolean) {
+  function StudySpan({ node, className, children, ...props }: SpanProps) {
+    void node;
+    const rest = props as typeof props & DataAttributes;
+    const classes = typeof className === "string" ? className.split(/\s+/) : [];
+    if (classes.includes("study-cite")) {
+      return (
+        <CitationChip
+          source={Number(rest["data-cite-source"])}
+          pageStart={pageAttribute(rest["data-cite-page-start"])}
+          pageEnd={pageAttribute(rest["data-cite-page-end"])}
+          inert={inline}
+        >
+          {children}
+        </CitationChip>
+      );
+    }
+    if (classes.includes("study-unsourced")) {
+      const index = rest["data-unsourced-index"];
+      return <UnsourcedTag occurrence={index === undefined ? null : Number(index)} inert={inline} />;
+    }
+    if (classes.includes("study-claim")) {
+      return <span className={UNSOURCED_CLAIM_CLASS} data-claim="unsourced">{children}</span>;
+    }
+    return <span className={className} {...rest}>{children}</span>;
+  }
+  return StudySpan;
+}
+
 /**
  * Allow normal study Markdown plus the small MathML surface emitted by
  * KaTeX's mathml renderer. Raw HTML, images, styles, event handlers, and
@@ -206,6 +274,14 @@ const studySanitizeSchema: Schema = {
       ...(defaultSchema.attributes?.span ?? []),
       ["className", SAFE_STUDY_SPAN_CLASS],
       "ariaHidden",
+      // Citation chips and unsourced markers from remarkCitations.
+      ["dataCiteSource", /^\d{1,2}$/],
+      ["dataCitePageStart", /^\d{1,4}$/],
+      ["dataCitePageEnd", /^\d{1,4}$/],
+      ["dataUnsourced", ""],
+      ["dataUnsourcedIndex", /^\d{1,5}$/],
+      ["dataClaim", "unsourced"],
+      ["dataStudySkip", ""],
     ],
     math: [
       ["xmlns", SAFE_MATHML_NAMESPACE],
@@ -225,6 +301,7 @@ const studySanitizeSchema: Schema = {
 };
 
 const components: Components = {
+  span: studySpan(false),
   a: ({ href, children, ...props }) => {
     const safeHref = typeof href === "string" ? sanitizeMarkdownUrl(href) : null;
     if (!safeHref) return <span>{children}</span>;
@@ -246,6 +323,7 @@ const inlineComponents: Components = {
   // Choices and answer labels are already interactive controls; do not nest
   // a second clickable anchor inside them.
   a: ({ children }) => <span>{children}</span>,
+  span: studySpan(true),
   p: ({ children }) => <span>{children}</span>,
   h1: ({ children }) => <span>{children}</span>,
   h2: ({ children }) => <span>{children}</span>,
@@ -307,6 +385,9 @@ export function MarkdownBody({ source, inline = false, annotations }: { source: 
           remarkDropStudyFootnotes,
           [remarkMath, { singleDollarTextMath: true }],
           remarkStudyHeadingIds,
+          // After remarkMath (math stays literal) and heading ids (ids match the outline).
+          remarkCitations,
+          remarkNumberUnsourced,
           remarkInkSpans,
           remarkStudyAnnotations(annotations ?? []),
         ]}

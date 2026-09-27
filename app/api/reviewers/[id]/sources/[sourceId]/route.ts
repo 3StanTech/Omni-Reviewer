@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+
+import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
@@ -7,6 +10,7 @@ import {
   MAX_INGEST_BYTES,
   MAX_UPLOAD_BYTES,
 } from "@/lib/blob";
+import { db } from "@/lib/db";
 import { createIngestBudget, ingestSource } from "@/lib/ingest";
 import {
   beginSourceDeletion,
@@ -15,7 +19,9 @@ import {
   getSourceForReviewer,
   replaceFailedSourceIngest,
 } from "@/lib/queries";
-import { logRedactedError, publicErrorMessage } from "@/lib/public-errors";
+import { logRedactedError, PublicError, publicErrorMessage } from "@/lib/public-errors";
+import { cappedBodyError, readCappedText } from "@/lib/request-body";
+import { hasPageMarkers } from "@/lib/source-markers";
 import { serializeSource } from "@/lib/source-response";
 import type { SourceKind } from "@/lib/types";
 
@@ -28,6 +34,17 @@ const RETRYABLE_SOURCE_KINDS = new Set<SourceKind>([
   "document",
   "presentation",
 ]);
+
+/** Ready sources that can be re-read to add page or slide markers. */
+const PAGED_SOURCE_KINDS = new Set<SourceKind>(["pdf", "presentation"]);
+
+const PAGE_MARKERS_NOT_ELIGIBLE =
+  "Only a ready PDF or PPTX without page numbers can be refreshed";
+const PAGE_MARKERS_NOT_FOUND =
+  "Page numbers could not be read from this file";
+
+/** The retry body is at most `{ "reason": "page_markers" }`. */
+const MAX_RETRY_BODY_BYTES = 1024;
 
 type RouteContext = {
   params: Promise<{ id: string; sourceId: string }>;
@@ -138,9 +155,21 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Reviewer not found" }, { status: 404 });
   }
 
+  let reason: string | null;
+  try {
+    reason = await readRetryReason(request);
+  } catch (error) {
+    const { message, status } = cappedBodyError(error);
+    return NextResponse.json({ error: message }, { status });
+  }
+  const refreshPageMarkers = reason === "page_markers";
+
   const source = await getSourceForReviewer(reviewerId, sourceId, userId);
   if (!source || source.deletingAt) {
     return NextResponse.json({ error: "Source not found" }, { status: 404 });
+  }
+  if (refreshPageMarkers) {
+    return refreshSourcePageMarkers(request, userId, reviewerId, source);
   }
   if (source.ingestStatus !== "failed" || !RETRYABLE_SOURCE_KINDS.has(source.kind)) {
     return NextResponse.json(
@@ -183,6 +212,121 @@ export async function POST(request: Request, context: RouteContext) {
     }
     if (!row || row.deletingAt) {
       return NextResponse.json({ error: "Source not found" }, { status: 404 });
+    }
+    return NextResponse.json(
+      serializeSource(row, `/api/reviewers/${reviewerId}/sources/${row.id}`),
+    );
+  } finally {
+    budget.dispose();
+  }
+}
+
+/**
+ * Optional capped JSON body `{ reason }`. No body, or any other reason, is a
+ * plain failed-source retry. Oversize or invalid JSON throws a PublicError.
+ */
+async function readRetryReason(request: Request): Promise<string | null> {
+  const raw = await readCappedText(request, {
+    maxBytes: MAX_RETRY_BODY_BYTES,
+    tooLargeMessage: "Source retry request body exceeds the safe size limit",
+    invalidMessage: "Invalid JSON body",
+    allowEmpty: true,
+  });
+  if (!raw.trim()) return null;
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw new PublicError("Invalid JSON body");
+  }
+  if (body && typeof body === "object" && "reason" in body) {
+    const reason = (body as { reason?: unknown }).reason;
+    return typeof reason === "string" ? reason : null;
+  }
+  return null;
+}
+
+function textFingerprint(text: string | null): string {
+  return createHash("md5").update(text ?? "", "utf8").digest("hex");
+}
+
+/**
+ * Re-read a ready PDF or PPTX from its stored blob so its text gains page
+ * markers. The write is conditional on the row still holding the text and
+ * blob that were read, so a concurrent delete or replace always wins.
+ */
+async function refreshSourcePageMarkers(
+  request: Request,
+  userId: string,
+  reviewerId: string,
+  source: NonNullable<Awaited<ReturnType<typeof getSourceForReviewer>>>,
+) {
+  const sourceId = source.id;
+  if (
+    source.ingestStatus !== "ready"
+    || !PAGED_SOURCE_KINDS.has(source.kind)
+    || hasPageMarkers(source.extractedText)
+  ) {
+    return NextResponse.json({ error: PAGE_MARKERS_NOT_ELIGIBLE }, { status: 409 });
+  }
+  if (!source.blobPathname || !source.blobUrl) {
+    return NextResponse.json({ error: "Source file unavailable" }, { status: 404 });
+  }
+
+  const budget = createIngestBudget(request.signal);
+  try {
+    let ingest;
+    try {
+      ingest = await ingestSource({
+        mime: source.mime,
+        blobUrl: source.blobUrl,
+        blobPathname: source.blobPathname,
+        filename: source.filename,
+        signal: budget.signal,
+        budget,
+      });
+      budget.throwIfExpired();
+    } catch (error) {
+      const message = publicErrorMessage(error, "Source ingest failed");
+      if (message === "Source ingest failed") {
+        logRedactedError("Source page refresh failed", error, { reviewerId, sourceId });
+      }
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+
+    // Never replace good ready text with a failed or unmarked read.
+    if (ingest.ingestStatus !== "ready" || !hasPageMarkers(ingest.extractedText)) {
+      return NextResponse.json({ error: PAGE_MARKERS_NOT_FOUND }, { status: 422 });
+    }
+
+    const result = await db.execute(sql`
+      UPDATE sources AS s
+      SET extracted_text = ${ingest.extractedText},
+          error_message = NULL
+      FROM reviewers AS r
+      INNER JOIN topics AS t ON t.id = r.topic_id
+      WHERE s.id = ${sourceId}
+        AND s.reviewer_id = ${reviewerId}
+        AND s.reviewer_id = r.id
+        AND t.user_id = ${userId}
+        AND s.ingest_status = 'ready'::ingest_status
+        AND s.deleting_at IS NULL
+        AND s.blob_pathname = ${source.blobPathname}
+        AND md5(coalesce(s.extracted_text, '')) = ${textFingerprint(source.extractedText)}
+        AND r.deleting_at IS NULL
+        AND t.deleting_at IS NULL
+      RETURNING s.id
+    `);
+
+    const row = await getSourceForReviewer(reviewerId, sourceId, userId);
+    if (!row || row.deletingAt) {
+      return NextResponse.json({ error: "Source not found" }, { status: 404 });
+    }
+    if (result.rows.length === 0 && !hasPageMarkers(row.extractedText)) {
+      return NextResponse.json(
+        { error: "This source changed while refreshing. Try again." },
+        { status: 409 },
+      );
     }
     return NextResponse.json(
       serializeSource(row, `/api/reviewers/${reviewerId}/sources/${row.id}`),
