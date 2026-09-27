@@ -31,3 +31,14 @@ export const CONSERVATIVE_GENERATION_CONTEXT_TOKENS = 32_768;
 /** Vision transcription is bounded independently of general text generation. */
 export const MAX_VISION_TEXT_CHARS = 100_000;
 export const MAX_VISION_OUTPUT_TOKENS = Math.ceil(MAX_VISION_TEXT_CHARS / 4);
+
+/** One grounding verification call per generated document, bounded separately. */
+export const MAX_GROUNDING_VERIFY_OUTPUT_TOKENS = 2_000;
+export const GROUNDING_VERIFY_DEADLINE_MS = 60_000;
+/** Generation plus verification must finish inside the route's 300 s ceiling. */
+export const GROUNDED_STEP_TOTAL_MS = 285_000;
+/** Minimum time left in the step before a verification call is worth starting. */
+export const MIN_GROUNDING_VERIFY_MS = 5_000;
+/** Keeps the verify prompt inside the conservative context budget. */
+export const MAX_GROUNDING_VERIFY_ITEMS = 40;
+export const MAX_GROUNDING_EVIDENCE_CHARS = 2_000;

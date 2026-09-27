@@ -824,6 +824,9 @@ export async function listSourcesForUi(reviewerId: string, userId: string) {
       errorMessage: sources.errorMessage,
       deletingAt: sources.deletingAt,
       createdAt: sources.createdAt,
+      // joinPages always starts marked text with <<<page 1>>>; a prefix check
+      // avoids scanning up to 1 MB of text per row.
+      hasPageMarkers: sql<boolean>`coalesce(starts_with(${sources.extractedText}, '<<<page '), false)`,
     })
     .from(sources)
     .where(eq(sources.reviewerId, reviewerId))
@@ -3660,7 +3663,13 @@ export async function persistViewForActiveClaim(args: {
   userId: string;
   claimToken: string;
   generationRunId: string;
+  /** The claimed job step; the claim is only valid while the job is on it. */
   step: GenerationJobStep;
+  /**
+   * The view kind to publish, when it differs from the claimed step. The
+   * combined Summary step publishes Test Me under the same Summary claim.
+   */
+  kind?: GenerationJobStep;
   content: string;
   contentJson: unknown | null;
   modelUsed: string;
@@ -3668,21 +3677,25 @@ export async function persistViewForActiveClaim(args: {
   forceOverwrite: boolean;
   cardItems?: Array<{ id: string; front: string; back: string }>;
 }): Promise<number | null> {
+  const kind = args.kind ?? args.step;
+  if (kind !== args.step && !(args.step === "summary" && kind === "test_me")) {
+    throw new Error(`A ${args.step} claim cannot publish ${kind}`);
+  }
   if (args.content.length > MAX_GENERATED_MARKDOWN_CHARS) {
     throw new Error("Generated text exceeds the safe output limit");
   }
-  if (args.step === "test_me" || args.step === "carded") {
+  if (kind === "test_me" || kind === "carded") {
     if (!Array.isArray(args.contentJson)) {
       throw new Error("Generated structured output is invalid");
     }
-    const parsedItems = args.step === "test_me"
+    const parsedItems = kind === "test_me"
       ? parseTestMeItems(args.contentJson, args.content)
       : parseCardedItems(args.contentJson, args.content);
     if (parsedItems.length === 0) {
-      throw new Error(`Generated ${args.step} output must contain at least one item`);
+      throw new Error(`Generated ${kind} output must contain at least one item`);
     }
     if (parsedItems.length !== args.contentJson.length) {
-      throw new Error(`Generated ${args.step} output contains invalid items`);
+      throw new Error(`Generated ${kind} output contains invalid items`);
     }
   }
   const contentJson =
@@ -3690,10 +3703,10 @@ export async function persistViewForActiveClaim(args: {
   if (contentJson && contentJson.length > MAX_GENERATED_JSON_CHARS) {
     throw new Error("Generated structured output exceeds the safe size limit");
   }
-  const generatedCardItems = args.step === "carded"
+  const generatedCardItems = kind === "carded"
     ? normalizeLearningIds(args.cardItems ?? [])
     : [];
-  if (args.step === "carded" && (generatedCardItems.length === 0 || generatedCardItems.length > MAX_CARDED_ITEMS)) {
+  if (kind === "carded" && (generatedCardItems.length === 0 || generatedCardItems.length > MAX_CARDED_ITEMS)) {
     throw new Error("Generated card output must contain 1 to 100 items");
   }
   if (generatedCardItems.some(
@@ -3727,7 +3740,8 @@ export async function persistViewForActiveClaim(args: {
         AND active = TRUE
       AND claim_token = ${args.claimToken}
       AND claim_expires_at > NOW()
-      RETURNING reviewer_id, generation_run_id, step, intent, force_overwrite, expected_protected, upstream_revisions
+      -- Downstream CTEs read "step" as the view kind being published.
+      RETURNING reviewer_id, generation_run_id, ${kind}::generation_job_step AS step, intent, force_overwrite, expected_protected, upstream_revisions
     ), input AS (
       SELECT item.id, item.front, item.back
       FROM jsonb_to_recordset(CAST(${generatedCardsJson} AS jsonb))

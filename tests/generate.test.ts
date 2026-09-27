@@ -54,14 +54,34 @@ import {
   GENERATION_STEP_DEADLINE_MS,
 } from "@/lib/learning-limits";
 import { classifyGenerationError } from "@/lib/generation-errors";
+import { stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import {
+  CITE_EVERY_CLAIM,
+  PHARMACY_GUIDANCE,
   cardedPrompt,
+  groundingVerifyPrompt,
   lockedInPrompt,
   summaryPrompt,
   testMePrompt,
 } from "@/lib/prompts";
+import { joinPages } from "@/lib/source-markers";
 
 const root = path.resolve(__dirname, "..");
+
+const VERIFY_PROMPT_HEAD = "You are checking whether sentences from a study document are supported";
+
+function isVerifyPrompt(prompt: string | undefined): boolean {
+  return typeof prompt === "string" && prompt.startsWith(VERIFY_PROMPT_HEAD);
+}
+
+function verifyCalls() {
+  return generateText.mock.calls.filter((call) => isVerifyPrompt((call[0] as { prompt?: string }).prompt));
+}
+
+const PHARM_SOURCE = joinPages([
+  "Beta blockers such as propranolol block beta adrenergic receptors and lower heart rate.",
+  "Propranolol can cause bronchospasm in patients with asthma and should be avoided in asthma.",
+]);
 
 describe("generate", () => {
   beforeEach(() => {
@@ -101,15 +121,16 @@ describe("generate", () => {
       { filename: "notes.txt", text: `Intro lecture. ${rawMarker}` },
     ];
 
-    generateText
-      .mockResolvedValueOnce({
-        text: SAMPLE_LOCKED_IN,
-        response: { modelId: "z-ai/glm-5.2:free" },
-      })
-      .mockResolvedValueOnce({
-        text: SAMPLE_SUMMARY,
+    const documentTexts = [SAMPLE_LOCKED_IN, SAMPLE_SUMMARY];
+    generateText.mockImplementation(({ prompt }: { prompt: string }) => {
+      if (isVerifyPrompt(prompt)) {
+        return Promise.resolve({ text: "[]" });
+      }
+      return Promise.resolve({
+        text: documentTexts.shift(),
         response: { modelId: "z-ai/glm-5.2:free" },
       });
+    });
 
     generateObject
       .mockResolvedValueOnce({
@@ -125,12 +146,15 @@ describe("generate", () => {
 
     const pack = await generateStudyPack({ extractedTexts });
 
-    expect(generateText).toHaveBeenCalledTimes(2);
+    const documentCalls = generateText.mock.calls.filter(
+      (call) => !isVerifyPrompt((call[0] as { prompt: string }).prompt),
+    );
+    expect(documentCalls).toHaveLength(2);
     expect(generateObject).toHaveBeenCalledTimes(2);
     expect(generateText.mock.calls.every((call) => (call[0] as { maxRetries: number }).maxRetries === 0)).toBe(true);
     expect(generateObject.mock.calls.every((call) => (call[0] as { maxRetries: number }).maxRetries === 0)).toBe(true);
 
-    const textPrompts = generateText.mock.calls.map(
+    const textPrompts = documentCalls.map(
       (call) => (call[0] as { prompt: string }).prompt,
     );
     const objectPrompts = generateObject.mock.calls.map(
@@ -138,34 +162,41 @@ describe("generate", () => {
     );
 
     expect(textPrompts[0]).toBe(lockedInPrompt(extractedTexts));
-    expect(textPrompts[1]).toBe(summaryPrompt(SAMPLE_LOCKED_IN));
-    expect(objectPrompts[0]).toBe(testMePrompt(SAMPLE_LOCKED_IN));
-    expect(objectPrompts[1]).toBe(cardedPrompt(SAMPLE_SUMMARY));
+    expect(textPrompts[1]).toBe(summaryPrompt(pack.lockedIn));
+    expect(objectPrompts[0]).toBe(testMePrompt(pack.lockedIn));
+    expect(objectPrompts[1]).toBe(cardedPrompt(pack.summary));
 
     // Summary is fed Locked In, not the raw sources.
     expect(textPrompts[1]).not.toContain(rawMarker);
-    expect(textPrompts[1]).toContain(SAMPLE_LOCKED_IN);
+    expect(textPrompts[1]).toContain(pack.lockedIn);
 
     // Test Me also derives from Locked In only.
     expect(objectPrompts[0]).not.toContain(rawMarker);
-    expect(objectPrompts[0]).toContain(SAMPLE_LOCKED_IN);
+    expect(objectPrompts[0]).toContain(pack.lockedIn);
 
     // Carded derives from Summary only.
     expect(objectPrompts[1]).not.toContain(rawMarker);
-    expect(objectPrompts[1]).toContain(SAMPLE_SUMMARY);
-    expect(objectPrompts[1]).not.toBe(cardedPrompt(SAMPLE_LOCKED_IN));
+    expect(objectPrompts[1]).toContain(pack.summary);
+    expect(objectPrompts[1]).not.toBe(cardedPrompt(pack.lockedIn));
 
-    // Call order across both helpers: text, text, object, object.
-    const textOrder = generateText.mock.invocationCallOrder;
+    // Call order: Locked In, Summary, Test Me, Carded.
+    const [lockedInOrder, summaryOrder] = generateText.mock.calls
+      .map((call, i) => ({ call, order: generateText.mock.invocationCallOrder[i] }))
+      .filter(({ call }) => !isVerifyPrompt((call[0] as { prompt: string }).prompt))
+      .map(({ order }) => order);
     const objectOrder = generateObject.mock.invocationCallOrder;
-    expect(textOrder[0]).toBeLessThan(textOrder[1]);
-    expect(textOrder[1]).toBeLessThan(objectOrder[0]);
+    expect(lockedInOrder).toBeLessThan(summaryOrder);
+    expect(summaryOrder).toBeLessThan(objectOrder[0]);
     expect(objectOrder[0]).toBeLessThan(objectOrder[1]);
 
-    expect(pack.lockedIn).toBe(SAMPLE_LOCKED_IN);
-    expect(pack.summary).toBe(SAMPLE_SUMMARY);
+    // Only grounding markers may be added to the generated documents.
+    expect(stripCitations(pack.lockedIn)).toBe(SAMPLE_LOCKED_IN);
+    expect(stripCitations(pack.summary)).toBe(SAMPLE_SUMMARY);
     expect(pack.testMe).toEqual(JSON.parse(SAMPLE_TEST_ME_JSON));
     expect(pack.carded).toEqual(JSON.parse(SAMPLE_CARDED_JSON));
+    expect(pack.meta.lockedIn.citationSources).toEqual([
+      { index: 1, sourceId: "", filename: "notes.txt", hasPages: false },
+    ]);
   });
 
   it("rejects an empty structured Carded result before it can be persisted", async () => {
@@ -203,13 +234,20 @@ describe("generate", () => {
 
     const result = await generateStudyPackStep({
       step: "locked_in",
-      extractedTexts: [{ filename: "notes.txt", text: "source" }],
+      extractedTexts: [{
+        filename: "notes.txt",
+        text: "Photosynthesis converts light into chemical energy.",
+      }],
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       step: "locked_in",
       payload: { kind: "locked_in", content: SAMPLE_LOCKED_IN },
       modelUsed: "provider/actual-model",
+      meta: {
+        citationSources: [{ index: 1, sourceId: "", filename: "notes.txt", hasPages: false }],
+        grounding: { verifierFailed: false, unsourced: 0 },
+      },
     });
     expect(generateText).toHaveBeenCalledTimes(1);
     expect(generateObject).not.toHaveBeenCalled();
@@ -344,6 +382,180 @@ describe("generate", () => {
     );
     expect(jobRoute).not.toMatch(/generateTextFromPrompt|generateStudyPack/);
     expect(jobRoute).toMatch(/export async function GET/);
+  });
+});
+
+describe("grounded generation", () => {
+  beforeEach(() => {
+    generateText.mockReset();
+    generateObject.mockReset();
+    process.env.AUTH_SECRET = "test-auth-secret-0123456789abcdefgh";
+    process.env.AUTH_TRUST_HOST = "true";
+    process.env.DATABASE_URL = "postgresql://user:password@example.test/db";
+    process.env.BLOB_READ_WRITE_TOKEN = "test-blob-token";
+    process.env.AUTH_URL = "http://localhost:3000";
+    process.env.OPENROUTER_API_KEY = "test-key-not-real";
+    process.env.AI_MODEL_LOCKED_IN = "z-ai/glm-5.2:free";
+    process.env.AI_MODEL_SUMMARY = "z-ai/glm-5.2:free";
+    process.env.AI_MODEL_JSON = "z-ai/glm-5.2:free";
+    process.env.AI_MODEL_FALLBACKS =
+      "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,openrouter/free";
+  });
+
+  it("requests citations and pharmacy tables and labels sources S1..Sn in the given order", () => {
+    const prompt = lockedInPrompt([
+      { filename: "b-pharm.pdf", text: PHARM_SOURCE },
+      { filename: "a-notes.docx", text: "Plain notes without pages." },
+    ]);
+    expect(prompt).toContain(CITE_EVERY_CLAIM);
+    expect(prompt).toContain(PHARMACY_GUIDANCE);
+    expect(prompt).toContain("### Source S1: b-pharm.pdf (pages 1-2)");
+    expect(prompt).toContain("### Source S2: a-notes.docx\n");
+    expect(prompt.indexOf("Source S1: b-pharm.pdf")).toBeLessThan(prompt.indexOf("Source S2: a-notes.docx"));
+    expect(prompt).toContain("<<<page N>>> marks the start of page or slide N");
+    expect(prompt).toContain("Bracket citations such as [S1 p.14] are allowed");
+    expect(prompt).not.toContain("Do not invent citations");
+
+    expect(summaryPrompt("Body [S1 p.1]")).toMatch(/Keep Locked In's citations verbatim/);
+    expect(testMePrompt("Body [S1 p.1]")).toMatch(/clinical case vignettes/);
+    expect(testMePrompt("Body [S1 p.1]")).toMatch(/End every explanation with the exact citation/);
+    expect(cardedPrompt("Body [S1 p.1]")).toMatch(/Prefer cloze \{\{\.\.\.\}\} cards/);
+    expect(cardedPrompt("Body [S1 p.1]")).toMatch(/End every back with the exact citation/);
+
+    const verify = groundingVerifyPrompt([{ id: 3, sentence: "A claim.", evidence: "Page text." }]);
+    expect(verify).toContain("ONLY against the evidence text");
+    expect(verify).toContain('[{"id":3,"sentence":"A claim.","evidence":"Page text."}]');
+    expect(verify).toContain('"missing"');
+  });
+
+  it("does not call the verifier when every claim passes lexically", async () => {
+    generateText.mockResolvedValueOnce({
+      text: "Propranolol can cause bronchospasm in patients with asthma. [S1 p.2]",
+      response: { modelId: "provider/model" },
+    });
+
+    const result = await generateStudyPackStep({
+      step: "locked_in",
+      extractedTexts: [{ sourceId: "src-1", filename: "pharm.pdf", text: PHARM_SOURCE }],
+    });
+
+    expect(verifyCalls()).toHaveLength(0);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(result.payload.content).not.toContain(UNSOURCED_TOKEN);
+    expect(result.meta).toEqual({
+      citationSources: [{ index: 1, sourceId: "src-1", filename: "pharm.pdf", hasPages: true }],
+      grounding: expect.objectContaining({ total: 1, cited: 1, lexicalSupported: 1, unsourced: 0, verifierFailed: false }),
+    });
+  });
+
+  it("verifies lexical misses in one call and tags unsupported sentences", async () => {
+    generateText
+      .mockResolvedValueOnce({
+        text: [
+          "Metoprolol dramatically reverses pulmonary fibrosis within weeks of starting treatment. [S1 p.1]",
+          "",
+          "Warfarin requires regular monitoring of clotting times for every single patient. [S1 p.2]",
+        ].join("\n"),
+        response: { modelId: "provider/model" },
+      })
+      .mockResolvedValueOnce({ text: '[{"id": 0, "supported": false}, {"id": 1, "supported": true}]' });
+
+    const result = await generateStudyPackStep({
+      step: "locked_in",
+      extractedTexts: [{ sourceId: "src-1", filename: "pharm.pdf", text: PHARM_SOURCE }],
+    });
+
+    expect(verifyCalls()).toHaveLength(1);
+    const content = result.payload.content as string;
+    expect(content.split("\n")[0]).toContain(UNSOURCED_TOKEN);
+    expect(content.split("\n")[2]).not.toContain(UNSOURCED_TOKEN);
+    expect(result.meta?.grounding).toMatchObject({ verifiedSupported: 1, unsourced: 1, verifierFailed: false });
+  });
+
+  it("keeps the step successful when the verifier fails", async () => {
+    generateText
+      .mockResolvedValueOnce({
+        text: "Metoprolol dramatically reverses pulmonary fibrosis within weeks of starting treatment. [S1 p.1]",
+        response: { modelId: "provider/model" },
+      })
+      .mockRejectedValueOnce({ statusCode: 503, message: "unavailable" });
+
+    const result = await generateStudyPackStep({
+      step: "locked_in",
+      extractedTexts: [{ sourceId: "src-1", filename: "pharm.pdf", text: PHARM_SOURCE }],
+    });
+
+    // One verify attempt only, even for a retryable provider error.
+    expect(verifyCalls()).toHaveLength(1);
+    expect(result.modelUsed).toBe("provider/model");
+    expect(result.payload.content).toContain(UNSOURCED_TOKEN);
+    expect(result.meta?.grounding).toMatchObject({ verifierFailed: true, unsourced: 1 });
+  });
+
+  it("grounds Summary against the pack's sources and keeps the S<n> map", async () => {
+    generateText
+      .mockResolvedValueOnce({
+        text: "- Metoprolol dramatically reverses pulmonary fibrosis within weeks of treatment. [S1 p.1]",
+        response: { modelId: "provider/model" },
+      })
+      .mockResolvedValueOnce({ text: "not json" });
+
+    const citationSources = [{ index: 1, sourceId: "src-1", filename: "pharm.pdf", hasPages: true }];
+    const result = await generateStudyPackStep({
+      step: "summary",
+      lockedIn: "# Locked In [S1 p.1]",
+      citationSources,
+      groundingSources: [{ index: 1, text: PHARM_SOURCE }],
+    });
+
+    expect(verifyCalls()).toHaveLength(1);
+    const verifyPrompt = (verifyCalls()[0]?.[0] as { prompt: string }).prompt;
+    expect(verifyPrompt).toContain("Beta blockers such as propranolol");
+    expect(result.meta).toMatchObject({ citationSources, grounding: { verifierFailed: true } });
+  });
+
+  it("drops citations to unknown sources from Test Me explanations and Carded backs", async () => {
+    generateObject.mockResolvedValueOnce({
+      object: [{
+        id: "q1",
+        question: "Which drug causes bronchospasm?",
+        choices: ["Propranolol", "Amlodipine"],
+        answer: "Propranolol",
+        explanation: "Beta blockade in asthma. [S1 p.2] [S7 p.3]",
+      }],
+      response: { modelId: "provider/model" },
+    });
+    const testMe = await generateStudyPackStep({
+      step: "test_me",
+      lockedIn: "# Locked In [S1 p.2]",
+      citationSources: [{ index: 1, sourceId: "src-1", filename: "pharm.pdf", hasPages: true }],
+    });
+    expect((testMe.payload.content as Array<{ explanation: string }>)[0]?.explanation)
+      .toBe("Beta blockade in asthma. [S1 p.2]");
+    expect(testMe.meta).toBeUndefined();
+
+    generateObject.mockResolvedValueOnce({
+      object: [{ id: "c1", front: "Propranolol triad", back: "Bronchospasm [S3 p.1]" }],
+      response: { modelId: "provider/model" },
+    });
+    const carded = await generateStudyPackStep({
+      step: "carded",
+      summary: "# Summary [S1 p.2]",
+      citationSources: [{ index: 1, sourceId: "src-1", filename: "pharm.pdf", hasPages: true }],
+    });
+    expect((carded.payload.content as Array<{ back: string }>)[0]?.back).toBe("Bronchospasm");
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it("persists study-document meta for Locked In and Summary in a stable source order", () => {
+    const route = readFileSync(
+      path.join(root, "app/api/reviewers/[id]/generation/[jobId]/route.ts"),
+      "utf8",
+    );
+    expect(route).toMatch(/\.orderBy\(asc\(sources\.createdAt\), asc\(sources\.id\)\)/);
+    expect(route).toMatch(/generated\.meta \?\? \{ citationSources: \[\] \}/);
+    expect(route).toContain("readStudyDocumentMeta(upstream.contentJson)");
+    expect(route).toMatch(/eq\(sources\.reviewerId, reviewerId\), inArray\(sources\.id, ids\)/);
   });
 });
 

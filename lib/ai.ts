@@ -9,9 +9,19 @@ import {
   generationBudget,
 } from "@/lib/ai-budgets";
 import {
+  dropUnknownSourceCitations,
+  type CitationSourceRef,
+  type StudyDocumentMeta,
+} from "@/lib/citations";
+import {
   GenerationError,
   toGenerationError,
 } from "@/lib/generation-errors";
+import {
+  groundDocument,
+  type GroundingSource,
+  type VerifyItem,
+} from "@/lib/grounding";
 import { getEnv } from "@/lib/env";
 import { contextWindowForRequest, getOpenRouterModel } from "@/lib/openrouter";
 import { isValidCardFront, normalizeLearningIds } from "@/lib/learning";
@@ -33,15 +43,22 @@ import {
   MAX_TEST_ME_QUESTION_CHARS,
   MAX_VISION_OUTPUT_TOKENS,
   MAX_VISION_TEXT_CHARS,
+  GROUNDED_STEP_TOTAL_MS,
+  GROUNDING_VERIFY_DEADLINE_MS,
+  MAX_GROUNDING_EVIDENCE_CHARS,
+  MAX_GROUNDING_VERIFY_ITEMS,
+  MIN_GROUNDING_VERIFY_MS,
 } from "@/lib/learning-limits";
 import {
   PromptInputLimitError,
   assertPromptWithinLimit,
   cardedPrompt,
+  groundingVerifyPrompt,
   lockedInPrompt,
   summaryPrompt,
   testMePrompt,
 } from "@/lib/prompts";
+import { hasPageMarkers } from "@/lib/source-markers";
 import type { CardedItem, TestMeItem } from "@/lib/types";
 
 export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision";
@@ -509,6 +526,115 @@ async function generateJsonArray<T extends { id: string }>(args: {
   }
 }
 
+/**
+ * The verifier lists facts the evidence lacks; a sentence is supported only
+ * when that list is empty. Naming the gap is stricter than a yes/no verdict,
+ * which lenient free models tend to answer "yes". A bare boolean is still
+ * accepted from models that ignore the requested shape.
+ */
+const verifyResultSchema = z
+  .array(
+    z.union([
+      z.object({ id: z.number().int().nonnegative(), missing: z.array(z.string()).max(40) }),
+      z.object({ id: z.number().int().nonnegative(), supported: z.boolean() }),
+    ]),
+  )
+  .max(MAX_GROUNDING_VERIFY_ITEMS * 2)
+  .transform((rows) =>
+    rows.map((row) => ({
+      id: row.id,
+      supported: "missing" in row
+        ? row.missing.every((fact) => !fact.trim())
+        : row.supported,
+    })),
+  );
+
+/**
+ * One bounded verification call for the sentences grounding could not match
+ * lexically. Single attempt, so a document step never spends more than one
+ * extra provider call on grounding.
+ */
+async function verifyGroundingItems(
+  items: VerifyItem[],
+  deadlineMs: number,
+): Promise<Array<{ id: number; supported: boolean }>> {
+  const prompt = groundingVerifyPrompt(items);
+  const modelId = modelIdForPurpose("json");
+  const budget = generationBudget("verify", estimateTokensFromText(prompt), {
+    contextWindowTokens: contextWindowForRequest(modelId),
+    attempts: 1,
+    deadlineMs,
+    safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
+  });
+  assertGenerationBudget(prompt, budget);
+  return withRetry(async (signal) => {
+    const { text } = await generateText({
+      model: getOpenRouterModel(modelId, { healJson: true }),
+      prompt,
+      maxRetries: 0,
+      maxOutputTokens: budget.maxOutputTokens,
+      abortSignal: signal,
+    });
+    return verifyResultSchema.parse(parseJsonArray(text));
+  }, { attempts: budget.attempts, deadlineMs: budget.deadlineMs });
+}
+
+/** S1..Sn identities for sources given in citation order. */
+export function citationSourcesFor(
+  sources: ReadonlyArray<{ filename: string; text: string; sourceId?: string }>,
+): CitationSourceRef[] {
+  return sources.map((source, i) => ({
+    index: i + 1,
+    sourceId: source.sourceId ?? "",
+    filename: source.filename,
+    hasPages: hasPageMarkers(source.text),
+  }));
+}
+
+/**
+ * Ground a generated document against its sources. Never throws for a
+ * verifier problem: the report records `verifierFailed` and the step succeeds.
+ */
+async function groundGeneratedDocument(args: {
+  markdown: string;
+  sources: GroundingSource[];
+  citationSources: CitationSourceRef[];
+  stepStartedAt: number;
+}): Promise<{ markdown: string; meta: StudyDocumentMeta }> {
+  // Without any source text (legacy packs) there is nothing to ground against.
+  if (args.sources.length === 0) {
+    return { markdown: args.markdown, meta: { citationSources: args.citationSources } };
+  }
+  const { markdown, report } = await groundDocument({
+    markdown: args.markdown,
+    sources: args.sources,
+    maxVerifyItems: MAX_GROUNDING_VERIFY_ITEMS,
+    maxEvidenceChars: MAX_GROUNDING_EVIDENCE_CHARS,
+    verify: async (items) => {
+      const remaining = args.stepStartedAt + GROUNDED_STEP_TOTAL_MS - Date.now();
+      const deadlineMs = Math.min(GROUNDING_VERIFY_DEADLINE_MS, remaining);
+      if (deadlineMs < MIN_GROUNDING_VERIFY_MS) {
+        throw new GenerationError("timeout", "No time left to verify grounding.", false);
+      }
+      return verifyGroundingItems(items, deadlineMs);
+    },
+  });
+  return { markdown, meta: { citationSources: args.citationSources, grounding: report } };
+}
+
+function withKnownCitations<T extends Record<K, string>, K extends keyof T>(
+  items: T[],
+  key: K,
+  sourceCount: number,
+): T[] {
+  return items.map((item) => {
+    const cleaned = dropUnknownSourceCitations(item[key], sourceCount)
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+    return cleaned ? ({ ...item, [key]: cleaned } as T) : item;
+  });
+}
+
 export type StudyPackStepPayload =
   | { kind: "locked_in"; content: string }
   | { kind: "summary"; content: string }
@@ -519,7 +645,11 @@ export type GeneratedStudyPackStep = {
   step: StudyPackStep;
   payload: StudyPackStepPayload;
   modelUsed: string;
+  /** Citation identities and grounding report; set for Locked In and Summary. */
+  meta?: StudyDocumentMeta;
 };
+
+export type StudyPackSourceText = { filename: string; text: string; sourceId?: string };
 
 /**
  * Generate one pipeline step. Keeping this operation step-sized is important
@@ -528,10 +658,16 @@ export type GeneratedStudyPackStep = {
  */
 export async function generateStudyPackStep(input: {
   step: StudyPackStep;
-  extractedTexts?: { filename: string; text: string }[];
+  /** Sources in citation order; entry i is cited as S<i+1>. */
+  extractedTexts?: StudyPackSourceText[];
+  /** Identity of each S<n>; derived from extractedTexts when omitted. */
+  citationSources?: CitationSourceRef[];
+  /** Summary evidence: the pack's source texts by S<n> index. */
+  groundingSources?: GroundingSource[];
   lockedIn?: string;
   summary?: string;
 }): Promise<GeneratedStudyPackStep> {
+  const stepStartedAt = Date.now();
   switch (input.step) {
     case "locked_in": {
       if (!input.extractedTexts?.length) {
@@ -541,10 +677,17 @@ export async function generateStudyPackStep(input: {
         lockedInPrompt(input.extractedTexts),
         { purpose: "locked_in" },
       );
+      const grounded = await groundGeneratedDocument({
+        markdown: result.text,
+        sources: input.extractedTexts.map((source, i) => ({ index: i + 1, text: source.text })),
+        citationSources: input.citationSources ?? citationSourcesFor(input.extractedTexts),
+        stepStartedAt,
+      });
       return {
         step: "locked_in",
-        payload: { kind: "locked_in", content: result.text },
+        payload: { kind: "locked_in", content: grounded.markdown },
         modelUsed: result.modelUsed,
+        meta: grounded.meta,
       };
     }
     case "summary": {
@@ -553,126 +696,55 @@ export async function generateStudyPackStep(input: {
       const result = await generateTextFromPrompt(summaryPrompt(lockedIn), {
         purpose: "summary",
       });
+      const grounded = await groundGeneratedDocument({
+        markdown: result.text,
+        sources: input.groundingSources ?? [],
+        citationSources: input.citationSources ?? [],
+        stepStartedAt,
+      });
       return {
         step: "summary",
-        payload: { kind: "summary", content: result.text },
+        payload: { kind: "summary", content: grounded.markdown },
         modelUsed: result.modelUsed,
+        meta: grounded.meta,
       };
     }
     case "test_me": {
       const lockedIn = input.lockedIn?.trim();
       if (!lockedIn) throw new Error("test_me generation requires Locked In");
-      try {
-        const result = await generateJsonArray({
+      const result = await runTestMe(lockedIn);
+      return {
+        step: "test_me",
+        payload: {
           kind: "test_me",
-          prompt: testMePrompt(lockedIn),
-          elementSchema: testMeItemSchema,
-        });
-        return {
-          step: "test_me",
-          payload: { kind: "test_me", content: result.items },
-          modelUsed: result.modelUsed,
-        };
-      } catch (err) {
-        if (err instanceof PromptInputLimitError) throw err;
-        throw toGenerationError(
-          err instanceof StudyPackJsonError
-            ? err
-            : new StudyPackJsonError(
-                "test_me",
-                err instanceof Error ? err.message : "test_me failed",
-                "",
-              ),
-        );
-      }
+          content: withKnownCitations(result.items, "explanation", input.citationSources?.length ?? 0),
+        },
+        modelUsed: result.modelUsed,
+      };
     }
     case "carded": {
       const summary = input.summary?.trim();
       if (!summary) throw new Error("carded generation requires Summary");
-      try {
-        const result = await generateJsonArray({
+      const result = await runCarded(summary);
+      return {
+        step: "carded",
+        payload: {
           kind: "carded",
-          prompt: cardedPrompt(summary),
-          elementSchema: cardedItemSchema,
-        });
-        return {
-          step: "carded",
-          payload: { kind: "carded", content: result.items },
-          modelUsed: result.modelUsed,
-        };
-      } catch (err) {
-        if (err instanceof PromptInputLimitError) throw err;
-        throw toGenerationError(
-          err instanceof StudyPackJsonError
-            ? err
-            : new StudyPackJsonError(
-                "carded",
-                err instanceof Error ? err.message : "carded failed",
-                "",
-              ),
-        );
-      }
+          content: withKnownCitations(result.items, "back", input.citationSources?.length ?? 0),
+        },
+        modelUsed: result.modelUsed,
+      };
     }
   }
 }
 
-/**
- * Sequential study-pack pipeline:
- * Locked In (sources) → Summary (Locked In) → Test Me (Locked In) → Carded (Summary).
- * Calls onStep after each successful step so the route can persist immediately.
- */
-export async function generateStudyPack(input: {
-  extractedTexts: { filename: string; text: string }[];
-  onStep?: (event: {
-    step: StudyPackStep;
-    payload: StudyPackStepPayload;
-    modelUsed: string;
-  }) => void | Promise<void>;
-}): Promise<{
-  lockedIn: string;
-  summary: string;
-  testMe: TestMeItem[];
-  carded: CardedItem[];
-  models: Partial<Record<StudyPackStep, string>>;
-}> {
-  if (input.extractedTexts.length === 0) {
-    throw new Error("generateStudyPack requires at least one extracted text");
-  }
-
-  const models: Partial<Record<StudyPackStep, string>> = {};
-
-  const lockedInResult = await generateTextFromPrompt(
-    lockedInPrompt(input.extractedTexts),
-    { purpose: "locked_in" },
-  );
-  models.locked_in = lockedInResult.modelUsed;
-  await input.onStep?.({
-    step: "locked_in",
-    payload: { kind: "locked_in", content: lockedInResult.text },
-    modelUsed: lockedInResult.modelUsed,
-  });
-
-  const summaryResult = await generateTextFromPrompt(
-    summaryPrompt(lockedInResult.text),
-    { purpose: "summary" },
-  );
-  models.summary = summaryResult.modelUsed;
-  await input.onStep?.({
-    step: "summary",
-    payload: { kind: "summary", content: summaryResult.text },
-    modelUsed: summaryResult.modelUsed,
-  });
-
-  let testMe: TestMeItem[];
-  let testMeModel: string;
+async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; modelUsed: string }> {
   try {
-    const testMeResult = await generateJsonArray({
+    return await generateJsonArray({
       kind: "test_me",
-      prompt: testMePrompt(lockedInResult.text),
+      prompt: testMePrompt(lockedIn),
       elementSchema: testMeItemSchema,
     });
-    testMe = testMeResult.items;
-    testMeModel = testMeResult.modelUsed;
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
     throw toGenerationError(
@@ -685,23 +757,15 @@ export async function generateStudyPack(input: {
           ),
     );
   }
-  models.test_me = testMeModel;
-  await input.onStep?.({
-    step: "test_me",
-    payload: { kind: "test_me", content: testMe },
-    modelUsed: testMeModel,
-  });
+}
 
-  let carded: CardedItem[];
-  let cardedModel: string;
+async function runCarded(summary: string): Promise<{ items: CardedItem[]; modelUsed: string }> {
   try {
-    const cardedResult = await generateJsonArray({
+    return await generateJsonArray({
       kind: "carded",
-      prompt: cardedPrompt(summaryResult.text),
+      prompt: cardedPrompt(summary),
       elementSchema: cardedItemSchema,
     });
-    carded = cardedResult.items;
-    cardedModel = cardedResult.modelUsed;
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
     throw toGenerationError(
@@ -714,19 +778,65 @@ export async function generateStudyPack(input: {
           ),
     );
   }
-  models.carded = cardedModel;
-  await input.onStep?.({
-    step: "carded",
-    payload: { kind: "carded", content: carded },
-    modelUsed: cardedModel,
-  });
+}
+
+/**
+ * Sequential study-pack pipeline:
+ * Locked In (sources) → Summary (Locked In) → Test Me (Locked In) → Carded (Summary).
+ * Calls onStep after each successful step so the route can persist immediately.
+ */
+export async function generateStudyPack(input: {
+  extractedTexts: StudyPackSourceText[];
+  onStep?: (event: GeneratedStudyPackStep) => void | Promise<void>;
+}): Promise<{
+  lockedIn: string;
+  summary: string;
+  testMe: TestMeItem[];
+  carded: CardedItem[];
+  models: Partial<Record<StudyPackStep, string>>;
+  meta: { lockedIn: StudyDocumentMeta; summary: StudyDocumentMeta };
+}> {
+  if (input.extractedTexts.length === 0) {
+    throw new Error("generateStudyPack requires at least one extracted text");
+  }
+
+  const models: Partial<Record<StudyPackStep, string>> = {};
+  const citationSources = citationSourcesFor(input.extractedTexts);
+  const groundingSources = input.extractedTexts.map((source, i) => ({ index: i + 1, text: source.text }));
+
+  const run = async (
+    step: StudyPackStep,
+    upstream: { lockedIn?: string; summary?: string },
+  ): Promise<GeneratedStudyPackStep> => {
+    const result = await generateStudyPackStep({
+      step,
+      extractedTexts: input.extractedTexts,
+      citationSources,
+      groundingSources,
+      ...upstream,
+    });
+    models[step] = result.modelUsed;
+    await input.onStep?.(result);
+    return result;
+  };
+
+  const lockedInStep = await run("locked_in", {});
+  const lockedIn = lockedInStep.payload.content as string;
+  const summaryStep = await run("summary", { lockedIn });
+  const summary = summaryStep.payload.content as string;
+  const testMeStep = await run("test_me", { lockedIn });
+  const cardedStep = await run("carded", { summary });
 
   return {
-    lockedIn: lockedInResult.text,
-    summary: summaryResult.text,
-    testMe,
-    carded,
+    lockedIn,
+    summary,
+    testMe: testMeStep.payload.content as TestMeItem[],
+    carded: cardedStep.payload.content as CardedItem[],
     models,
+    meta: {
+      lockedIn: lockedInStep.meta ?? { citationSources },
+      summary: summaryStep.meta ?? { citationSources },
+    },
   };
 }
 

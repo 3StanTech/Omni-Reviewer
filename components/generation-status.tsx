@@ -12,6 +12,20 @@ const STEP_LABELS: Record<string, string> = {
   carded: "Carded",
 };
 
+/** Summary and Test Me run together when a job targets both. */
+function stepLabel(state: GenerationState): string {
+  const step = state.step ?? "";
+  const job = state.job;
+  if (
+    step === "summary" &&
+    job?.targetKinds.includes("test_me") &&
+    !job.completedKinds.includes("test_me")
+  ) {
+    return "Summary and Test Me";
+  }
+  return STEP_LABELS[step] ?? step;
+}
+
 export function GenerationStatus({
   state,
   onDismiss,
@@ -54,7 +68,7 @@ export function GenerationStatus({
             <div className="h-full bg-primary transition-[width]" style={{ width: `${percentage}%` }} />
           </div>
           <p className="text-xs text-muted-foreground" aria-live="polite">
-            {percentage}%{state.step ? ` · ${STEP_LABELS[state.step] ?? state.step}` : ""}
+            {percentage}%{state.step ? ` · ${stepLabel(state)}` : ""}
             {state.job ? ` · ${state.job.progress.completed}/${state.job.progress.total} steps saved` : ""}
           </p>
           {state.error ? <p role="alert" className="text-xs text-destructive">{state.error}</p> : null}

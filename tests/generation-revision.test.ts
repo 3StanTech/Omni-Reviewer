@@ -1,12 +1,434 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { manualStaleKinds, selectVisibleGenerationRows } from "@/lib/serialize-view";
 import { responseJobId } from "@/lib/use-generation";
 
 const root = path.resolve(__dirname, "..");
+
+type Kind = "locked_in" | "summary" | "test_me" | "carded";
+type FakeJob = {
+  id: string;
+  reviewerId: string;
+  userId: string;
+  generationRunId: string;
+  mode: "full" | "single";
+  intent: "generate_missing" | "redo";
+  status: string;
+  step: Kind | null;
+  active: boolean;
+  targetKinds: Kind[];
+  completedKinds: Kind[];
+  upstreamRevisions: Record<string, number>;
+  forceOverwrite: boolean;
+  errorCode: string | null;
+  errorMessage: string | null;
+  modelUsed: string | null;
+  finishedAt: Date | null;
+  claimToken: string | null;
+};
+type FakeView = {
+  kind: Kind;
+  generationRunId: string;
+  content: string;
+  contentJson: unknown;
+  revision: number;
+  modelId: string;
+  generatedAt: Date;
+};
+
+const fake = vi.hoisted(() => ({
+  job: null as unknown as FakeJob,
+  views: new Map<string, FakeView>(),
+  staleKinds: new Set<string>(),
+  failKinds: new Set<string>(),
+}));
+
+vi.mock("server-only", () => ({}));
+vi.mock("@/auth", () => ({ auth: vi.fn(async () => ({ user: { id: "user-1" } })) }));
+vi.mock("@/lib/public-errors", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/public-errors")>("@/lib/public-errors");
+  return { ...actual, logRedactedError: vi.fn() };
+});
+vi.mock("@/lib/db", () => {
+  const chain = () => {
+    const node: Record<string, unknown> = {};
+    for (const method of ["update", "set", "where", "select", "from", "orderBy"]) {
+      node[method] = () => node;
+    }
+    node.then = (resolve: (value: unknown[]) => unknown) => resolve([]);
+    return node;
+  };
+  return { db: { update: () => chain(), select: () => chain() } };
+});
+vi.mock("@/lib/generation-jobs", () => ({
+  loadGenerationViews: vi.fn(async () => ({})),
+  serializeGenerationJob: (job: FakeJob) => ({ ...job }),
+}));
+vi.mock("@/lib/generation-step", () => ({ runGenerationStep: vi.fn() }));
+vi.mock("@/lib/queries", () => {
+  const snapshot = () => ({ ...fake.job, completedKinds: [...fake.job.completedKinds] });
+  const viewFor = (kind: string, runId?: string) => {
+    const view = fake.views.get(kind);
+    return view && (!runId || view.generationRunId === runId) ? view : null;
+  };
+  return {
+    getReviewer: vi.fn(async () => ({ id: "reviewer-1" })),
+    getGenerationJobForReviewer: vi.fn(async () => snapshot()),
+    getLatestFullGenerationJobForReviewer: vi.fn(async () => null),
+    reactivateGenerationJobForResume: vi.fn(async () => {
+      Object.assign(fake.job, {
+        status: "queued",
+        active: true,
+        errorCode: null,
+        errorMessage: null,
+        finishedAt: null,
+      });
+      return snapshot();
+    }),
+    claimGenerationJobStep: vi.fn(async (args: { step: Kind; claimToken: string }) => {
+      if (!fake.job.active || fake.job.step !== args.step) return null;
+      Object.assign(fake.job, { status: "running", claimToken: args.claimToken });
+      return snapshot();
+    }),
+    getViewForGeneration: vi.fn(async (_reviewerId: string, kind: string, runId: string) =>
+      viewFor(kind, runId)),
+    getLatestView: vi.fn(async (_reviewerId: string, kind: string) => viewFor(kind)),
+    persistViewForActiveClaim: vi.fn(async (args: {
+      claimToken: string;
+      step: Kind;
+      kind?: Kind;
+      content: string;
+      contentJson: unknown;
+      modelUsed: string;
+      generatedAt: Date;
+      generationRunId: string;
+    }) => {
+      const kind = args.kind ?? args.step;
+      if (fake.job.claimToken !== args.claimToken || fake.job.step !== args.step) return null;
+      if (fake.staleKinds.has(kind)) return null;
+      const revision = (fake.views.get(kind)?.revision ?? 0) + 1;
+      fake.views.set(kind, {
+        kind,
+        generationRunId: args.generationRunId,
+        content: args.content,
+        contentJson: args.contentJson,
+        revision,
+        modelId: args.modelUsed,
+        generatedAt: args.generatedAt,
+      });
+      return revision;
+    }),
+    updateClaimedGenerationJob: vi.fn(async (_id: string, claimToken: string, patch: Partial<FakeJob>) => {
+      if (!fake.job.active || fake.job.claimToken !== claimToken) return null;
+      Object.assign(fake.job, patch);
+      return snapshot();
+    }),
+    completeClaimedGenerationJob: vi.fn(async (args: {
+      claimToken: string;
+      step: Kind;
+      completedKinds: Kind[];
+      upstreamRevisions: Record<string, number>;
+    }) => {
+      if (!fake.job.active || fake.job.claimToken !== args.claimToken) return null;
+      Object.assign(fake.job, {
+        status: "succeeded",
+        step: args.step,
+        completedKinds: args.completedKinds,
+        upstreamRevisions: args.upstreamRevisions,
+        active: false,
+        claimToken: null,
+        errorCode: null,
+        errorMessage: null,
+      });
+      return snapshot();
+    }),
+    syncGeneratedCards: vi.fn(async () => true),
+  };
+});
+
+import { POST } from "@/app/api/reviewers/[id]/generation/[jobId]/route";
+import { generationProgress } from "@/lib/generation-plan";
+import { runGenerationStep } from "@/lib/generation-step";
+import { persistViewForActiveClaim, updateClaimedGenerationJob } from "@/lib/queries";
+
+const runStepMock = runGenerationStep as unknown as ReturnType<typeof vi.fn>;
+const persistMock = persistViewForActiveClaim as unknown as ReturnType<typeof vi.fn>;
+const updateMock = updateClaimedGenerationJob as unknown as ReturnType<typeof vi.fn>;
+
+function seedJob(overrides: Partial<FakeJob> = {}) {
+  fake.job = {
+    id: "job-1",
+    reviewerId: "reviewer-1",
+    userId: "user-1",
+    generationRunId: "run-1",
+    mode: "full",
+    intent: "redo",
+    status: "running",
+    step: "summary",
+    active: true,
+    targetKinds: ["locked_in", "summary", "test_me", "carded"],
+    completedKinds: ["locked_in"],
+    upstreamRevisions: { locked_in: 1 },
+    forceOverwrite: false,
+    errorCode: null,
+    errorMessage: null,
+    modelUsed: null,
+    finishedAt: null,
+    claimToken: null,
+    ...overrides,
+  };
+}
+
+function seedView(kind: Kind, generationRunId = "run-1") {
+  fake.views.set(kind, {
+    kind,
+    generationRunId,
+    content: kind === "carded" ? "[]" : `# ${kind}`,
+    contentJson: kind === "locked_in" || kind === "summary" ? { citationSources: [] } : [],
+    revision: 1,
+    modelId: "model/free",
+    generatedAt: new Date("2026-09-01T00:00:00.000Z"),
+  });
+}
+
+function generatedStep(step: Kind) {
+  const payload = step === "summary"
+    ? { kind: step, content: "# Summary" }
+    : step === "locked_in"
+      ? { kind: step, content: "# Locked In" }
+      : { kind: step, content: [{ id: `${step}-1` }] };
+  return {
+    step,
+    payload,
+    modelUsed: "model/free",
+    meta: step === "summary" ? { citationSources: [] } : undefined,
+  };
+}
+
+async function post() {
+  const response = await POST(new Request("http://localhost/api"), {
+    params: Promise.resolve({ id: "reviewer-1", jobId: "job-1" }),
+  });
+  return { status: response.status, body: (await response.json()) as { status: string } };
+}
+
+function generatedKinds(): Kind[] {
+  return runStepMock.mock.calls.map((call) => (call[0] as { step: Kind }).step);
+}
+
+function persistedKinds(): Kind[] {
+  return persistMock.mock.calls.map((call) => {
+    const args = call[0] as { step: Kind; kind?: Kind };
+    return args.kind ?? args.step;
+  });
+}
+
+describe("combined Summary and Test Me generation step", () => {
+  beforeEach(() => {
+    fake.views.clear();
+    fake.staleKinds.clear();
+    fake.failKinds.clear();
+    runStepMock.mockReset();
+    persistMock.mockClear();
+    updateMock.mockClear();
+    runStepMock.mockImplementation(async ({ step }: { step: Kind }) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (fake.failKinds.has(step)) throw new Error(`${step} provider failure`);
+      return generatedStep(step);
+    });
+    seedView("locked_in");
+  });
+
+  it("generates Summary and Test Me concurrently under one claim and advances to Carded", async () => {
+    seedJob();
+
+    const first = await post();
+
+    expect(first.status).toBe(200);
+    expect(generatedKinds().sort()).toEqual(["summary", "test_me"]);
+    // Both provider calls start before either result is published.
+    expect(Math.max(...runStepMock.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...persistMock.mock.invocationCallOrder),
+    );
+    expect(persistMock.mock.calls.map((call) => (call[0] as { step: Kind }).step)).toEqual([
+      "summary",
+      "summary",
+    ]);
+    expect(persistedKinds()).toEqual(["summary", "test_me"]);
+    const claimTokens = new Set(
+      persistMock.mock.calls.map((call) => (call[0] as { claimToken: string }).claimToken),
+    );
+    expect(claimTokens.size).toBe(1);
+    expect(fake.job).toMatchObject({
+      status: "running",
+      step: "carded",
+      active: true,
+      completedKinds: ["locked_in", "summary", "test_me"],
+      upstreamRevisions: { locked_in: 1, summary: 1, test_me: 1 },
+      errorCode: null,
+    });
+
+    const second = await post();
+
+    expect(second.status).toBe(200);
+    expect(generatedKinds().sort()).toEqual(["carded", "summary", "test_me"]);
+    expect(fake.job).toMatchObject({
+      status: "succeeded",
+      completedKinds: ["locked_in", "summary", "test_me", "carded"],
+    });
+  });
+
+  it("keeps Summary and runs Carded when Test Me fails, then ends partial rather than finished", async () => {
+    seedJob();
+    fake.failKinds.add("test_me");
+
+    await post();
+
+    expect(persistedKinds()).toEqual(["summary"]);
+    expect(fake.job).toMatchObject({
+      status: "running",
+      step: "carded",
+      completedKinds: ["locked_in", "summary"],
+      errorCode: "unknown",
+    });
+
+    const carded = await post();
+
+    expect(generatedKinds().sort()).toEqual(["carded", "summary", "test_me"]);
+    expect(carded.body.status).toBe("partial");
+    expect(fake.job).toMatchObject({
+      status: "partial",
+      step: "test_me",
+      active: false,
+      completedKinds: ["locked_in", "summary", "carded"],
+      errorCode: "unknown",
+    });
+    expect(
+      generationProgress({
+        targetKinds: fake.job.targetKinds,
+        completedKinds: fake.job.completedKinds,
+        status: "partial",
+      }),
+    ).toEqual({ total: 4, completed: 3, percentage: 75, terminal: true });
+
+    // Resume fills only Test Me and does not repeat Carded.
+    fake.failKinds.clear();
+    const resumed = await post();
+
+    expect(resumed.body.status).toBe("succeeded");
+    expect(generatedKinds().slice(3)).toEqual(["test_me"]);
+    expect(fake.job.completedKinds).toEqual(["locked_in", "summary", "test_me", "carded"]);
+  });
+
+  it("does not run Carded when Summary fails, but keeps a successful Test Me", async () => {
+    seedJob();
+    fake.failKinds.add("summary");
+
+    const failed = await post();
+
+    expect(failed.status).toBe(502);
+    expect(persistedKinds()).toEqual(["test_me"]);
+    expect(fake.job).toMatchObject({
+      status: "partial",
+      step: "summary",
+      active: false,
+      completedKinds: ["locked_in", "test_me"],
+      upstreamRevisions: { locked_in: 1, test_me: 1 },
+    });
+    expect(generatedKinds()).not.toContain("carded");
+
+    // Resume regenerates only Summary, then continues to Carded.
+    fake.failKinds.clear();
+    await post();
+
+    expect(generatedKinds().sort()).toEqual(["summary", "summary", "test_me"]);
+    expect(fake.job).toMatchObject({
+      status: "running",
+      step: "carded",
+      completedKinds: ["locked_in", "summary", "test_me"],
+    });
+  });
+
+  it("returns 409 and writes nothing further when the claim goes stale during the combined persist", async () => {
+    seedJob();
+    fake.staleKinds.add("summary");
+
+    const stale = await post();
+
+    expect(stale.status).toBe(409);
+    expect(persistedKinds()).toEqual(["summary"]);
+    expect(fake.views.has("test_me")).toBe(false);
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(fake.job).toMatchObject({
+      status: "partial",
+      step: "summary",
+      errorCode: "stale",
+      active: false,
+      completedKinds: ["locked_in"],
+    });
+  });
+
+  it("returns 409 when Test Me's publish is stale after Summary persisted", async () => {
+    seedJob();
+    fake.staleKinds.add("test_me");
+
+    const stale = await post();
+
+    expect(stale.status).toBe(409);
+    expect(persistedKinds()).toEqual(["summary", "test_me"]);
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(fake.job).toMatchObject({ status: "partial", step: "summary", errorCode: "stale" });
+  });
+
+  it("resumes a crashed combined step by generating only the missing kind", async () => {
+    seedJob();
+    seedView("summary");
+
+    await post();
+
+    expect(generatedKinds()).toEqual(["test_me"]);
+    expect(persistedKinds()).toEqual(["test_me"]);
+    expect(fake.job).toMatchObject({
+      status: "running",
+      step: "carded",
+      completedKinds: ["locked_in", "summary", "test_me"],
+      upstreamRevisions: { locked_in: 1, summary: 1, test_me: 1 },
+    });
+  });
+
+  it("finishes a crashed combined step without any model call when both kinds persisted", async () => {
+    seedJob();
+    seedView("summary");
+    seedView("test_me");
+
+    await post();
+
+    expect(runStepMock).not.toHaveBeenCalled();
+    expect(fake.job).toMatchObject({ step: "carded", completedKinds: ["locked_in", "summary", "test_me"] });
+  });
+
+  it("leaves single-mode redo and legacy full jobs one kind per step", async () => {
+    seedJob({ mode: "single", targetKinds: ["summary"], completedKinds: [] });
+
+    const single = await post();
+
+    expect(single.body.status).toBe("succeeded");
+    expect(generatedKinds()).toEqual(["summary"]);
+    expect(fake.job.completedKinds).toEqual(["summary"]);
+
+    runStepMock.mockClear();
+    fake.views.delete("summary");
+    seedJob({ targetKinds: [], completedKinds: [] });
+
+    await post();
+
+    expect(generatedKinds()).toEqual(["summary"]);
+    expect(fake.job).toMatchObject({ status: "running", step: "test_me" });
+  });
+});
 
 describe("generation revision boundaries", () => {
   it("prefers the server-authoritative winner job id", () => {
@@ -164,7 +586,9 @@ describe("generation revision boundaries", () => {
     expect(queries).toContain("NOT EXISTS (SELECT 1 FROM already_persisted)");
     expect(queries).toContain("existing_card.source_key");
     expect(queries).not.toContain("protected_card.id::text");
-    expect(route).toContain("[step]: persisted");
+    expect(route).toContain("upstreamRevisions[kind] = persisted");
+    expect(route).toContain("generationStepKinds(claimed, step)");
+    expect(route).toContain("Promise.allSettled");
     expect(route).toContain("alreadyPersisted.generatedAt");
     expect(route).toContain("completeClaimedGenerationJob");
     expect(route).toContain("syncGeneratedCards");

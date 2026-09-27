@@ -2,9 +2,10 @@ import {
   MAX_GENERATION_JSON_OUTPUT_TOKENS,
   MAX_GENERATION_TEXT_OUTPUT_TOKENS,
   MAX_GENERATION_PROMPT_TOKENS,
+  MAX_GROUNDING_VERIFY_OUTPUT_TOKENS,
 } from "@/lib/learning-limits";
 
-export type BudgetPurpose = "locked_in" | "summary" | "test_me" | "carded" | "json" | "vision";
+export type BudgetPurpose = "locked_in" | "summary" | "test_me" | "carded" | "json" | "vision" | "verify";
 
 export type SourceLengthBand = "short" | "medium" | "long";
 
@@ -74,6 +75,8 @@ function outputTarget(purpose: BudgetPurpose, band: SourceLengthBand): number {
       return cardTargets[band];
     case "vision":
       return 12_000;
+    case "verify":
+      return MAX_GROUNDING_VERIFY_OUTPUT_TOKENS;
   }
 }
 

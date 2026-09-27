@@ -2,6 +2,7 @@
 
 import { MAX_GENERATED_JSON_CHARS } from "@/lib/learning-limits";
 import { classifySourceLength, estimateTokensFromText } from "@/lib/ai-budgets";
+import { hasPageMarkers, pageCount } from "@/lib/source-markers";
 
 export const PROMPT_LIMITS = {
   maxSources: 50,
@@ -103,21 +104,39 @@ export function assertPromptWithinLimit(
 }
 
 export const NO_INVENT_CITATIONS =
-  "Do not invent citations, quotes, page numbers, or facts the sources do not support. If something is unclear or missing, say so rather than guessing.";
+  "Do not invent page numbers, quotes, or facts the sources do not support. If something is unclear or missing, say so rather than guessing.";
+
+export const CITE_EVERY_CLAIM =
+  "End every factual sentence, bullet, and table row with its citation in the exact form [S1 p.14], [S1 pp.14-15], or [S2] for a source without pages. Cite only pages whose text supports the claim. Never cite a page you did not read. If a helpful clarification is not in the sources you may include it, but give it no citation.";
 
 const NO_AUTOMATIC_HIGHLIGHTING =
-  "Do not add HTML spans, semantic ink classes, or automatic highlighting. Keep the Markdown content plain so the learner can manage highlights and notes.";
+  "Do not add HTML spans, semantic ink classes, or automatic highlighting. Keep the Markdown content plain so the learner can manage highlights and notes. Bracket citations such as [S1 p.14] are allowed and are not highlighting.";
+
+export const PHARMACY_GUIDANCE =
+  "When the sources cover drugs or pharmacology, give each drug class a GFM table with the columns Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications. Fill every cell only from the sources, cite each row, and write \"Not in sources\" in any cell the sources do not cover.";
+
+const PAGE_MARKER_NOTE =
+  "A line of the form <<<page N>>> marks the start of page or slide N of that source.";
+
+/** Source blocks labelled S1..Sn in the given order, with page ranges when known. */
+function sourceBlocks(sources: PromptSource[]): { block: string; hasPages: boolean } {
+  let anyPages = false;
+  const block = sources
+    .map((source, i) => {
+      const pages = hasPageMarkers(source.text) ? pageCount(source.text) : 0;
+      if (pages > 0) anyPages = true;
+      const range = pages > 0 ? ` (pages 1-${pages})` : "";
+      return `### Source S${i + 1}: ${source.filename}${range}\n\n${source.text}`;
+    })
+    .join("\n\n---\n\n");
+  return { block, hasPages: anyPages };
+}
 
 export function lockedInPrompt(
   extractedTexts: PromptSource[],
 ): string {
   const validatedSources = validatePromptSources(extractedTexts);
-  const sourcesBlock = validatedSources
-    .map(
-      (s, i) =>
-        `### Source ${i + 1}: ${s.filename}\n\n${s.text}`,
-    )
-    .join("\n\n---\n\n");
+  const { block: sourcesBlock, hasPages } = sourceBlocks(validatedSources);
 
   return assertPromptWithinLimit(`You are writing a comprehensive study document called "Locked In" from the extracted source materials below.
 
@@ -127,12 +146,14 @@ Requirements:
 - Otherwise organize by clear topic headings (## / ###).
 - Merge overlapping content; resolve minor contradictions by preferring the most specific source and noting uncertainty briefly when needed.
 - Be thorough: definitions, key claims, examples, formulas, procedures, and relationships between ideas.
+- ${CITE_EVERY_CLAIM}
+- ${PHARMACY_GUIDANCE}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
 - Output Markdown only. No preamble or closing remarks outside the document.
 
 # Source materials
-
+${hasPages ? `\n${PAGE_MARKER_NOTE}\n` : ""}
 ${sourcesBlock}`
   );
 }
@@ -141,10 +162,12 @@ export function summaryPrompt(lockedInMarkdown: string): string {
   return assertPromptWithinLimit(`You are writing a detailed "Summary" study document for last-minute review.
 
 Requirements:
-- Derive the summary **only** from the Locked In document below — not from external knowledge or other sources.
+- Derive the summary **only** from the Locked In document below, not from external knowledge or other sources.
 - Keep it detailed enough to review the full material, but denser and shorter than Locked In.
 - Use clear Markdown with headings that mirror Locked In structure when helpful.
 - Prefer bullets and tight paragraphs for scannability; preserve critical definitions, numbers, and distinctions.
+- Keep Locked In's citations verbatim: end every factual sentence, bullet, and table row with the exact citation (for example [S1 p.14], [S1 pp.14-15], or [S2]) that the supporting Locked In claim carries. Never create a new citation. Do not copy [[unsourced]] markers; leave those claims uncited.
+- ${PHARMACY_GUIDANCE}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
 - Output Markdown only. No preamble or closing remarks.
@@ -174,6 +197,8 @@ Requirements:
     "explanation": string
   }
 - Every item must be multiple-choice with at least two non-empty choices. Use recall, comparison, and application questions when the material supports it.
+- When the material supports it, write about a third of the items as short clinical case vignettes (a brief patient scenario followed by the question).
+- End every explanation with the exact citation of the supporting Locked In claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from Locked In; never create new ones.
 - Return no more than ${maxItems} items and no more than 8 choices per item. Keep each question, answer, and explanation concise enough to fit the output budget.
 - Aim for enough items to meaningfully assess the material while staying within that limit; return fewer when the source has fewer distinct facts.
 - ${NO_INVENT_CITATIONS}
@@ -203,6 +228,8 @@ Requirements:
   }
 - One atomic idea per card. Front should be answerable without seeing the back.
 - For a fill-in-the-blank card, the front may use one or more balanced {{answer}} placeholders. Keep each placeholder short and put the explanation in back.
+- Prefer cloze {{...}} cards for short lists worth memorizing, such as an adverse-effect triad or the drugs in a class.
+- End every back with the exact citation of the supporting Summary claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from the Summary; never create new ones.
 - Return no more than ${maxItems} cards. Keep each front and back below 20,000 characters.
 - Aim for enough cards to cover the Summary while staying within that limit; return fewer when the Summary has fewer distinct facts.
 - ${NO_INVENT_CITATIONS}
@@ -211,6 +238,30 @@ Requirements:
 # Summary document
 
 ${summaryMarkdown}`
+  );
+}
+
+/** One batched support check; each sentence is judged only against its own evidence. */
+export function groundingVerifyPrompt(
+  items: ReadonlyArray<{ id: number; sentence: string; evidence: string }>,
+): string {
+  const payload = JSON.stringify(
+    items.map((item) => ({ id: item.id, sentence: item.sentence, evidence: item.evidence })),
+  );
+  return assertPromptWithinLimit(`You are checking whether sentences from a study document are supported by source text.
+
+Rules:
+- Judge each sentence ONLY against the evidence text given in the same item. Ignore outside knowledge and ignore other items, even when you know the sentence is true.
+- List in "missing" every fact, name, number, mechanism, cause, or example in the sentence that the evidence does not state. Paraphrase of what the evidence says is fine and is not missing.
+- A sentence whose facts are all stated in its evidence has an empty "missing" list.
+- Ignore bracket citations such as [S1 p.14] inside the sentence.
+- Return one entry per item, keeping each id.
+- Output raw JSON only: a single array such as [{"id": 0, "missing": []}, {"id": 1, "missing": ["acute tubular necrosis"]}], with "id" a number and "missing" an array of short strings. No markdown fences, no commentary.
+
+# Items
+
+${payload}`,
+    "grounding verify prompt",
   );
 }
 

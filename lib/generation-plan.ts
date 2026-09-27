@@ -142,6 +142,53 @@ export function nextGenerationStep(
     : null;
 }
 
+/**
+ * Kinds one claimed step produces. Summary and Test Me both depend only on
+ * Locked In, so a multi-target run generates them concurrently inside the
+ * Summary claim. Single-mode redo and legacy rows without a frozen target list
+ * keep exactly one kind per step.
+ */
+export function generationStepKinds(
+  job: Pick<PersistedGenerationJobShape, "mode" | "targetKinds">,
+  step: GenerateKind,
+): GenerateKind[] {
+  const targets = job.targetKinds ?? [];
+  if (
+    job.mode === "full" &&
+    step === "summary" &&
+    targets.includes("summary") &&
+    targets.includes("test_me")
+  ) {
+    return ["summary", "test_me"];
+  }
+  return [step];
+}
+
+/**
+ * The next target after the kinds just attempted that is not already
+ * complete. Completed kinds are skipped so a resumed Test Me does not repeat a
+ * Carded step that already persisted for this run.
+ */
+export function nextPendingGenerationStep(
+  targetKinds: readonly GenerateKind[],
+  attempted: readonly GenerateKind[],
+  completedKinds: Iterable<GenerateKind>,
+): GenerateKind | null {
+  const completed = new Set(completedKinds);
+  const last = Math.max(-1, ...attempted.map((kind) => targetKinds.indexOf(kind)));
+  if (last < 0) return null;
+  return targetKinds.slice(last + 1).find((kind) => !completed.has(kind)) ?? null;
+}
+
+/** First target kind this run has not persisted; a run ending with one is partial. */
+export function firstIncompleteGenerationKind(
+  targetKinds: readonly GenerateKind[],
+  completedKinds: Iterable<GenerateKind>,
+): GenerateKind | null {
+  const completed = new Set(completedKinds);
+  return targetKinds.find((kind) => !completed.has(kind)) ?? null;
+}
+
 export function normalizeCompletedKinds(
   targetKinds: readonly GenerateKind[],
   completedKinds: Iterable<GenerateKind>,

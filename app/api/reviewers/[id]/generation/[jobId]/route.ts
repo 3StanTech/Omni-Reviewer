@@ -1,11 +1,19 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
+import {
+  readStudyDocumentMeta,
+  type CitationSourceRef,
+  type StudyDocumentMeta,
+} from "@/lib/citations";
 import { db } from "@/lib/db";
 import {
   completedKindsForJob,
-  nextGenerationStep,
+  firstIncompleteGenerationKind,
+  generationStepKinds,
+  nextPendingGenerationStep,
+  normalizeCompletedKinds,
   targetKindsForJob,
 } from "@/lib/generation-plan";
 import {
@@ -37,6 +45,7 @@ import {
 } from "@/lib/generation-step";
 import { parseCardedItems } from "@/lib/learning";
 import { generationJobs, reviewers, sources } from "@/lib/schema";
+import { hasPageMarkers } from "@/lib/source-markers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -121,19 +130,27 @@ async function responseForStaleClaim(
 
 async function getStepInput(job: JobRow, step: StudyPackStep) {
   if (step === "locked_in") {
+    // A stable order keeps S1..Sn pointing at the same uploads on every run.
     const rows = await db
-      .select({ filename: sources.filename, text: sources.extractedText })
+      .select({ id: sources.id, filename: sources.filename, text: sources.extractedText })
       .from(sources)
       .where(
         and(
           eq(sources.reviewerId, job.reviewerId),
           eq(sources.ingestStatus, "ready"),
         ),
-      );
+      )
+      .orderBy(asc(sources.createdAt), asc(sources.id));
     const extractedTexts = rows
-      .filter((row): row is { filename: string; text: string } => Boolean(row.text?.trim()))
-      .map((row) => ({ filename: row.filename, text: row.text }));
-    return { extractedTexts };
+      .filter((row): row is { id: string; filename: string; text: string } => Boolean(row.text?.trim()))
+      .map((row) => ({ sourceId: row.id, filename: row.filename, text: row.text }));
+    const citationSources: CitationSourceRef[] = extractedTexts.map((source, i) => ({
+      index: i + 1,
+      sourceId: source.sourceId,
+      filename: source.filename,
+      hasPages: hasPageMarkers(source.text),
+    }));
+    return { extractedTexts, citationSources };
   }
 
   const upstreamKind = step === "carded" ? "summary" : "locked_in";
@@ -153,9 +170,37 @@ async function getStepInput(job: JobRow, step: StudyPackStep) {
     );
   }
 
+  // Summary and Carded carry the same S<n> map as Locked In; legacy views have none.
+  const citationSources = readStudyDocumentMeta(upstream.contentJson)?.citationSources ?? [];
+
+  if (step === "summary") {
+    return {
+      lockedIn: upstream.content,
+      citationSources,
+      groundingSources: await loadGroundingSources(job.reviewerId, citationSources),
+    };
+  }
   return upstreamKind === "locked_in"
-    ? { lockedIn: upstream.content }
-    : { summary: upstream.content };
+    ? { lockedIn: upstream.content, citationSources }
+    : { summary: upstream.content, citationSources };
+}
+
+/**
+ * Reload the cited source texts by id, scoped to this job's reviewer (whose
+ * owner the caller already verified). A deleted source simply has no evidence.
+ */
+async function loadGroundingSources(reviewerId: string, citationSources: CitationSourceRef[]) {
+  const ids = citationSources.map((ref) => ref.sourceId).filter(Boolean);
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select({ id: sources.id, text: sources.extractedText })
+    .from(sources)
+    .where(and(eq(sources.reviewerId, reviewerId), inArray(sources.id, ids)));
+  const textById = new Map(rows.map((row) => [row.id, row.text]));
+  return citationSources.flatMap((ref) => {
+    const text = textById.get(ref.sourceId);
+    return text?.trim() ? [{ index: ref.index, text }] : [];
+  });
 }
 
 /** Polling endpoint. GET is side-effect free and never calls the model. */
@@ -232,17 +277,40 @@ export async function POST(
     return responseForJob(reviewerId, userId, latest, latest.active ? 202 : 200);
   }
 
+  const targetKinds = targetKindsForJob(claimed);
+  // A multi-target Summary step also produces Test Me; both only need Locked In.
+  const stepKinds = generationStepKinds(claimed, step) as StudyPackStep[];
+  // Kinds persisted for this run inside this claim, including views an earlier
+  // invocation published before it could advance the job.
+  const persistedKinds: StudyPackStep[] = [];
+  const upstreamRevisions: Record<string, number> = { ...(claimed.upstreamRevisions ?? {}) };
+
+  const latestJobResponse = async (terminalStatus: number) => {
+    const latest = await getGenerationJobForReviewer(reviewerId, jobId, userId);
+    if (!latest) return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    return responseForJob(reviewerId, userId, latest, latest.active ? 202 : terminalStatus);
+  };
+
   try {
-    // If an invocation published its view but lost the response before
-    // advancing the job, finish that exact step without charging the model a
+    let stepModelUsed: string | null = null;
+    let stepFinishedAt: Date | null = null;
+
+    // If an invocation published a view but lost the response before
+    // advancing the job, finish that exact kind without charging the model a
     // second time. The run id prevents an older view from satisfying this.
-    const alreadyPersisted = await getViewForGeneration(
-      claimed.reviewerId,
-      step,
-      claimed.generationRunId,
+    const existingViews = await Promise.all(
+      stepKinds.map((kind) =>
+        getViewForGeneration(claimed.reviewerId, kind, claimed.generationRunId),
+      ),
     );
-    if (alreadyPersisted) {
-      if (step === "carded") {
+    const pendingKinds: StudyPackStep[] = [];
+    for (const [index, kind] of stepKinds.entries()) {
+      const alreadyPersisted = existingViews[index];
+      if (!alreadyPersisted) {
+        pendingKinds.push(kind);
+        continue;
+      }
+      if (kind === "carded") {
         const cardsSynced = await syncGeneratedCards({
           jobId: claimed.id,
           claimToken,
@@ -255,120 +323,121 @@ export async function POST(
           return responseForStaleClaim(reviewerId, userId, claimed, claimToken);
         }
       }
-      const targetKinds = targetKindsForJob(claimed);
-      const next = claimed.mode === "single"
-        ? null
-        : nextGenerationStep(targetKinds, step);
-      const finished = next === null;
-      const completedKinds = [...new Set([
-        ...completedKindsForJob(claimed),
-        step,
-      ])];
-      const nextUpstreamRevisions = {
-        ...(claimed.upstreamRevisions ?? {}),
-        [step]: alreadyPersisted.revision,
-      };
-      const completed = finished
-        ? await completeClaimedGenerationJob({
-            id: claimed.id,
-            reviewerId,
-            userId,
-            claimToken,
+      persistedKinds.push(kind);
+      upstreamRevisions[kind] = alreadyPersisted.revision;
+      if (kind === step) {
+        stepModelUsed = alreadyPersisted.modelId ?? "unknown";
+        stepFinishedAt = alreadyPersisted.generatedAt;
+      }
+    }
+
+    // Run every missing kind of this step concurrently; each call keeps its
+    // own deadline, so the pair stays inside one route invocation.
+    const settled = await Promise.allSettled(
+      pendingKinds.map(async (kind) =>
+        runGenerationStep({ step: kind, ...(await getStepInput(claimed, kind)) }),
+      ),
+    );
+
+    let stepError: unknown = null;
+    let companionError: unknown = null;
+    for (const [index, kind] of pendingKinds.entries()) {
+      const outcome = settled[index]!;
+      try {
+        if (outcome.status === "rejected") throw outcome.reason;
+        const generated = outcome.value;
+        const generatedAt = new Date();
+        const contentJson: StudyDocumentMeta | unknown[] =
+          generated.payload.kind === "locked_in" || generated.payload.kind === "summary"
+            ? generated.meta ?? { citationSources: [] }
+            : generated.payload.content;
+        const content =
+          typeof generated.payload.content === "string"
+            ? generated.payload.content
+            : JSON.stringify(generated.payload.content);
+
+        // Publish and refresh the model provenance only while this exact
+        // claim is active. This is one conditional SQL statement, so a stale
+        // worker cannot overwrite a view after a lease recovery.
+        const persisted = await persistViewForActiveClaim({
+          jobId: claimed.id,
+          reviewerId,
+          userId,
+          claimToken,
+          generationRunId: claimed.generationRunId,
+          step,
+          kind,
+          content,
+          contentJson,
+          modelUsed: generated.modelUsed,
+          generatedAt,
+          forceOverwrite: claimed.forceOverwrite,
+          cardItems: generated.payload.kind === "carded" ? generated.payload.content : undefined,
+        });
+        if (!persisted) {
+          const stale = await updateClaimedGenerationJob(claimed.id, claimToken, {
+            status: "partial",
             step,
-            completedKinds,
-            upstreamRevisions: nextUpstreamRevisions,
-            modelUsed: alreadyPersisted.modelId ?? "unknown",
-            finishedAt: alreadyPersisted.generatedAt,
-          })
-        : await updateClaimedGenerationJob(claimed.id, claimToken, {
-            status: "running",
-            step: next,
-            completedKinds,
-            upstreamRevisions: nextUpstreamRevisions,
-            modelUsed: alreadyPersisted.modelId,
-            errorCode: null,
-            errorMessage: null,
-            active: true,
-            finishedAt: null,
+            errorCode: "stale",
+            errorMessage: "Study content changed while generating. Refresh and confirm overwrite.",
+            active: false,
+            finishedAt: generatedAt,
             claimToken: null,
             claimExpiresAt: null,
             claimedAt: null,
           });
-      if (!completed) {
-        const latest = await getGenerationJobForReviewer(reviewerId, jobId, userId);
-        if (!latest) return NextResponse.json({ error: "Job not found" }, { status: 404 });
-        return responseForJob(reviewerId, userId, latest, latest.active ? 202 : 200);
+          if (stale) return responseForJob(reviewerId, userId, stale, 409);
+          return latestJobResponse(200);
+        }
+        persistedKinds.push(kind);
+        upstreamRevisions[kind] = persisted;
+        if (kind === step) {
+          stepModelUsed = generated.modelUsed;
+          stepFinishedAt = generatedAt;
+        }
+      } catch (error) {
+        if (kind === step) {
+          // Keep publishing the companion kind; the step then fails below.
+          stepError = error;
+          continue;
+        }
+        companionError = error;
+        const parsedError = parseProviderError(error);
+        logRedactedError("Generation step failed", error, {
+          reviewerId,
+          jobId,
+          step: kind,
+          providerStatus: parsedError.status,
+          providerCode: parsedError.code,
+          requestId: parsedError.requestId,
+        });
       }
-      if (!finished) {
-        await db
-          .update(reviewers)
-          .set({ lastGeneratedAt: alreadyPersisted.generatedAt })
-          .where(eq(reviewers.id, reviewerId));
-      }
-      return responseForJob(reviewerId, userId, completed);
     }
+    if (stepError) throw stepError;
 
-    const input = await getStepInput(claimed, step);
-    const generated = await runGenerationStep({ step, ...input });
-    const generatedAt = new Date();
-    const contentJson =
-      generated.payload.kind === "locked_in" || generated.payload.kind === "summary"
-        ? null
-        : generated.payload.content;
-    const content =
-      typeof generated.payload.content === "string"
-        ? generated.payload.content
-        : JSON.stringify(generated.payload.content);
-
-    // Publish and refresh the model provenance only while this exact claim is
-    // active. This is one conditional SQL statement, so a stale worker cannot
-    // overwrite a view after a lease recovery.
-    const persisted = await persistViewForActiveClaim({
-      jobId: claimed.id,
-      reviewerId,
-      userId,
-      claimToken,
-      generationRunId: claimed.generationRunId,
-      step,
-      content,
-      contentJson,
-      modelUsed: generated.modelUsed,
-      generatedAt,
-      forceOverwrite: claimed.forceOverwrite,
-      cardItems: generated.payload.kind === "carded" ? generated.payload.content : undefined,
-    });
-    if (!persisted) {
-      const stale = await updateClaimedGenerationJob(claimed.id, claimToken, {
-        status: "partial",
-        step,
-        errorCode: "stale",
-        errorMessage: "Study content changed while generating. Refresh and confirm overwrite.",
-        active: false,
-        finishedAt: generatedAt,
-        claimToken: null,
-        claimExpiresAt: null,
-        claimedAt: null,
-      });
-      if (stale) return responseForJob(reviewerId, userId, stale, 409);
-      const latest = await getGenerationJobForReviewer(reviewerId, jobId, userId);
-      if (!latest) return NextResponse.json({ error: "Job not found" }, { status: 404 });
-      return responseForJob(reviewerId, userId, latest, latest.active ? 202 : 200);
-    }
-
-    const targetKinds = targetKindsForJob(claimed);
+    const completedKinds = normalizeCompletedKinds(targetKinds, [
+      ...completedKindsForJob(claimed),
+      ...persistedKinds,
+    ]);
     const next = claimed.mode === "single"
       ? null
-      : nextGenerationStep(targetKinds, step);
-    const finished = next === null;
-    const completedKinds = [...new Set([
-      ...completedKindsForJob(claimed),
-      step,
-    ])];
-    const nextUpstreamRevisions = {
-      ...(claimed.upstreamRevisions ?? {}),
-      [step]: persisted,
-    };
-    const completed = finished
+      : nextPendingGenerationStep(targetKinds, stepKinds, completedKinds);
+    // A kind this run has already passed but not persisted (Test Me failing
+    // beside Summary) keeps the run from ever reporting success.
+    const incomplete = firstIncompleteGenerationKind(targetKinds, completedKinds);
+    const skipped =
+      incomplete !== null &&
+      (next === null || targetKinds.indexOf(incomplete) < targetKinds.indexOf(next));
+    const carriedError = !skipped
+      ? null
+      : companionError
+        ? classifyGenerationError(companionError)
+        : { code: claimed.errorCode ?? "unknown", message: claimed.errorMessage ?? "" };
+    const finishedAt = stepFinishedAt ?? new Date();
+    const modelUsed = stepModelUsed ?? "unknown";
+
+    const succeeded = next === null && incomplete === null;
+    const completed = succeeded
       ? await completeClaimedGenerationJob({
           id: claimed.id,
           reviewerId,
@@ -376,34 +445,31 @@ export async function POST(
           claimToken,
           step,
           completedKinds,
-          upstreamRevisions: nextUpstreamRevisions,
-          modelUsed: generated.modelUsed,
-          finishedAt: generatedAt,
+          upstreamRevisions,
+          modelUsed,
+          finishedAt,
         })
       : await updateClaimedGenerationJob(claimed.id, claimToken, {
-          status: "running",
-          step: next,
+          // Ending with a missing kind is partial, so Resume fills it later.
+          status: next === null ? "partial" : "running",
+          step: next ?? incomplete,
           completedKinds,
-          upstreamRevisions: nextUpstreamRevisions,
-          modelUsed: generated.modelUsed,
-          errorCode: null,
-          errorMessage: null,
-          active: true,
-          finishedAt: null,
+          upstreamRevisions,
+          modelUsed,
+          errorCode: carriedError?.code ?? null,
+          errorMessage: carriedError?.message ?? null,
+          active: next !== null,
+          finishedAt: next === null ? finishedAt : null,
           claimToken: null,
           claimExpiresAt: null,
           claimedAt: null,
         });
-    if (!completed) {
-      const latest = await getGenerationJobForReviewer(reviewerId, jobId, userId);
-      if (!latest) return NextResponse.json({ error: "Job not found" }, { status: 404 });
-      return responseForJob(reviewerId, userId, latest, latest.active ? 202 : 200);
-    }
+    if (!completed) return latestJobResponse(200);
 
-    if (!finished) {
+    if (!succeeded) {
       await db
         .update(reviewers)
-        .set({ lastGeneratedAt: generatedAt })
+        .set({ lastGeneratedAt: finishedAt })
         .where(eq(reviewers.id, reviewerId));
     }
 
@@ -419,10 +485,21 @@ export async function POST(
       requestId: parsedError.requestId,
     });
     const classified = classifyGenerationError(error);
-    const terminal = targetKindsForJob(claimed).length === 1 || step === "locked_in";
+    const terminal = targetKinds.length === 1 || step === "locked_in";
+    // A companion kind that did persist stays complete, so Resume skips it.
+    const progress = persistedKinds.length > 0
+      ? {
+          completedKinds: normalizeCompletedKinds(targetKinds, [
+            ...completedKindsForJob(claimed),
+            ...persistedKinds,
+          ]),
+          upstreamRevisions,
+        }
+      : {};
     const failed = await updateClaimedGenerationJob(claimed.id, claimToken, {
       status: terminal ? "failed" : "partial",
       step,
+      ...progress,
       errorCode: classified.code,
       errorMessage: classified.message,
       active: false,
@@ -431,11 +508,7 @@ export async function POST(
       claimExpiresAt: null,
       claimedAt: null,
     });
-    if (!failed) {
-      const latest = await getGenerationJobForReviewer(reviewerId, jobId, userId);
-      if (!latest) return NextResponse.json({ error: "Job not found" }, { status: 404 });
-      return responseForJob(reviewerId, userId, latest, latest.active ? 202 : responseStatus(classified.code));
-    }
+    if (!failed) return latestJobResponse(responseStatus(classified.code));
     return responseForJob(reviewerId, userId, failed, responseStatus(classified.code));
   }
 }

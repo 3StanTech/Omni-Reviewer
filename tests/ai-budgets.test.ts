@@ -61,6 +61,14 @@ describe("generation budgets", () => {
     ).toEqual(["good/model:free"]);
   });
 
+  it("bounds the grounding verifier independently of document generation", () => {
+    expect(generationBudget("verify", 20_000)).toMatchObject({
+      purpose: "verify",
+      maxOutputTokens: 2_000,
+      maxItems: undefined,
+    });
+  });
+
   it("uses the conservative four-character token estimate", () => {
     expect(estimateTokensFromText("12345")).toBe(2);
   });
