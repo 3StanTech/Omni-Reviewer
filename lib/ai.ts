@@ -13,7 +13,7 @@ import {
   toGenerationError,
 } from "@/lib/generation-errors";
 import { getEnv } from "@/lib/env";
-import { getOpenRouterModel } from "@/lib/openrouter";
+import { contextWindowForRequest, getOpenRouterModel } from "@/lib/openrouter";
 import { isValidCardFront, normalizeLearningIds } from "@/lib/learning";
 import {
   MAX_CARD_BACK_CHARS,
@@ -217,6 +217,7 @@ export async function generateTextFromPrompt(
     options.purpose,
     options.sourceTokens ?? estimateTokensFromText(prompt),
     {
+      contextWindowTokens: contextWindowForRequest(modelId),
       attempts: MAX_GENERATION_ATTEMPTS,
       deadlineMs: GENERATION_STEP_DEADLINE_MS,
       safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
@@ -435,6 +436,7 @@ async function generateJsonArray<T extends { id: string }>(args: {
     args.kind,
     estimateTokensFromText(args.prompt),
     {
+      contextWindowTokens: contextWindowForRequest(modelId),
       attempts: MAX_GENERATION_ATTEMPTS,
       deadlineMs: GENERATION_STEP_DEADLINE_MS,
       safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,

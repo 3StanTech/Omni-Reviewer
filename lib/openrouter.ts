@@ -10,6 +10,7 @@ import {
   MAX_GENERATION_PROMPT_TOKENS,
   MAX_GENERATION_ATTEMPTS,
   GENERATION_STEP_DEADLINE_MS,
+  CONSERVATIVE_GENERATION_CONTEXT_TOKENS,
 } from "@/lib/learning-limits";
 
 const OPENROUTER_FREE_MODEL = /^[^/\s]+\/[^/\s]+:free$/;
@@ -70,6 +71,24 @@ export function selectVerifiedFallbackModels(
   );
   const verified = new Set(descriptors.map((descriptor) => descriptor.id));
   return modelIds.filter((modelId) => verified.has(modelId));
+}
+
+/**
+ * Context window for one request: the smallest verified window among the
+ * primary and the fallbacks OpenRouter may route it to. A model outside the
+ * verified catalogue keeps the conservative default.
+ */
+export function contextWindowForRequest(
+  primary: string,
+  fallbacks: readonly string[] = selectVerifiedFallbackModels(parseFallbackModels()),
+): number {
+  const windowFor = (modelId: string) =>
+    VERIFIED_FALLBACK_CATALOGUE.find((entry) => entry.id === modelId)?.contextLength
+    ?? CONSERVATIVE_GENERATION_CONTEXT_TOKENS;
+  return Math.min(
+    windowFor(primary),
+    ...fallbacks.filter((id) => id !== primary).map(windowFor),
+  );
 }
 
 export function isPinnedFreeModelId(modelId: string): boolean {

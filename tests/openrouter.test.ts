@@ -9,7 +9,7 @@ vi.mock("@openrouter/ai-sdk-provider", () => ({
   createOpenRouter: routerFactory,
 }));
 
-import { getOpenRouterModel, selectVerifiedFallbackModels, VERIFIED_FALLBACK_CATALOGUE } from "@/lib/openrouter";
+import { contextWindowForRequest, getOpenRouterModel, selectVerifiedFallbackModels, VERIFIED_FALLBACK_CATALOGUE } from "@/lib/openrouter";
 import { DEFAULT_FALLBACKS, DEFAULT_MODEL, DEFAULT_VISION } from "@/lib/env";
 
 describe("OpenRouter request policy", () => {
@@ -63,5 +63,14 @@ describe("OpenRouter request policy", () => {
       expect(usable.length).toBeGreaterThan(0);
     }
     expect(VERIFIED_FALLBACK_CATALOGUE.map((entry) => entry.id)).toContain(DEFAULT_MODEL);
+  });
+
+  it("sizes the request budget from the verified catalogue, not a fixed 32K window", () => {
+    const configured = DEFAULT_FALLBACKS.split(",").map((id) => id.trim());
+    const fallbacks = selectVerifiedFallbackModels(configured);
+    // An 18-page lecture needs about 17K input plus 16K output tokens.
+    expect(contextWindowForRequest(DEFAULT_MODEL, fallbacks)).toBeGreaterThanOrEqual(200_000);
+    expect(contextWindowForRequest("unknown/model:free", [])).toBe(32_768);
+    expect(contextWindowForRequest(DEFAULT_MODEL, ["unknown/model:free"])).toBe(32_768);
   });
 });
