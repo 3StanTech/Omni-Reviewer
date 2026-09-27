@@ -5,10 +5,13 @@ import { z } from "zod";
 import { AUTH_SECRET_ERROR, isUsableAuthSecret } from "@/lib/auth-secret";
 import { logRedactedError } from "@/lib/public-errors";
 
-const DEFAULT_MODEL = "z-ai/glm-5.2:free";
-const DEFAULT_VISION = "minimax/minimax-m3:free";
-const DEFAULT_FALLBACKS =
-  "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,openrouter/free";
+// Probed 2026-09-27 with data_collection deny and zero price: these answered.
+// Nemotron and Laguna reject the deny policy; GLM 5.2 and MiniMax M3 are no
+// longer free. Re-probe before changing these.
+export const DEFAULT_MODEL = "dots-studio/dots-3-note-preview:free";
+export const DEFAULT_VISION = "dots-studio/dots-3-note-preview:free";
+export const DEFAULT_FALLBACKS =
+  "qwen/qwen3.8-27b:free,cohere/north-mini-code:free,dots-studio/dots-3-note-preview:free";
 
 const nonEmpty = z.string().trim().min(1);
 const authSecret = z.preprocess(

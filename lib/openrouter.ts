@@ -15,15 +15,36 @@ import {
 const OPENROUTER_FREE_MODEL = /^[^/\s]+\/[^/\s]+:free$/;
 
 /**
- * Static, conservative catalogue snapshot from the 2026-09-20 read-only
- * assessment. Unknown or stale catalogue entries are deliberately excluded;
- * the configured primary remains untouched and can fail with its own budget.
+ * Study output needs the whole output budget for the answer. Free reasoning
+ * models otherwise spend it thinking and return empty text (seen 2026-09-27).
  */
-const VERIFIED_FALLBACK_CATALOGUE: readonly ProviderModelDescriptor[] = [
+const STUDY_REASONING = { enabled: false } as const;
+
+/**
+ * Static, conservative catalogue snapshot. Limits come from the OpenRouter
+ * model listing and each entry answered a live request with data_collection
+ * deny on 2026-09-27. Unknown or stale entries are deliberately excluded; the
+ * configured primary remains untouched and can fail with its own budget.
+ */
+export const VERIFIED_FALLBACK_CATALOGUE: readonly ProviderModelDescriptor[] = [
+  {
+    id: "dots-studio/dots-3-note-preview:free",
+    contextLength: 512_000,
+    maxOutputTokens: 460_800,
+    pricing: { prompt: 0, completion: 0 },
+    privacyCompatible: true,
+  },
   {
     id: "qwen/qwen3.8-27b:free",
     contextLength: 262_144,
     maxOutputTokens: 235_929,
+    pricing: { prompt: 0, completion: 0 },
+    privacyCompatible: true,
+  },
+  {
+    id: "cohere/north-mini-code:free",
+    contextLength: 256_000,
+    maxOutputTokens: 64_000,
     pricing: { prompt: 0, completion: 0 },
     privacyCompatible: true,
   },
@@ -114,6 +135,7 @@ export function getOpenRouter() {
       models: fallbacks,
       // OpenRouter API / SDK use snake_case for this preference.
       provider: { data_collection: "deny" },
+      reasoning: STUDY_REASONING,
     },
   });
 }
@@ -142,6 +164,7 @@ export function getOpenRouterModel(
     extraBody: {
       models: fallbacks,
       provider: { data_collection: "deny" },
+      reasoning: STUDY_REASONING,
       ...(options.healJson
         ? { plugins: [{ id: "response-healing" }] }
         : {}),

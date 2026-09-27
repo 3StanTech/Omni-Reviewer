@@ -233,6 +233,15 @@ export async function generateTextFromPrompt(
       abortSignal: signal,
     });
     const normalizedText = text.trim();
+    if (!normalizedText) {
+      // Reasoning models can spend the whole output budget thinking and return
+      // no answer. That is a failed attempt, never empty study content.
+      throw new GenerationError(
+        "unavailable",
+        "The model returned no text. Try again.",
+        true,
+      );
+    }
     if (normalizedText.length > MAX_GENERATED_MARKDOWN_CHARS) {
       throw new GenerationError(
         "token_limit",
@@ -319,10 +328,38 @@ function parseJsonArray(raw: string): unknown[] {
   }
   const cleaned = stripJsonFences(raw);
   const parsed: unknown = JSON.parse(cleaned);
-  if (!Array.isArray(parsed)) {
-    throw new SyntaxError("Expected a JSON array");
+  if (Array.isArray(parsed)) return parsed;
+  // The AI SDK's array output mode wraps items as {"elements": [...]}.
+  if (parsed && typeof parsed === "object") {
+    const values = Object.values(parsed as Record<string, unknown>);
+    if (values.length === 1 && Array.isArray(values[0])) return values[0];
   }
-  return parsed;
+  throw new SyntaxError("Expected a JSON array");
+}
+
+function normalizeChoiceText(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * A quiz answer must equal one of its choices. Models sometimes answer with a
+ * sentence that contains exactly one choice; map that to the choice. Anything
+ * ambiguous is left alone so validation drops the item.
+ */
+export function repairQuizAnswer(item: unknown): unknown {
+  if (!item || typeof item !== "object") return item;
+  const record = item as { choices?: unknown; answer?: unknown };
+  if (!Array.isArray(record.choices) || typeof record.answer !== "string") return item;
+  const choices = record.choices.filter((choice): choice is string => typeof choice === "string");
+  if (choices.includes(record.answer)) return item;
+  const answer = normalizeChoiceText(record.answer);
+  const exact = choices.filter((choice) => normalizeChoiceText(choice) === answer);
+  const contained = choices.filter((choice) => {
+    const normalized = normalizeChoiceText(choice);
+    return normalized.length > 0 && (answer.includes(normalized) || normalized.includes(answer));
+  });
+  const match = exact.length === 1 ? exact[0] : contained.length === 1 ? contained[0] : null;
+  return match ? { ...record, answer: match } : item;
 }
 
 function tryParseJsonArrayLocally<T extends { id: string }>(
@@ -332,7 +369,12 @@ function tryParseJsonArrayLocally<T extends { id: string }>(
 ): T[] | null {
   if (!raw.trim()) return null;
   try {
-    return elementSchema.array().max(maxItems).parse(parseJsonArray(raw));
+    // Keep every item that validates after answer repair; one bad item should
+    // not discard an otherwise usable quiz or deck.
+    const valid = parseJsonArray(raw)
+      .map((item) => elementSchema.safeParse(repairQuizAnswer(item)))
+      .flatMap((result) => (result.success ? [result.data] : []));
+    return valid.length > 0 ? valid.slice(0, maxItems) : null;
   } catch {
     return null;
   }
@@ -414,7 +456,13 @@ async function generateJsonArray<T extends { id: string }>(args: {
           maxOutputTokens: budget.maxOutputTokens,
           abortSignal: signal,
         });
-        const normalized = normalizeGeneratedItems(args.kind, result.object as T[], maxItems);
+        // A model that overshoots the requested count still produced usable
+        // items; keep the first maxItems rather than failing the whole step.
+        const normalized = normalizeGeneratedItems(
+          args.kind,
+          (result.object as T[]).slice(0, maxItems),
+          maxItems,
+        );
         return {
           ...normalized,
           modelUsed: extractModelUsed(result, modelId),

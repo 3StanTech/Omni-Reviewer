@@ -71,7 +71,7 @@ describe("Wave 1C contracts", () => {
     if (withDefaults.success) {
       expect(withDefaults.data.AUTH_TRUST_HOST).toBe("true");
       expect(withDefaults.data.AI_MODEL_LOCKED_IN).toContain(":free");
-      expect(withDefaults.data.AI_MODEL_FALLBACKS).toContain("openrouter/free");
+      expect(withDefaults.data.AI_MODEL_FALLBACKS.split(",").every((id) => id.trim().endsWith(":free"))).toBe(true);
     }
     expect(
       envSchema.safeParse({ ...valid, AI_MODEL_JSON: "provider/paid-model" })

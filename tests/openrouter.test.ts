@@ -9,7 +9,8 @@ vi.mock("@openrouter/ai-sdk-provider", () => ({
   createOpenRouter: routerFactory,
 }));
 
-import { getOpenRouterModel } from "@/lib/openrouter";
+import { getOpenRouterModel, selectVerifiedFallbackModels, VERIFIED_FALLBACK_CATALOGUE } from "@/lib/openrouter";
+import { DEFAULT_FALLBACKS, DEFAULT_MODEL, DEFAULT_VISION } from "@/lib/env";
 
 describe("OpenRouter request policy", () => {
   beforeEach(() => {
@@ -32,6 +33,7 @@ describe("OpenRouter request policy", () => {
         extraBody: {
           models: ["qwen/qwen3.8-27b:free"],
           provider: { data_collection: "deny" },
+          reasoning: { enabled: false },
           plugins: [{ id: "response-healing" }],
         },
       }),
@@ -52,5 +54,14 @@ describe("OpenRouter request policy", () => {
 
     const options = modelFactory.mock.calls[0]?.[1] as { extraBody: { models: string[] } };
     expect(options.extraBody.models).toEqual([]);
+  });
+
+  it("keeps a non-empty verified fallback list for every default primary", () => {
+    const configured = DEFAULT_FALLBACKS.split(",").map((id) => id.trim());
+    for (const primary of [DEFAULT_MODEL, DEFAULT_VISION]) {
+      const usable = selectVerifiedFallbackModels(configured).filter((id) => id !== primary);
+      expect(usable.length).toBeGreaterThan(0);
+    }
+    expect(VERIFIED_FALLBACK_CATALOGUE.map((entry) => entry.id)).toContain(DEFAULT_MODEL);
   });
 });

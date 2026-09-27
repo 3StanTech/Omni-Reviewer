@@ -178,7 +178,7 @@ describe("generate", () => {
     expect(generateObject).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects structured output above the item cap", async () => {
+  it("keeps only the allowed number of items when the model overshoots the cap", async () => {
     generateObject.mockResolvedValue({
       object: Array.from({ length: 101 }, (_, index) => ({
         id: `c${index}`,
@@ -188,7 +188,10 @@ describe("generate", () => {
       response: { modelId: "z-ai/glm-5.2:free" },
     });
 
-    await expect(generateCarded("# Summary\n\nMaterial")).rejects.toThrow(/carded/i);
+    const cards = await generateCarded("# Summary\n\nMaterial");
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.length).toBeLessThanOrEqual(100);
+    expect(cards[0]?.id).toBe("c0");
     expect(generateObject).toHaveBeenCalledTimes(1);
   });
 
@@ -341,5 +344,21 @@ describe("generate", () => {
     );
     expect(jobRoute).not.toMatch(/generateTextFromPrompt|generateStudyPack/);
     expect(jobRoute).toMatch(/export async function GET/);
+  });
+});
+
+describe("quiz answer repair", () => {
+  it("maps a sentence answer onto the single choice it contains", async () => {
+    const { repairQuizAnswer } = await import("@/lib/ai");
+    expect(repairQuizAnswer({
+      choices: ["Oxygen-dependent uptake", "Efflux pumps"],
+      answer: "Because their oxygen-dependent uptake fails in anaerobes.",
+    })).toMatchObject({ answer: "Oxygen-dependent uptake" });
+  });
+
+  it("leaves ambiguous answers for validation to reject", async () => {
+    const { repairQuizAnswer } = await import("@/lib/ai");
+    const item = { choices: ["30S", "50S"], answer: "Both 30S and 50S" };
+    expect(repairQuizAnswer(item)).toBe(item);
   });
 });
