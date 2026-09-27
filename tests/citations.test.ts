@@ -408,3 +408,21 @@ describe("review repairs", () => {
     expect(UNSOURCED_INCOMPLETE_CHECK_TEXT).not.toContain("\u2014");
   });
 });
+
+describe("isUnsourcedMarkerOnlyChange", () => {
+  it("is true when Keep only removes an unsourced marker", async () => {
+    const { isUnsourcedMarkerOnlyChange } = await import("@/lib/citations");
+    const before = "Beta-lactams bind PBPs [S1 p.4]. They are safe in pregnancy. [[unsourced]]\n\nNext.";
+    const after = "Beta-lactams bind PBPs [S1 p.4]. They are safe in pregnancy.\n\nNext.";
+    expect(isUnsourcedMarkerOnlyChange(before, after)).toBe(true);
+  });
+
+  it("is false for Delete sentence, other edits, adding a marker, or no change", async () => {
+    const { isUnsourcedMarkerOnlyChange } = await import("@/lib/citations");
+    const before = "Beta-lactams bind PBPs [S1 p.4]. They are safe in pregnancy. [[unsourced]]";
+    expect(isUnsourcedMarkerOnlyChange(before, "Beta-lactams bind PBPs [S1 p.4].")).toBe(false);
+    expect(isUnsourcedMarkerOnlyChange(before, before.replace("safe", "unsafe").replace(" [[unsourced]]", ""))).toBe(false);
+    expect(isUnsourcedMarkerOnlyChange("A claim here.", "A claim here. [[unsourced]]")).toBe(false);
+    expect(isUnsourcedMarkerOnlyChange(before, before)).toBe(false);
+  });
+});

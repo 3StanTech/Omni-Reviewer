@@ -1,5 +1,7 @@
 import "server-only";
 
+import { isUnsourcedMarkerOnlyChange } from "@/lib/citations";
+
 import {
   and,
   asc,
@@ -2274,6 +2276,14 @@ export async function updateStudyView(args: {
       ? await listAnnotationsForReviewer(args.reviewerId, args.userId, args.kind, { activeOnly: true })
       : [];
     const nextContentRevision = current.contentRevision + 1;
+    // Keeping a flagged sentence only removes its [[unsourced]] marker. That is
+    // not a content edit, so leave is_edited and updated_at alone and downstream
+    // modes do not turn stale. Decided here from the stored text, never trusted
+    // from the client.
+    const markerOnly = isUnsourcedMarkerOnlyChange(
+      normalizeDocumentText(current.content),
+      normalizedContent,
+    );
     const remapModel = renderedStudyTextModel(normalizedContent);
     const initialMappings: Array<({ mapped: true } & RemappedAnnotation) | { id: string; mapped: false }> = activeAnnotations.map((annotation) => {
       const mapped = remapAnnotation(annotation, normalizedContent, nextContentRevision, remapModel);
@@ -2313,8 +2323,8 @@ export async function updateStudyView(args: {
             revision = v.revision + 1,
             content_revision = v.content_revision + 1,
             annotation_revision = v.annotation_revision + 1,
-            is_edited = TRUE,
-            updated_at = NOW()
+            is_edited = ${markerOnly ? sql`v.is_edited` : sql`TRUE`},
+            updated_at = ${markerOnly ? sql`v.updated_at` : sql`NOW()`}
         FROM target
         WHERE v.id = target.id
         RETURNING v.id, v.content_revision

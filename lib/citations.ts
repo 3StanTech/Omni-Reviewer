@@ -653,3 +653,20 @@ export function citationSourcesForMode(
   if (views.staleKinds?.includes(kind)) return null;
   return own(views.locked_in) ?? own(views.summary);
 }
+
+/** Text with every unsourced token and the space before it removed. */
+function withoutUnsourcedTokens(text: string): string {
+  return text.split(` ${UNSOURCED_TOKEN}`).join("").split(UNSOURCED_TOKEN).join("");
+}
+
+/**
+ * True when `after` differs from `before` only by removed unsourced tokens,
+ * as when a reader keeps a flagged sentence. Such a save changes no study
+ * content, so downstream modes are not out of date.
+ */
+export function isUnsourcedMarkerOnlyChange(before: string, after: string): boolean {
+  if (before === after) return false;
+  const tokens = (text: string) => text.split(UNSOURCED_TOKEN).length - 1;
+  return tokens(after) < tokens(before)
+    && withoutUnsourcedTokens(before) === withoutUnsourcedTokens(after);
+}
