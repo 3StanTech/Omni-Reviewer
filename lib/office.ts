@@ -3,6 +3,7 @@ import "server-only";
 import { inflateRawSync } from "node:zlib";
 
 import { PublicError } from "@/lib/public-errors";
+import { joinPages, pageMarkerOverhead } from "@/lib/source-markers";
 
 export type OfficeFormat = "docx" | "pptx";
 
@@ -338,7 +339,11 @@ function skipXmlWhitespace(value: string, start: number): number {
   return cursor;
 }
 
-function validateXmlTagBody(body: string, closing: boolean): string {
+function validateXmlTagBody(
+  body: string,
+  closing: boolean,
+  attributes?: Map<string, string>,
+): string {
   let cursor = skipXmlWhitespace(body, 0);
   if (closing) {
     const parsed = parseXmlName(body, cursor);
@@ -365,6 +370,7 @@ function validateXmlTagBody(body: string, closing: boolean): string {
     if (quote !== '"' && quote !== "'") throw officeError("Office XML is malformed");
     const valueEnd = body.indexOf(quote, cursor + 1);
     if (valueEnd === -1) throw officeError("Office XML is malformed");
+    attributes?.set(attribute.name.toLowerCase(), body.slice(cursor + 1, valueEnd));
     cursor = valueEnd + 1;
   }
   return parsed.name;
@@ -375,7 +381,10 @@ function validateXmlTagBody(body: string, closing: boolean): string {
  * element nesting and attributes while never materializing a regex capture for
  * the whole XML document.
  */
-function extractXmlText(xml: string): string {
+function extractXmlText(
+  xml: string,
+  onOpenTag?: (name: string, attributes: Map<string, string>) => void,
+): string {
   if (Buffer.byteLength(xml, "utf8") > MAX_OFFICE_XML_BYTES) {
     throw officeError("Office XML exceeds the safe byte limit");
   }
@@ -455,7 +464,10 @@ function extractXmlText(xml: string): string {
       throw officeError("Office XML tag exceeds the safe size limit");
     }
     const closing = body.startsWith("/");
-    const name = validateXmlTagBody(closing ? body.slice(1) : body, closing).toLowerCase();
+    const attributes = onOpenTag && !closing ? new Map<string, string>() : undefined;
+    const name = validateXmlTagBody(closing ? body.slice(1) : body, closing, attributes)
+      .toLowerCase();
+    if (attributes) onOpenTag?.(name, attributes);
     let selfClosing = false;
     if (!closing) {
       let bodyEnd = body.length - 1;
@@ -508,6 +520,83 @@ function isSelectedEntry(name: string, format: OfficeFormat): boolean {
   return /^ppt\/slides\/slide\d+\.xml$/i.test(name);
 }
 
+function localXmlName(name: string): string {
+  const colon = name.indexOf(":");
+  return colon === -1 ? name : name.slice(colon + 1);
+}
+
+/** Attributes of every element with this local name, via the bounded scanner. */
+function readXmlElements(bytes: Uint8Array, entry: ZipEntry, localName: string) {
+  const found: Map<string, string>[] = [];
+  const xml = new TextDecoder("utf-8", { fatal: true }).decode(readEntry(bytes, entry));
+  extractXmlText(xml, (name, attributes) => {
+    if (localXmlName(name) === localName) found.push(attributes);
+  });
+  return found;
+}
+
+/** Resolve a presentation relationship target to an archive path. */
+function resolvePresentationTarget(target: string): string | null {
+  const segments = target.startsWith("/") ? [] : ["ppt"];
+  for (const part of target.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (segments.length === 0) return null;
+      segments.pop();
+      continue;
+    }
+    segments.push(part);
+  }
+  return segments.join("/");
+}
+
+/**
+ * Slides in the order PowerPoint shows them (presentation.xml sldIdLst through
+ * its relationships), or null when that order cannot be read. Slide files the
+ * list does not reference keep their numeric order after the listed ones.
+ */
+function presentationSlideOrder(
+  bytes: Uint8Array,
+  archive: ZipEntry[],
+  slides: ZipEntry[],
+): ZipEntry[] | null {
+  const byName = new Map(archive.map((entry) => [entry.name.toLowerCase(), entry]));
+  const presentation = byName.get("ppt/presentation.xml");
+  const relationships = byName.get("ppt/_rels/presentation.xml.rels");
+  if (!presentation || !relationships) return null;
+  try {
+    const targets = new Map<string, string>();
+    for (const relationship of readXmlElements(bytes, relationships, "relationship")) {
+      const id = relationship.get("id");
+      const target = relationship.get("target");
+      if (!id || !target || relationship.get("targetmode")?.toLowerCase() === "external") {
+        continue;
+      }
+      targets.set(decodeXmlText(id), decodeXmlText(target));
+    }
+
+    const slideByName = new Map(slides.map((entry) => [entry.name.toLowerCase(), entry]));
+    const ordered: ZipEntry[] = [];
+    const listed = new Set<ZipEntry>();
+    for (const slideId of readXmlElements(bytes, presentation, "sldid")) {
+      const relationshipId = [...slideId].find(
+        ([name]) => name.includes(":") && localXmlName(name) === "id",
+      )?.[1];
+      const target = relationshipId ? targets.get(decodeXmlText(relationshipId)) : undefined;
+      const path = target ? resolvePresentationTarget(target) : null;
+      const slide = path ? slideByName.get(path.toLowerCase()) : undefined;
+      if (!slide || listed.has(slide)) return null;
+      listed.add(slide);
+      ordered.push(slide);
+    }
+    if (ordered.length === 0) return null;
+    return [...ordered, ...slides.filter((entry) => !listed.has(entry))];
+  } catch {
+    // An unreadable deck order is not fatal; slide file numbers still give an order.
+    return null;
+  }
+}
+
 function sortSelectedEntries(entries: ZipEntry[], format: OfficeFormat): ZipEntry[] {
   return entries
     .filter((entry) => isSelectedEntry(entry.name, format))
@@ -519,31 +608,37 @@ function sortSelectedEntries(entries: ZipEntry[], format: OfficeFormat): ZipEntr
 }
 
 export function extractOfficeText(bytes: Uint8Array, format: OfficeFormat): string {
-  const entries = sortSelectedEntries(parseEntries(bytes), format);
+  const archive = parseEntries(bytes);
+  const selected = sortSelectedEntries(archive, format);
+  const entries = format === "pptx"
+    ? presentationSlideOrder(bytes, archive, selected) ?? selected
+    : selected;
   if (entries.length === 0) {
     throw officeError(`${format.toUpperCase()} contains no supported content`);
   }
   const sections: string[] = [];
   let totalTextChars = 0;
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const xmlBytes = readEntry(bytes, entry);
     if (xmlBytes.byteLength > MAX_OFFICE_XML_BYTES) {
       throw officeError("Office XML exceeds the safe byte limit");
     }
     const section = extractXmlText(new TextDecoder("utf-8", { fatal: true }).decode(xmlBytes));
-    if (!section) continue;
+    // Slides keep a marker even when empty, so the Nth slide shown is page N.
+    if (format === "pptx") totalTextChars += pageMarkerOverhead(index + 1, index === 0);
+    else if (!section) continue;
     totalTextChars += section.length;
     if (totalTextChars > MAX_OFFICE_TEXT_CHARS) {
       throw officeError(`${format.toUpperCase()} extracted text exceeds the safe character limit`);
     }
     sections.push(section);
   }
-  const text = sections.join("\n\n").trim();
+  if (!sections.some((section) => section.trim())) {
+    throw officeError(`${format.toUpperCase()} contains no extractable text`);
+  }
+  const text = format === "pptx" ? joinPages(sections) : sections.join("\n\n").trim();
   if (text.length > MAX_OFFICE_TEXT_CHARS) {
     throw officeError(`${format.toUpperCase()} extracted text exceeds the safe character limit`);
-  }
-  if (!text) {
-    throw officeError(`${format.toUpperCase()} contains no extractable text`);
   }
   return text;
 }

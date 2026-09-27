@@ -8,8 +8,10 @@ import {
   extractOfficeText,
   MAX_OFFICE_COMPRESSION_RATIO,
   MAX_OFFICE_ENTRY_BYTES,
+  MAX_OFFICE_TEXT_CHARS,
   MAX_OFFICE_XML_BYTES,
 } from "@/lib/office";
+import { hasPageMarkers, pageMarkerOverhead, splitPages } from "@/lib/source-markers";
 
 function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
@@ -103,7 +105,129 @@ describe("bounded office extraction", () => {
       { name: "ppt/slides/slide2.xml", text: "<p:sld><a:t>Two</a:t></p:sld>" },
       { name: "ppt/presentation.xml", text: "<a:t>Ignored</a:t>" },
     ]);
-    expect(extractOfficeText(bytes, "pptx")).toBe("Two\n\nTen");
+    expect(extractOfficeText(bytes, "pptx")).toBe("<<<page 1>>>\n\nTwo\n\n<<<page 2>>>\n\nTen");
+  });
+
+  function presentation(relationshipIds: string[]): string {
+    return `<p:presentation xmlns:r="r"><p:sldIdLst>${relationshipIds
+      .map((id, index) => `<p:sldId id="${256 + index}" r:id="${id}"/>`)
+      .join("")}</p:sldIdLst></p:presentation>`;
+  }
+
+  function relationships(targets: Record<string, string>): string {
+    return `<Relationships>${Object.entries(targets)
+      .map(([id, target]) => `<Relationship Id="${id}" Type="slide" Target="${target}"/>`)
+      .join("")}<Relationship Id="rIdM" Type="slideMaster" Target="slideMasters/slideMaster1.xml"/></Relationships>`;
+  }
+
+  const slide = (text: string) => `<p:sld><a:t>${text}</a:t></p:sld>`;
+
+  it("orders PPTX pages by the presentation slide list, not file numbers", () => {
+    const bytes = zip([
+      { name: "ppt/slides/slide1.xml", text: slide("File one") },
+      { name: "ppt/slides/slide2.xml", text: slide("File two") },
+      { name: "ppt/slides/slide4.xml", text: slide("File four") },
+      { name: "ppt/presentation.xml", text: presentation(["rId3", "rId1", "rId2"]) },
+      {
+        name: "ppt/_rels/presentation.xml.rels",
+        text: relationships({
+          rId1: "slides/slide1.xml",
+          rId2: "/ppt/slides/slide2.xml",
+          rId3: "./slides/../slides/slide4.xml",
+        }),
+      },
+    ]);
+    expect(splitPages(extractOfficeText(bytes, "pptx"))).toEqual([
+      { page: 1, text: "File four" },
+      { page: 2, text: "File one" },
+      { page: 3, text: "File two" },
+    ]);
+  });
+
+  it("falls back to slide file order when the presentation order is unreadable", () => {
+    const slides = [
+      { name: "ppt/slides/slide2.xml", text: slide("Two") },
+      { name: "ppt/slides/slide1.xml", text: slide("One") },
+    ];
+    const expected = [
+      { page: 1, text: "One" },
+      { page: 2, text: "Two" },
+    ];
+    const rels = {
+      name: "ppt/_rels/presentation.xml.rels",
+      text: relationships({ rId1: "slides/slide1.xml", rId2: "slides/slide2.xml" }),
+    };
+    // Missing presentation.xml.
+    expect(splitPages(extractOfficeText(zip([...slides, rels]), "pptx"))).toEqual(expected);
+    // Malformed presentation.xml.
+    expect(splitPages(extractOfficeText(zip([
+      ...slides,
+      rels,
+      { name: "ppt/presentation.xml", text: "<p:presentation><p:sldIdLst>" },
+    ]), "pptx"))).toEqual(expected);
+    // A slide id pointing at a missing relationship.
+    expect(splitPages(extractOfficeText(zip([
+      ...slides,
+      rels,
+      { name: "ppt/presentation.xml", text: presentation(["rId2", "rId9"]) },
+    ]), "pptx"))).toEqual(expected);
+  });
+
+  it("keeps slide text limits when ordering by the presentation", () => {
+    const half = MAX_OFFICE_TEXT_CHARS / 2;
+    const bytes = zip([
+      { name: "ppt/slides/slide1.xml", text: slide("x".repeat(half)), method: 0 },
+      { name: "ppt/slides/slide2.xml", text: slide("y".repeat(half)), method: 0 },
+      { name: "ppt/presentation.xml", text: presentation(["rId2", "rId1"]) },
+      {
+        name: "ppt/_rels/presentation.xml.rels",
+        text: relationships({ rId1: "slides/slide1.xml", rId2: "slides/slide2.xml" }),
+      },
+    ]);
+    expect(() => extractOfficeText(bytes, "pptx")).toThrow("safe character limit");
+  });
+
+  it("keeps a page marker for empty slides so slide numbers match the deck", () => {
+    const bytes = zip([
+      { name: "ppt/slides/slide1.xml", text: "<p:sld><a:t>Intro</a:t></p:sld>" },
+      { name: "ppt/slides/slide2.xml", text: "<p:sld><p:pic/></p:sld>" },
+      { name: "ppt/slides/slide3.xml", text: "<p:sld><a:t>Summary</a:t></p:sld>" },
+    ]);
+    expect(splitPages(extractOfficeText(bytes, "pptx"))).toEqual([
+      { page: 1, text: "Intro" },
+      { page: 2, text: "" },
+      { page: 3, text: "Summary" },
+    ]);
+  });
+
+  it("rejects a PPTX whose slides are all empty", () => {
+    const bytes = zip([{ name: "ppt/slides/slide1.xml", text: "<p:sld><p:pic/></p:sld>" }]);
+    expect(() => extractOfficeText(bytes, "pptx")).toThrow("no extractable text");
+  });
+
+  it("counts slide markers toward the PPTX character limit", () => {
+    const overhead = pageMarkerOverhead(1, true) + pageMarkerOverhead(2, false);
+    const slideXml = (chars: number) => `<p:sld><a:t>${"x".repeat(chars)}</a:t></p:sld>`;
+    // The text alone fits the limit; the two markers push it over.
+    const half = (MAX_OFFICE_TEXT_CHARS - overhead) / 2 + 1;
+    const over = zip([
+      { name: "ppt/slides/slide1.xml", text: slideXml(Math.ceil(half)), method: 0 },
+      { name: "ppt/slides/slide2.xml", text: slideXml(Math.floor(half)), method: 0 },
+    ]);
+    expect(() => extractOfficeText(over, "pptx")).toThrow("safe character limit");
+
+    const fits = zip([
+      { name: "ppt/slides/slide1.xml", text: slideXml(Math.floor(half) - 1), method: 0 },
+      { name: "ppt/slides/slide2.xml", text: slideXml(Math.floor(half) - 1), method: 0 },
+    ]);
+    const text = extractOfficeText(fits, "pptx");
+    expect(text.length).toBeLessThanOrEqual(MAX_OFFICE_TEXT_CHARS);
+    expect(hasPageMarkers(text)).toBe(true);
+  });
+
+  it("leaves DOCX text unmarked", () => {
+    const bytes = zip([{ name: "word/document.xml", text: "<w:document><w:t>Body</w:t></w:document>" }]);
+    expect(hasPageMarkers(extractOfficeText(bytes, "docx"))).toBe(false);
   });
 
   it("rejects traversal paths before reading selected content", () => {

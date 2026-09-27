@@ -3,6 +3,7 @@ import { parentPort } from "node:worker_threads";
 import { getResolvedPDFJS } from "unpdf";
 import { officeFormatForKind, extractOfficeText } from "./office";
 import { MAX_PDF_PAGES } from "./pdf-vision";
+import { joinPages, pageMarkerOverhead } from "./source-markers";
 
 /** Keep parser output bounded before it crosses the worker boundary. */
 export const MAX_PDF_TEXT_CHARS = 1_000_000;
@@ -29,9 +30,28 @@ function assertPdfWorkerMemory(): void {
   }
 }
 
+/** Add one page's marker and separator to the budgets before its text is read. */
+function reservePageMarker(
+  limits: { chars: number; outputBytes: number },
+  page: number,
+): { chars: number; outputBytes: number } {
+  // Marker text is ASCII, so its characters and UTF-8 bytes are equal.
+  const overhead = pageMarkerOverhead(page, page === 1);
+  const chars = limits.chars + overhead;
+  if (chars > MAX_PDF_TEXT_CHARS) throw new Error("PDF_TEXT_LIMIT");
+  const outputBytes = limits.outputBytes + overhead;
+  if (outputBytes > MAX_PDF_OUTPUT_BYTES) throw new Error("PDF_OUTPUT_LIMIT");
+  return { chars, outputBytes };
+}
+
+/**
+ * Read one page's text within the running budgets. The budgets already include
+ * this page's marker; joinPages only trims page text, so the final string never
+ * exceeds what is counted here.
+ */
 function pageTextFromContent(
   content: unknown,
-  limits: { chars: number; outputBytes: number; hasPreviousPage: boolean },
+  limits: { chars: number; outputBytes: number },
 ): { text: string; chars: number; outputBytes: number } {
   if (!content || typeof content !== "object") {
     return { text: "", chars: limits.chars, outputBytes: limits.outputBytes };
@@ -44,7 +64,7 @@ function pageTextFromContent(
   const chunks: string[] = [];
   const encoder = new TextEncoder();
   let chars = limits.chars;
-  let outputBytes = limits.outputBytes + (limits.hasPreviousPage ? 1 : 0);
+  let outputBytes = limits.outputBytes;
   for (const item of items) {
     if (!item || typeof item !== "object") continue;
     const value = (item as { str?: unknown }).str;
@@ -99,11 +119,10 @@ async function parsePdfText(bytes: Uint8Array): Promise<string> {
       try {
         const content = await page.getTextContent();
         assertPdfWorkerMemory();
-        const parsedPage = pageTextFromContent(content, {
-          chars: totalChars,
-          outputBytes: totalOutputBytes,
-          hasPreviousPage: pageTexts.length > 0,
-        });
+        const parsedPage = pageTextFromContent(
+          content,
+          reservePageMarker({ chars: totalChars, outputBytes: totalOutputBytes }, pageNumber),
+        );
         pageTexts.push(parsedPage.text);
         totalChars = parsedPage.chars;
         totalOutputBytes = parsedPage.outputBytes;
@@ -112,7 +131,10 @@ async function parsePdfText(bytes: Uint8Array): Promise<string> {
       }
       assertPdfWorkerMemory();
     }
-    return pageTexts.join("\n");
+    // A PDF with no text at all stays empty so ingest can treat it as scanned.
+    if (pageTexts.every((text) => !text.trim())) return "";
+    // Blank pages keep their marker so page numbers match the PDF.
+    return joinPages(pageTexts);
   } finally {
     try {
       await (pdf as { cleanup?: () => void | Promise<void> } | undefined)?.cleanup?.();

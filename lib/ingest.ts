@@ -17,6 +17,7 @@ import {
   PublicError,
 } from "@/lib/public-errors";
 import type { IngestStatus, SourceKind } from "@/lib/types";
+import { stripPageMarkers } from "@/lib/source-markers";
 
 /** Below this length, PDF text is treated as empty/tiny (likely scanned). */
 const MIN_MEANINGFUL_PDF_TEXT = 40;
@@ -210,7 +211,7 @@ async function ingestPdf(
       merged.replace(/\u0000/g, "").trim(),
     );
 
-    if (cleaned.length >= MIN_MEANINGFUL_PDF_TEXT) {
+    if (stripPageMarkers(cleaned).length >= MIN_MEANINGFUL_PDF_TEXT) {
       return {
         kind: "pdf",
         ingestStatus: "ready",
