@@ -552,6 +552,13 @@ describe("generation revision boundaries", () => {
     expect(result.staleKinds).toEqual(["carded"]);
   });
 
+  it("casts the job step through text to view_kind", () => {
+    // Postgres has no cast between two enum types; step::view_kind fails at parse time.
+    const queries = readFileSync(path.join(root, "lib/queries.ts"), "utf8");
+    expect(queries).not.toMatch(/step::view_kind/);
+    expect(queries).toContain("valid.step::text::view_kind");
+  });
+
   it("guards publication with the exact active claim and lease", () => {
     const queries = readFileSync(path.join(root, "lib/queries.ts"), "utf8");
     const route = readFileSync(

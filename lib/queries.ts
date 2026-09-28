@@ -3886,7 +3886,7 @@ export async function persistViewForActiveClaim(args: {
       FROM valid_claim valid
       INNER JOIN views target_view
         ON target_view.reviewer_id = valid.reviewer_id
-       AND target_view.kind = valid.step::view_kind
+       AND target_view.kind = valid.step::text::view_kind
       WHERE valid.intent <> 'generate_missing'::generation_job_intent
         AND a.view_id = target_view.id
         AND a.archived_at IS NULL
@@ -3910,7 +3910,7 @@ export async function persistViewForActiveClaim(args: {
       )
       SELECT
         valid.reviewer_id,
-        valid.step::view_kind,
+        valid.step::text::view_kind,
         ${args.content},
         CAST(${contentJson} AS jsonb),
         ${args.modelUsed},
