@@ -289,6 +289,13 @@ describe("generate", () => {
     }
   });
 
+  it("keeps the provider status visible through a wrapped generation error", async () => {
+    const { parseProviderError, toGenerationError } = await import("@/lib/generation-errors");
+    const wrapped = toGenerationError({ statusCode: 404, responseBody: { error: { message: "No endpoints found", code: 404 } } });
+    expect(wrapped.code).toBe("unknown");
+    expect(parseProviderError(wrapped).status).toBe(404);
+  });
+
   it("does not report a failed database query as a model JSON failure", () => {
     const cause = Object.assign(new Error("cannot cast type generation_job_step to view_kind"), { name: "NeonDbError" });
     const queryError = new Error("Failed query: WITH input AS (SELECT * FROM jsonb_to_recordset($1::jsonb))", { cause });

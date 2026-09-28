@@ -56,8 +56,13 @@ export class GenerationError extends Error {
   readonly code: GenerationErrorCode;
   readonly retryable: boolean;
 
-  constructor(code: GenerationErrorCode, message: string, retryable: boolean) {
-    super(message);
+  constructor(
+    code: GenerationErrorCode,
+    message: string,
+    retryable: boolean,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
     this.name = "GenerationError";
     this.code = code;
     this.retryable = retryable;
@@ -210,6 +215,11 @@ function responseHeader(error: Record<string, unknown>, name: string): string | 
  * Raw provider payloads are deliberately not returned to callers.
  */
 export function parseProviderError(err: unknown): ParsedProviderError {
+  // A wrapped provider failure keeps the original as its cause; read that so
+  // logs show the provider's status instead of the wrapper's.
+  if (err instanceof GenerationError && err.cause !== undefined) {
+    return parseProviderError(err.cause);
+  }
   const root = asRecord(err);
   const body = root?.responseBody ?? root?.data ?? root?.body;
   const status =
@@ -403,5 +413,6 @@ export function toGenerationError(err: unknown): GenerationError {
     classified.code,
     classified.message,
     classified.retryable,
+    { cause: err },
   );
 }
