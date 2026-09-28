@@ -78,7 +78,7 @@ export function SourceViewerProvider({
       <Dialog open={target !== null} onOpenChange={(open) => { if (!open) setTarget(null); }}>
         <DialogContent
           finalFocus={openerRef}
-          className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl"
+          className="max-h-[calc(100dvh-2rem)] grid-cols-1 overflow-y-auto sm:max-w-3xl"
         >
           {target && ref ? (
             <SourceBody
@@ -115,6 +115,8 @@ function SourceBody({
   const [pageTotal, setPageTotal] = useState<number | null>(null);
   const fileHref = `/api/reviewers/${reviewerId}/sources/${refEntry.sourceId}`;
   const pdfPage = isPdf(refEntry) && refEntry.hasPages ? page : null;
+  // Paging works for rendered PDF pages and for page-marked text alike.
+  const navPage = refEntry.hasPages ? page : null;
   const Icon = refEntry.hasPages ? Presentation : FileText;
   const pageLabel = page === null
     ? "Cited as the whole source"
@@ -140,49 +142,108 @@ function SourceBody({
           onPageCount={setPageTotal}
         />
       ) : (
-        <div className="rounded-lg border border-border bg-muted/30 px-4 py-5 text-sm leading-relaxed">
-          <p className="text-foreground">
-            {page === null
-              ? "This citation points to the whole file."
-              : `Open this slide in the file: slide ${page}.`}
-          </p>
-          <a
-            href={fileHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-3 inline-flex min-h-11 items-center rounded-md text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/40"
-          >
-            Open {refEntry.filename}
-          </a>
-        </div>
+        <SourceText
+          fileHref={fileHref}
+          filename={refEntry.filename}
+          page={page}
+          onPageCount={setPageTotal}
+        />
       )}
-      {pdfPage !== null ? (
+      {navPage !== null ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="min-h-11 sm:min-h-8"
-            disabled={pdfPage <= 1}
+            disabled={navPage <= 1}
             onClick={() => setPage((current) => (current && current > 1 ? current - 1 : current))}
           >
             <CaretLeft />
-            {pdfPage > 1 ? `Slide ${pdfPage - 1}` : "Previous"}
+            {navPage > 1 ? `Slide ${navPage - 1}` : "Previous"}
           </Button>
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="min-h-11 sm:min-h-8"
-            disabled={pageTotal === null || pdfPage >= pageTotal}
+            disabled={pageTotal === null || navPage >= pageTotal}
             onClick={() => setPage((current) => (current && pageTotal && current < pageTotal ? current + 1 : current))}
           >
-            {pageTotal !== null && pdfPage < pageTotal ? `Slide ${pdfPage + 1}` : "Next"}
+            {pageTotal !== null && navPage < pageTotal ? `Slide ${navPage + 1}` : "Next"}
             <CaretRight />
           </Button>
         </div>
       ) : null}
     </>
+  );
+}
+
+type SourceTextPayload = { page: number | null; pageCount: number; text: string | null; hasFile: boolean };
+
+/** Extracted text of the cited page, for sources without a PDF page to draw. */
+function SourceText({
+  fileHref,
+  filename,
+  page,
+  onPageCount,
+}: {
+  fileHref: string;
+  filename: string;
+  page: number | null;
+  onPageCount: (count: number) => void;
+}) {
+  const textHref = `${fileHref}?view=text${page === null ? "" : `&page=${page}`}`;
+  const [result, setResult] = useState<{ href: string; payload: SourceTextPayload | null } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(textHref);
+        const payload = response.ok ? ((await response.json()) as SourceTextPayload) : null;
+        if (cancelled) return;
+        if (payload && payload.pageCount > 0) onPageCount(payload.pageCount);
+        setResult({ href: textHref, payload });
+      } catch {
+        if (!cancelled) setResult({ href: textHref, payload: null });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onPageCount, textHref]);
+
+  const current = result?.href === textHref ? result : null;
+  if (!current) {
+    return (
+      <div className="flex min-h-40 items-center justify-center gap-2 rounded-lg border border-border bg-muted/30 text-sm text-muted-foreground" role="status">
+        <CircleNotch className="size-4 animate-spin" />
+        Loading text
+      </div>
+    );
+  }
+  const payload = current.payload;
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-muted/30 px-4 py-4 text-sm leading-relaxed">
+      {payload?.text ? (
+        <p className="max-h-[60dvh] overflow-y-auto whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">{payload.text}</p>
+      ) : (
+        <p role="alert" className="text-muted-foreground">
+          {payload ? `Slide ${page} has no text in this source.` : "Could not load the text of this source."}
+        </p>
+      )}
+      {payload?.hasFile ? (
+        <a
+          href={fileHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 inline-flex min-h-11 items-center rounded-md text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/40"
+        >
+          Open {filename}
+        </a>
+      ) : null}
+    </div>
   );
 }
 

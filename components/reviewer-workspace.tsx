@@ -82,7 +82,7 @@ export type SerializedAttemptStats = {
 };
 
 const NOT_GENERATED_YET =
-  "Not generated yet. Upload Ready sources, then generate.";
+  "Not generated yet. Upload Ready sources, then generate";
 const MS_PER_DAY = 86_400_000;
 
 function examCountdownCopy(examDate: string): string | null {

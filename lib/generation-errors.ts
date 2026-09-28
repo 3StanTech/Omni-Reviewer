@@ -266,6 +266,14 @@ function hasNetworkTimeout(parsed: ParsedProviderError, err: unknown): boolean {
   );
 }
 
+const DATABASE_ERROR_NAMES = new Set(["DrizzleQueryError", "NeonDbError"]);
+
+function isDatabaseError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (DATABASE_ERROR_NAMES.has(err.name) || err.message.startsWith("Failed query:")) return true;
+  return err.cause instanceof Error && DATABASE_ERROR_NAMES.has(err.cause.name);
+}
+
 /** Map provider / runtime errors into a stable client-facing shape. */
 export function classifyGenerationError(err: unknown): ClassifiedGenerationError {
   if (err instanceof GenerationError) {
@@ -284,6 +292,16 @@ export function classifyGenerationError(err: unknown): ClassifiedGenerationError
     return {
       code: "token_limit",
       message: PUBLIC_GENERATION_MESSAGES.token_limit,
+      retryable: false,
+    };
+  }
+
+  // A failed database query carries its SQL text, which mentions jsonb and
+  // would otherwise be misread as a model JSON failure below.
+  if (isDatabaseError(err)) {
+    return {
+      code: "unknown",
+      message: PUBLIC_GENERATION_MESSAGES.unknown,
       retryable: false,
     };
   }

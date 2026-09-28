@@ -204,7 +204,7 @@ Requirements:
 - Write the fields in that order. Work out the explanation first, then copy the choice it supports into s4_answer.
 - Every item must be multiple-choice with at least two non-empty choices. Use recall, comparison, and application questions when the material supports it.
 - When the material is clinical (patients, drugs, diseases), write about a third of the items as short case vignettes (a brief patient scenario followed by the question). Never prefix a question with a label such as "Clinical Case:".
-- State facts directly in questions and explanations. Never write "The document states", "According to Locked In", or similar.
+- State facts directly in questions and explanations. Never refer to the source material itself: no "The document states", "The text states", "The lecture says", "According to Locked In", or similar.
 - End every s3_explanation with the exact citation of the supporting Locked In claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from Locked In; never create new ones.
 - Return no more than ${maxItems} items and no more than 8 choices per item. Keep each question, answer, and explanation concise enough to fit the output budget.
 - Aim for enough items to meaningfully assess the material while staying within that limit; return fewer when the source has fewer distinct facts.

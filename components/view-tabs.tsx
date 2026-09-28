@@ -252,7 +252,7 @@ export function ViewTabs({
         </div>
       ) : null}
 
-      {views.staleKinds?.includes(tab) ? (
+      {views.staleKinds?.includes(tab) && modeHasContent(tab, views) ? (
         <p role="status" className="print-hide max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           This mode is from an older generation. Redo it when you are ready.
         </p>

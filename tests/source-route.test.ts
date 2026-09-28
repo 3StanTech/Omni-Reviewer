@@ -97,6 +97,32 @@ describe("source file route", () => {
     expect(getPrivateBlobMock).not.toHaveBeenCalled();
   });
 
+  it("returns one cited page of a paste source's text", async () => {
+    sourceMock.mockResolvedValue({
+      id: "source-1",
+      reviewerId: "reviewer-1",
+      kind: "paste",
+      mime: "text/plain",
+      blobPathname: null,
+      extractedText: "<<<page 1>>>\nPenicillin binds PBPs.\n<<<page 2>>>\nVancomycin binds D-Ala-D-Ala.",
+    });
+    const response = await GET(new Request("https://omni-reviewer.example?view=text&page=2"), context);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      page: 2,
+      pageCount: 2,
+      text: "Vancomycin binds D-Ala-D-Ala.",
+      hasFile: false,
+    });
+    expect(getPrivateBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the text view owner-scoped", async () => {
+    reviewerMock.mockResolvedValue(null);
+    const response = await GET(new Request("https://omni-reviewer.example?view=text&page=1"), context);
+    expect(response.status).toBe(404);
+  });
+
   it("retries a failed PDF from the stored blob and keeps the provider URL private", async () => {
     sourceMock.mockResolvedValue({
       id: "source-1",

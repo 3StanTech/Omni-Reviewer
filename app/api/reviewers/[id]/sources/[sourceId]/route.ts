@@ -21,9 +21,9 @@ import {
 } from "@/lib/queries";
 import { logRedactedError, PublicError, publicErrorMessage } from "@/lib/public-errors";
 import { cappedBodyError, readCappedText } from "@/lib/request-body";
-import { hasPageMarkers } from "@/lib/source-markers";
+import { hasPageMarkers, pageCount, pageText, stripPageMarkers } from "@/lib/source-markers";
 import { serializeSource } from "@/lib/source-response";
-import type { SourceKind } from "@/lib/types";
+import type { Source, SourceKind } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -50,6 +50,25 @@ type RouteContext = {
   params: Promise<{ id: string; sourceId: string }>;
 };
 
+/** Cap for a whole-source text view; a single page is always small. */
+const MAX_SOURCE_TEXT_VIEW_CHARS = 20_000;
+
+/**
+ * The cited page's extracted text, for sources the browser cannot render as
+ * a PDF page (pasted notes, DOCX, PPTX). Owner scoping happens before this.
+ */
+function sourceTextResponse(source: Source, pageParam: string | null): Response {
+  const text = source.extractedText ?? "";
+  const page = pageParam && /^\d{1,4}$/.test(pageParam) ? Number(pageParam) : null;
+  const body = page === null || !hasPageMarkers(text)
+    ? stripPageMarkers(text).slice(0, MAX_SOURCE_TEXT_VIEW_CHARS)
+    : pageText(text, page);
+  return NextResponse.json(
+    { page, pageCount: pageCount(text), text: body, hasFile: Boolean(source.blobPathname) },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
+}
+
 export async function GET(request: Request, context: RouteContext) {
   const session = await auth();
   const userId = session?.user?.id;
@@ -66,6 +85,10 @@ export async function GET(request: Request, context: RouteContext) {
   const source = await getSourceForReviewer(reviewerId, sourceId, userId);
   if (!source) {
     return NextResponse.json({ error: "Source not found" }, { status: 404 });
+  }
+  const url = new URL(request.url);
+  if (url.searchParams.get("view") === "text") {
+    return sourceTextResponse(source, url.searchParams.get("page"));
   }
   if (!source.blobPathname) {
     return NextResponse.json({ error: "Source file unavailable" }, { status: 404 });

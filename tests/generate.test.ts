@@ -289,6 +289,12 @@ describe("generate", () => {
     }
   });
 
+  it("does not report a failed database query as a model JSON failure", () => {
+    const cause = Object.assign(new Error("cannot cast type generation_job_step to view_kind"), { name: "NeonDbError" });
+    const queryError = new Error("Failed query: WITH input AS (SELECT * FROM jsonb_to_recordset($1::jsonb))", { cause });
+    expect(classifyGenerationError(queryError)).toMatchObject({ code: "unknown", retryable: false });
+  });
+
   it("maps retryable generation errors", () => {
     expect(
       classifyGenerationError({ statusCode: 429, message: "rate limit" }),
@@ -420,7 +426,7 @@ describe("grounded generation", () => {
     expect(prompt).not.toContain("Do not invent citations");
 
     expect(summaryPrompt("Body [S1 p.1]")).toMatch(/Keep Locked In's citations verbatim/);
-    expect(testMePrompt("Body [S1 p.1]")).toContain("Never write \"The document states\"");
+    expect(testMePrompt("Body [S1 p.1]")).toContain("\"The text states\"");
     expect(testMePrompt("Body [S1 p.1]")).toMatch(/When the material is clinical[^\n]*case vignettes/);
     expect(testMePrompt("Body [S1 p.1]")).toMatch(/End every s3_explanation with the exact citation/);
     expect(testMePrompt("Body [S1 p.1]")).toMatch(/"s1_question"[\s\S]*"s2_choices"[\s\S]*"s3_explanation"[\s\S]*"s4_answer"/);
