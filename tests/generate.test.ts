@@ -57,6 +57,7 @@ import { classifyGenerationError } from "@/lib/generation-errors";
 import { stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import {
   CITE_EVERY_CLAIM,
+  NO_META_TEXT,
   PHARMACY_GUIDANCE,
   cardedPrompt,
   groundingVerifyPrompt,
@@ -409,6 +410,8 @@ describe("grounded generation", () => {
     ]);
     expect(prompt).toContain(CITE_EVERY_CLAIM);
     expect(prompt).toContain(PHARMACY_GUIDANCE);
+    expect(prompt).toContain(NO_META_TEXT);
+    expect(summaryPrompt("# Locked In [S1 p.1]")).toContain(NO_META_TEXT);
     expect(prompt).toContain("### Source S1: b-pharm.pdf (pages 1-2)");
     expect(prompt).toContain("### Source S2: a-notes.docx\n");
     expect(prompt.indexOf("Source S1: b-pharm.pdf")).toBeLessThan(prompt.indexOf("Source S2: a-notes.docx"));
@@ -417,8 +420,10 @@ describe("grounded generation", () => {
     expect(prompt).not.toContain("Do not invent citations");
 
     expect(summaryPrompt("Body [S1 p.1]")).toMatch(/Keep Locked In's citations verbatim/);
-    expect(testMePrompt("Body [S1 p.1]")).toMatch(/clinical case vignettes/);
-    expect(testMePrompt("Body [S1 p.1]")).toMatch(/End every explanation with the exact citation/);
+    expect(testMePrompt("Body [S1 p.1]")).toContain("Never write \"The document states\"");
+    expect(testMePrompt("Body [S1 p.1]")).toMatch(/When the material is clinical[^\n]*case vignettes/);
+    expect(testMePrompt("Body [S1 p.1]")).toMatch(/End every s3_explanation with the exact citation/);
+    expect(testMePrompt("Body [S1 p.1]")).toMatch(/"s1_question"[\s\S]*"s2_choices"[\s\S]*"s3_explanation"[\s\S]*"s4_answer"/);
     expect(cardedPrompt("Body [S1 p.1]")).toMatch(/Prefer cloze \{\{\.\.\.\}\} cards/);
     expect(cardedPrompt("Body [S1 p.1]")).toMatch(/End every back with the exact citation/);
 
@@ -566,6 +571,49 @@ describe("quiz answer repair", () => {
       choices: ["Oxygen-dependent uptake", "Efflux pumps"],
       answer: "Because their oxygen-dependent uptake fails in anaerobes.",
     })).toMatchObject({ answer: "Oxygen-dependent uptake" });
+  });
+
+  it("maps a bare letter answer onto its choice", async () => {
+    const { repairQuizAnswer } = await import("@/lib/ai");
+    expect(repairQuizAnswer({ choices: ["Penicillin", "Vancomycin", "Linezolid"], answer: "B" }))
+      .toMatchObject({ answer: "Vancomycin" });
+  });
+
+  it("drops ordered letter labels from choices and the answer", async () => {
+    const { repairQuizAnswer } = await import("@/lib/ai");
+    expect(repairQuizAnswer({
+      choices: ["A. Antibiotics", "B. Chemotherapy", "C. Antimicrobials"],
+      answer: "C. Antimicrobials",
+    })).toMatchObject({ choices: ["Antibiotics", "Chemotherapy", "Antimicrobials"], answer: "Antimicrobials" });
+    expect(repairQuizAnswer({
+      choices: ["(A) Natural", "(B) Semi-synthetic", "(C) Synthetic"],
+      answer: "(B)",
+    })).toMatchObject({ choices: ["Natural", "Semi-synthetic", "Synthetic"], answer: "Semi-synthetic" });
+  });
+
+  it("keeps abbreviated names that only look like labels", async () => {
+    const { repairQuizAnswer } = await import("@/lib/ai");
+    const item = { choices: ["A. baumannii", "B. fragilis"], answer: "A. baumannii" };
+    expect(repairQuizAnswer(item)).toBe(item);
+  });
+
+  it("flags an answer key that its own explanation contradicts", async () => {
+    const { explanationContradictsAnswer } = await import("@/lib/ai");
+    expect(explanationContradictsAnswer({
+      choices: ["Class I reactions (Krebs Cycle)", "Class III reactions (macromolecule synthesis)", "Host DNA replication"],
+      answer: "Class I reactions (Krebs Cycle)",
+      explanation: "Class III reactions, such as protein and peptidoglycan synthesis, are targeted.",
+    })).toBe(true);
+    expect(explanationContradictsAnswer({
+      choices: ["Class I reactions (Krebs Cycle)", "Class III reactions (macromolecule synthesis)", "Host DNA replication"],
+      answer: "Class III reactions (macromolecule synthesis)",
+      explanation: "Class III reactions, such as protein and peptidoglycan synthesis, are targeted.",
+    })).toBe(false);
+    expect(explanationContradictsAnswer({
+      choices: ["Penicillin", "Vancomycin"],
+      answer: "Vancomycin",
+      explanation: "Glycopeptides bind D-Ala-D-Ala.",
+    })).toBe(false);
   });
 
   it("leaves ambiguous answers for validation to reject", async () => {

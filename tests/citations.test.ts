@@ -86,6 +86,12 @@ describe("citation helpers", () => {
     ]);
   });
 
+  it("reads a single-p range as a range", () => {
+    expect("x [S1 p.9-10] y [S1 p.2, p.10-11]".match(citationPattern())).toEqual(["[S1 p.9-10]", "[S1 p.2, p.10-11]"]);
+    expect(parseCitations("[S1 p.9-10]")[0]).toMatchObject({ pageStart: 9, pageEnd: 10 });
+    expect(parseCitations("[S1 p.2, p.10-11]").map((c) => [c.pageStart, c.pageEnd])).toEqual([[2, 2], [10, 11]]);
+  });
+
   it("collapses a reversed range to its start page", () => {
     expect(parseCitations("[S1 pp.9-4]")[0]).toMatchObject({ pageStart: 9, pageEnd: 9 });
   });
@@ -360,6 +366,16 @@ describe("review repairs", () => {
     expect(resolveUnsourcedClaim(table, 0, "delete")).toBe("| A | B |\n| - | - |\n| z | w |");
     expect(claimSentences(table).map((claim) => claim.kind)).toEqual(["tableRow", "tableRow"]);
     expect(claimSentences(math).every((claim) => claim.kind === "prose")).toBe(true);
+  });
+
+  it("does not split at a genus initial but still ends at a lone capital", () => {
+    const markdown = "Cephalexin misses *H. influenzae* [S1 p.3]. E. coli is covered [S1 p.4]. Vaccinate for Hepatitis B. Patients need two doses [S1 p.5].";
+    expect(claimSentences(markdown).map((claim) => claim.text)).toEqual([
+      "Cephalexin misses *H. influenzae* [S1 p.3].",
+      "E. coli is covered [S1 p.4].",
+      "Vaccinate for Hepatitis B.",
+      "Patients need two doses [S1 p.5].",
+    ]);
   });
 
   it("does not split sentences at abbreviations", () => {

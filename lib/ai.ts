@@ -95,9 +95,38 @@ const testMeItemSchema = z
         path: ["answer"],
         message: "answer must exactly match one of choices",
       });
+    } else if (explanationContradictsAnswer(item)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["answer"],
+        message: "explanation supports a different choice than answer",
+      });
     }
   })
   .strict();
+
+/**
+ * Wire shape for Test Me. Free models were seen emitting keys in alphabetical
+ * order, which put "answer" before the question was written and produced wrong
+ * answer keys. The numbered names make every ordering reason before answering.
+ */
+const testMeWireItemSchema = z
+  .object({
+    id: z.string(),
+    s1_question: z.string(),
+    s2_choices: z.array(z.string()),
+    s3_explanation: z.string(),
+    s4_answer: z.string(),
+  })
+  .strict()
+  .transform((wire) => repairQuizAnswer({
+    id: wire.id,
+    question: wire.s1_question,
+    choices: wire.s2_choices,
+    answer: wire.s4_answer,
+    explanation: wire.s3_explanation,
+  }))
+  .pipe(testMeItemSchema);
 
 const cardedItemSchema = z.object({
   id: z.string().trim().min(1).max(MAX_LEARNING_ID_CHARS),
@@ -359,25 +388,76 @@ function normalizeChoiceText(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+const CHOICE_LABEL = /^\(?([A-H])[.):]\s+/;
+const BARE_LETTER_ANSWER = /^\(?([A-H])[.):]?$/;
+
+/**
+ * The UI numbers choices itself, so "A. Penicillin", "B. ..." labels are
+ * dropped when every choice carries them in order. Three or more choices are
+ * required so abbreviated names such as "A. baumannii" are left alone.
+ */
+function stripChoiceLabels(choices: string[]): string[] | null {
+  if (choices.length < 3) return null;
+  const labelled = choices.every((choice, index) =>
+    CHOICE_LABEL.exec(choice)?.[1] === String.fromCharCode(65 + index));
+  return labelled ? choices.map((choice) => choice.replace(CHOICE_LABEL, "")) : null;
+}
+
 /**
  * A quiz answer must equal one of its choices. Models sometimes answer with a
- * sentence that contains exactly one choice; map that to the choice. Anything
- * ambiguous is left alone so validation drops the item.
+ * letter ("B"), a labelled choice ("B. Penicillin"), or a sentence that
+ * contains exactly one choice; map those to the choice. Anything ambiguous is
+ * left alone so validation drops the item.
  */
 export function repairQuizAnswer(item: unknown): unknown {
   if (!item || typeof item !== "object") return item;
   const record = item as { choices?: unknown; answer?: unknown };
   if (!Array.isArray(record.choices) || typeof record.answer !== "string") return item;
-  const choices = record.choices.filter((choice): choice is string => typeof choice === "string");
-  if (choices.includes(record.answer)) return item;
-  const answer = normalizeChoiceText(record.answer);
+  const rawChoices = record.choices.filter((choice): choice is string => typeof choice === "string");
+  if (rawChoices.length !== record.choices.length) return item;
+  const unlabelled = stripChoiceLabels(rawChoices);
+  if (!unlabelled && rawChoices.includes(record.answer)) return item;
+  const choices = unlabelled ?? rawChoices;
+  const letter = BARE_LETTER_ANSWER.exec(record.answer.trim())?.[1];
+  if (letter) {
+    const chosen = choices[letter.charCodeAt(0) - 65];
+    return chosen ? { ...record, choices, answer: chosen } : item;
+  }
+  const rawAnswer = unlabelled ? record.answer.replace(CHOICE_LABEL, "") : record.answer;
+  if (choices.includes(rawAnswer)) return { ...record, choices, answer: rawAnswer };
+  const answer = normalizeChoiceText(rawAnswer);
   const exact = choices.filter((choice) => normalizeChoiceText(choice) === answer);
   const contained = choices.filter((choice) => {
     const normalized = normalizeChoiceText(choice);
     return normalized.length > 0 && (answer.includes(normalized) || normalized.includes(answer));
   });
   const match = exact.length === 1 ? exact[0] : contained.length === 1 ? contained[0] : null;
-  return match ? { ...record, answer: match } : item;
+  return match ? { ...record, choices, answer: match } : item;
+}
+
+const CHOICE_STOPWORDS = new Set(["the", "and", "of", "to", "in", "on", "for", "with", "by", "is", "are", "an", "or", "as", "at", "its", "it", "be"]);
+
+function choiceTokens(text: string): Set<string> {
+  return new Set(normalizeChoiceText(text).split(" ")
+    .filter((token) => (token.length > 1 || /\d/.test(token)) && !CHOICE_STOPWORDS.has(token)));
+}
+
+/**
+ * True when the explanation names none of the words that set the answer apart
+ * from the other choices, yet names at least half of another choice's. Models
+ * that pick the answer before reasoning write a correct explanation for a
+ * wrong key; such items are dropped rather than taught.
+ */
+export function explanationContradictsAnswer(item: { choices: string[]; answer: string; explanation: string }): boolean {
+  const explanation = choiceTokens(item.explanation);
+  const tokens = item.choices.map(choiceTokens);
+  const distinct = tokens.map((own, index) => [...own].filter((token) =>
+    tokens.every((other, otherIndex) => otherIndex === index || !other.has(token))));
+  const hitRate = (words: string[]) => words.filter((word) => explanation.has(word)).length / words.length;
+  const answerIndex = item.choices.indexOf(item.answer);
+  const answerWords = distinct[answerIndex];
+  if (!answerWords || answerWords.length === 0 || hitRate(answerWords) > 0) return false;
+  return distinct.some((words, index) => index !== answerIndex && words.length > 0 && hitRate(words) >= 0.5);
 }
 
 function tryParseJsonArrayLocally<T extends { id: string }>(
@@ -740,11 +820,13 @@ export async function generateStudyPackStep(input: {
 
 async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; modelUsed: string }> {
   try {
-    return await generateJsonArray({
+    const result = await generateJsonArray({
       kind: "test_me",
       prompt: testMePrompt(lockedIn),
-      elementSchema: testMeItemSchema,
+      elementSchema: testMeWireItemSchema,
     });
+    // Valid items can still carry "A. ..." labels; the UI numbers choices.
+    return { ...result, items: result.items.map((item) => repairQuizAnswer(item) as TestMeItem) };
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
     throw toGenerationError(
@@ -862,7 +944,7 @@ export async function generateTestMe(
   const result = await generateJsonArray({
     kind: "test_me",
     prompt: testMePrompt(lockedInMarkdown),
-    elementSchema: testMeItemSchema,
+    elementSchema: testMeWireItemSchema,
   });
   return result.items;
 }

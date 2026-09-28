@@ -14,7 +14,8 @@
 
 export const UNSOURCED_TOKEN = "[[unsourced]]";
 
-const PAGE_SPEC = String.raw`(?:p\.\d{1,4}|pp\.\d{1,4}-\d{1,4})`;
+// Models often write a range with a single "p." ("p.9-10"); accept it as a range.
+const PAGE_SPEC = String.raw`(?:pp?\.\d{1,4}(?:-\d{1,4})?)`;
 const CITATION_SOURCE = String.raw`\[S(\d{1,2})( ${PAGE_SPEC}(?:, ?${PAGE_SPEC})*)?\]`;
 
 export function citationPattern(): RegExp {
@@ -43,10 +44,9 @@ export function parseCitations(text: string): Citation[] {
       continue;
     }
     for (const spec of specs) {
-      const single = /^p\.(\d+)$/.exec(spec);
-      const range = /^pp\.(\d+)-(\d+)$/.exec(spec);
-      const pageStart = single ? Number(single[1]) : Number(range?.[1]);
-      const rangeEnd = range ? Number(range[2]) : pageStart;
+      const pages = /^pp?\.(\d+)(?:-(\d+))?$/.exec(spec);
+      const pageStart = Number(pages?.[1]);
+      const rangeEnd = pages?.[2] ? Number(pages[2]) : pageStart;
       citations.push({
         raw: match[0],
         source,
@@ -103,8 +103,8 @@ export type ClaimSentence = {
 };
 
 /**
- * Words that end in a period without ending a sentence. Same list and rule as
- * the grounding checker (lib/grounding.ts); exported so it can share one copy.
+ * Words that end in a period without ending a sentence. The grounding checker
+ * (lib/grounding.ts) uses the same rule through isSentenceAbbreviation.
  */
 export const SENTENCE_ABBREVIATIONS: ReadonlySet<string> = new Set(["eg", "ie", "vs", "dr", "mr", "mrs", "ms", "fig", "approx", "no", "st", "cf", "al"]);
 
@@ -115,7 +115,12 @@ export function isSentenceAbbreviation(text: string, dotIndex: number, from = 0)
   if (!word) return false;
   if (SENTENCE_ABBREVIATIONS.has(word.toLowerCase())) return true;
   const preceding = before[before.length - word.length - 1];
-  return word.length === 1 && preceding === ".";
+  if (word.length === 1 && preceding === ".") return true;
+  // A genus initial ("*H. influenzae*", "E. coli") is followed by a lowercase
+  // species name; "Hepatitis B. Patients" still ends a sentence.
+  return /^\p{Lu}$/u.test(word)
+    && (preceding === undefined || /[\s*_(]/.test(preceding))
+    && /^\s+[*_]?\p{Ll}/u.test(text.slice(dotIndex + 1));
 }
 
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;

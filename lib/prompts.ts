@@ -106,6 +106,9 @@ export function assertPromptWithinLimit(
 export const NO_INVENT_CITATIONS =
   "Do not invent page numbers, quotes, or facts the sources do not support. If something is unclear or missing, say so rather than guessing.";
 
+export const NO_META_TEXT =
+  "Write only study content. Do not describe the document itself, how it was written, or its citations, and do not add a references or bibliography list.";
+
 export const CITE_EVERY_CLAIM =
   "End every factual sentence, bullet, and table row with its citation in the exact form [S1 p.14], [S1 pp.14-15], or [S2] for a source without pages. Cite only pages whose text supports the claim. Never cite a page you did not read. If a helpful clarification is not in the sources you may include it, but give it no citation.";
 
@@ -150,6 +153,7 @@ Requirements:
 - ${PHARMACY_GUIDANCE}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
+- ${NO_META_TEXT}
 - Output Markdown only. No preamble or closing remarks outside the document.
 
 # Source materials
@@ -170,6 +174,7 @@ Requirements:
 - ${PHARMACY_GUIDANCE}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
+- ${NO_META_TEXT}
 - Output Markdown only. No preamble or closing remarks.
 
 # Locked In document
@@ -191,14 +196,16 @@ Requirements:
 - Return a JSON array (no markdown fences, no commentary) of objects with this exact shape:
   {
     "id": string (stable short id, e.g. "q1"),
-    "question": string,
-    "choices": string[] (required; include at least two answer choices),
-    "answer": string,
-    "explanation": string
+    "s1_question": string,
+    "s2_choices": string[] (required; at least two answer choices, without "A." or "1." labels),
+    "s3_explanation": string (why the correct choice is right, written before choosing),
+    "s4_answer": string (the correct choice, copied exactly from s2_choices)
   }
+- Write the fields in that order. Work out the explanation first, then copy the choice it supports into s4_answer.
 - Every item must be multiple-choice with at least two non-empty choices. Use recall, comparison, and application questions when the material supports it.
-- When the material supports it, write about a third of the items as short clinical case vignettes (a brief patient scenario followed by the question).
-- End every explanation with the exact citation of the supporting Locked In claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from Locked In; never create new ones.
+- When the material is clinical (patients, drugs, diseases), write about a third of the items as short case vignettes (a brief patient scenario followed by the question). Never prefix a question with a label such as "Clinical Case:".
+- State facts directly in questions and explanations. Never write "The document states", "According to Locked In", or similar.
+- End every s3_explanation with the exact citation of the supporting Locked In claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from Locked In; never create new ones.
 - Return no more than ${maxItems} items and no more than 8 choices per item. Keep each question, answer, and explanation concise enough to fit the output budget.
 - Aim for enough items to meaningfully assess the material while staying within that limit; return fewer when the source has fewer distinct facts.
 - ${NO_INVENT_CITATIONS}

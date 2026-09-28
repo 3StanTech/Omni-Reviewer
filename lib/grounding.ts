@@ -7,7 +7,14 @@
  * inserted after it. Apart from those insertions the Markdown is unchanged.
  */
 
-import { citationPattern, parseCitations, stripCitations, UNSOURCED_TOKEN, type Citation } from "@/lib/citations";
+import {
+  citationPattern,
+  isSentenceAbbreviation,
+  parseCitations,
+  stripCitations,
+  UNSOURCED_TOKEN,
+  type Citation,
+} from "@/lib/citations";
 import { splitPages } from "@/lib/source-markers";
 
 export const LEXICAL_SUPPORT_THRESHOLD = 0.55;
@@ -163,17 +170,6 @@ function wordCount(masked: string): number {
   return (masked.split(FILL).join(" ").match(/\S*[\p{L}\p{N}]\S*/gu) ?? []).length;
 }
 
-const ABBREVIATIONS = new Set(["eg", "ie", "vs", "dr", "mr", "mrs", "ms", "fig", "approx", "no", "st", "cf", "al"]);
-
-function isAbbreviation(masked: string, dotIndex: number, from: number): boolean {
-  const before = masked.slice(from, dotIndex);
-  const word = /([\p{L}]+)$/u.exec(before)?.[1];
-  if (!word) return false;
-  if (ABBREVIATIONS.has(word.toLowerCase())) return true;
-  const preceding = before[before.length - word.length - 1];
-  return word.length === 1 && preceding === ".";
-}
-
 /** Sentence spans [start, end) within masked[from, to). */
 function sentenceSpans(masked: string, from: number, to: number): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
@@ -189,7 +185,7 @@ function sentenceSpans(masked: string, from: number, to: number): Array<[number,
     if (next >= to) break;
     if (next === end) continue;
     if (!/[\p{Lu}\p{N}"'“‘(\[*_]/u.test(masked[next])) continue;
-    if (match[0][0] === "." && isAbbreviation(masked, match.index, from)) continue;
+    if (match[0][0] === "." && isSentenceAbbreviation(masked, match.index, from)) continue;
     spans.push([start, next]);
     start = next;
   }
