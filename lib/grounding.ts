@@ -40,6 +40,8 @@ export type GroundingReport = {
   unsourced: number;
   truncated: boolean;
   verifierFailed: boolean;
+  /** Claims left untagged because the verifier failed twice; checkable later. */
+  unchecked?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -411,20 +413,30 @@ export async function groundDocument({
       sentence: miss.claim.sentence,
       evidence: miss.best.map((entry) => entry.page.text).join("\n\n").slice(0, maxEvidenceChars),
     }));
+    // One retry: a free verifier often fails transiently. If it still fails,
+    // leave these claims untagged and count them as unchecked, because a
+    // failed check is not evidence that a claim is missing from the sources.
     let supported: Set<number> | null = null;
-    try {
-      const result: unknown = await verify(items);
-      if (isVerifyResult(result)) {
-        supported = new Set(result.filter((entry) => entry.supported).map((entry) => entry.id));
+    for (let attempt = 0; attempt < 2 && supported === null; attempt++) {
+      try {
+        const result: unknown = await verify(items);
+        if (isVerifyResult(result)) {
+          supported = new Set(result.filter((entry) => entry.supported).map((entry) => entry.id));
+        }
+      } catch {
+        supported = null;
       }
-    } catch {
-      supported = null;
     }
-    if (supported === null) report.verifierFailed = true;
-    verifiable.forEach((miss, id) => {
-      if (supported?.has(id)) report.verifiedSupported++;
-      else toMark.push(miss.claim);
-    });
+    if (supported === null) {
+      report.verifierFailed = true;
+      report.unchecked = verifiable.length;
+    } else {
+      const verified = supported;
+      verifiable.forEach((miss, id) => {
+        if (verified.has(id)) report.verifiedSupported++;
+        else toMark.push(miss.claim);
+      });
+    }
   }
 
   report.unsourced += toMark.length;

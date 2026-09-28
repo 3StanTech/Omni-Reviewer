@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
@@ -33,6 +33,7 @@ import {
   getLatestView,
   getReviewer,
   getViewForGeneration,
+  loadGroundingSources,
   persistViewForActiveClaim,
   reactivateGenerationJobForResume,
   syncGeneratedCards,
@@ -189,20 +190,6 @@ async function getStepInput(job: JobRow, step: StudyPackStep) {
  * Reload the cited source texts by id, scoped to this job's reviewer (whose
  * owner the caller already verified). A deleted source simply has no evidence.
  */
-async function loadGroundingSources(reviewerId: string, citationSources: CitationSourceRef[]) {
-  const ids = citationSources.map((ref) => ref.sourceId).filter(Boolean);
-  if (ids.length === 0) return [];
-  const rows = await db
-    .select({ id: sources.id, text: sources.extractedText })
-    .from(sources)
-    .where(and(eq(sources.reviewerId, reviewerId), inArray(sources.id, ids)));
-  const textById = new Map(rows.map((row) => [row.id, row.text]));
-  return citationSources.flatMap((ref) => {
-    const text = textById.get(ref.sourceId);
-    return text?.trim() ? [{ index: ref.index, text }] : [];
-  });
-}
-
 /** Polling endpoint. GET is side-effect free and never calls the model. */
 export async function GET(
   _request: Request,

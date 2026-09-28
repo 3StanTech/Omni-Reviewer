@@ -107,6 +107,7 @@ const SAFE_LOG_CONTEXTS = new Set([
   "Topic deletion failed",
   "Reviewer deletion failed",
   "Generation step failed",
+  "Grounding re-check failed",
   "Could not save pasted text",
   "Private source retrieval failed",
   "Blob cleanup database operation failed",

@@ -1,6 +1,7 @@
 import "server-only";
 
-import { isUnsourcedMarkerOnlyChange } from "@/lib/citations";
+import { differsOnlyInUnsourcedTokens, isUnsourcedMarkerOnlyChange, type CitationSourceRef } from "@/lib/citations";
+import type { GroundingReport } from "@/lib/grounding";
 
 import {
   and,
@@ -8,6 +9,7 @@ import {
   desc,
   eq,
   gt,
+  inArray,
   isNull,
   lt,
   max,
@@ -1180,6 +1182,21 @@ export async function saveAnnotations(args: {
   };
 }
 
+/** Text of the uploads a study document cites, in its S<n> order. */
+export async function loadGroundingSources(reviewerId: string, citationSources: CitationSourceRef[]) {
+  const ids = citationSources.map((ref) => ref.sourceId).filter(Boolean);
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select({ id: sources.id, text: sources.extractedText })
+    .from(sources)
+    .where(and(eq(sources.reviewerId, reviewerId), inArray(sources.id, ids)));
+  const textById = new Map(rows.map((row) => [row.id, row.text]));
+  return citationSources.flatMap((ref) => {
+    const text = textById.get(ref.sourceId);
+    return text?.trim() ? [{ index: ref.index, text }] : [];
+  });
+}
+
 export async function getViewForReviewer(
   reviewerId: string,
   userId: string,
@@ -2265,6 +2282,8 @@ export async function updateStudyView(args: {
   expectedRevision: number;
   content?: string;
   pinned?: boolean;
+  /** Server-only: a fresh grounding report from a re-check of this content. */
+  grounding?: GroundingReport;
 }) {
   const reviewer = await getReviewer(args.reviewerId, args.userId);
   if (!reviewer) return null;
@@ -2280,10 +2299,11 @@ export async function updateStudyView(args: {
     // not a content edit, so leave is_edited and updated_at alone and downstream
     // modes do not turn stale. Decided here from the stored text, never trusted
     // from the client.
-    const markerOnly = isUnsourcedMarkerOnlyChange(
-      normalizeDocumentText(current.content),
-      normalizedContent,
-    );
+    const storedContent = normalizeDocumentText(current.content);
+    // A server re-check may also add markers; that is still not a reader edit.
+    const markerOnly = isUnsourcedMarkerOnlyChange(storedContent, normalizedContent)
+      || (args.grounding !== undefined
+        && (storedContent === normalizedContent || differsOnlyInUnsourcedTokens(storedContent, normalizedContent)));
     const remapModel = renderedStudyTextModel(normalizedContent);
     const initialMappings: Array<({ mapped: true } & RemappedAnnotation) | { id: string; mapped: false }> = activeAnnotations.map((annotation) => {
       const mapped = remapAnnotation(annotation, normalizedContent, nextContentRevision, remapModel);
@@ -2324,7 +2344,10 @@ export async function updateStudyView(args: {
             content_revision = v.content_revision + 1,
             annotation_revision = v.annotation_revision + 1,
             is_edited = ${markerOnly ? sql`v.is_edited` : sql`TRUE`},
-            updated_at = ${markerOnly ? sql`v.updated_at` : sql`NOW()`}
+            updated_at = ${markerOnly ? sql`v.updated_at` : sql`NOW()`},
+            content_json = ${args.grounding
+              ? sql`jsonb_set(COALESCE(v.content_json, '{}'::jsonb), '{grounding}', CAST(${JSON.stringify(args.grounding)} AS jsonb))`
+              : sql`v.content_json`}
         FROM target
         WHERE v.id = target.id
         RETURNING v.id, v.content_revision

@@ -166,25 +166,31 @@ describe("groundDocument", () => {
     expect(result.report.verifierFailed).toBe(false);
   });
 
-  it("marks every lexical miss when verify throws", async () => {
+  it("retries a failing verifier once, then leaves its claims untagged as unchecked", async () => {
     const verify = vi.fn<VerifyFn>(async () => {
       throw new Error("provider down");
     });
     const markdown = `${SUPPORTED}\n${INVENTED}\nVancomycin cures every viral infection within three hours.`;
     const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify });
-    expect(result.markdown.split("\n")).toEqual([
-      SUPPORTED,
-      "Gentamicin is dosed at 250 mg every hour for twelve consecutive weeks. [[unsourced]] [S1 p.14]",
-      "Vancomycin cures every viral infection within three hours. [[unsourced]]",
-    ]);
-    expect(result.report).toMatchObject({ verifierFailed: true, lexicalSupported: 1, unsourced: 2 });
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(result.markdown).toBe(markdown);
+    expect(result.report).toMatchObject({ verifierFailed: true, lexicalSupported: 1, unsourced: 0, unchecked: 2 });
+  });
+
+  it("uses the retry when the first verifier call fails", async () => {
+    const verify = vi.fn<VerifyFn>()
+      .mockRejectedValueOnce(new Error("provider down"))
+      .mockResolvedValueOnce([{ id: 0, supported: false }]);
+    const result = await groundDocument({ markdown: INVENTED, sources: [PHARM_SOURCE], verify });
+    expect(result.report).toMatchObject({ verifierFailed: false, unsourced: 1 });
+    expect(result.markdown).toContain("[[unsourced]]");
   });
 
   it("treats malformed verifier output as a failure", async () => {
     const verify = vi.fn(async () => ({ nope: true })) as unknown as VerifyFn;
     const result = await groundDocument({ markdown: INVENTED, sources: [PHARM_SOURCE], verify });
-    expect(result.report.verifierFailed).toBe(true);
-    expect(result.markdown).toContain("[[unsourced]]");
+    expect(result.report).toMatchObject({ verifierFailed: true, unchecked: 1 });
+    expect(result.markdown).not.toContain("[[unsourced]]");
   });
 
   it("is idempotent", async () => {

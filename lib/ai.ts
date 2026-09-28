@@ -19,6 +19,7 @@ import {
 } from "@/lib/generation-errors";
 import {
   groundDocument,
+  type GroundingReport,
   type GroundingSource,
   type VerifyItem,
 } from "@/lib/grounding";
@@ -700,6 +701,23 @@ async function groundGeneratedDocument(args: {
     },
   });
   return { markdown, meta: { citationSources: args.citationSources, grounding: report } };
+}
+
+/**
+ * Re-check a saved study document against its uploads, for claims an earlier
+ * run could not verify. Already tagged claims stay tagged.
+ */
+export async function regroundStudyDocument(
+  markdown: string,
+  sources: GroundingSource[],
+): Promise<{ markdown: string; report: GroundingReport | null }> {
+  const grounded = await groundGeneratedDocument({
+    markdown,
+    sources,
+    citationSources: [],
+    stepStartedAt: Date.now(),
+  });
+  return { markdown: grounded.markdown, report: grounded.meta.grounding ?? null };
 }
 
 function withKnownCitations<T extends Record<K, string>, K extends keyof T>(

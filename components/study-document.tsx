@@ -91,6 +91,9 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const grounding = useMemo(() => readStudyDocumentMeta(view.contentJson)?.grounding ?? null, [view.contentJson]);
   const grounded = Boolean(grounding);
   const showClaimCount = grounded && claims.total > 0;
+  // Claims the verifier could not reach are neither confirmed nor tagged.
+  const unchecked = Math.min(grounding?.unchecked ?? 0, Math.max(0, claims.total - claims.unsourced));
+  const [checking, setChecking] = useState(false);
   const viewIdentity = `${view.id}:${view.contentRevision}:${view.annotationRevision}`;
   const [appliedIdentity, setAppliedIdentity] = useState(viewIdentity);
   const draftIsStale = draftRevision !== view.revision;
@@ -336,6 +339,44 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [closeSelectionMenu, selection]);
 
+  async function recheckClaims() {
+    setChecking(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/reviewers/${reviewerId}/views/${kind}/grounding`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedRevision: view.revision }),
+      });
+      if (!response.ok) throw new Error(await readApiError(response));
+      const data = (await response.json()) as {
+        grounding: NonNullable<typeof grounding>;
+        view: Partial<SerializedView>;
+        staleKinds?: string[];
+      };
+      const merged = applyIncomingAnnotations(
+        annotations,
+        Array.isArray(data.view.annotations) ? data.view.annotations : undefined,
+        data.view.annotationsNextCursor,
+        earlierCursor,
+      );
+      setAnnotations(merged.annotations);
+      setEarlierCursor(merged.earlierCursor);
+      const meta = view.contentJson && typeof view.contentJson === "object" ? view.contentJson : {};
+      onSaved({
+        ...data.view,
+        contentJson: { ...meta, grounding: data.grounding },
+        annotations: merged.annotations,
+        annotationsNextCursor: merged.earlierCursor,
+        staleKinds: data.staleKinds,
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not check these claims.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
   async function saveAnnotation(color: AnnotationColor, note: string | null): Promise<boolean> {
     if (!selection) return false;
     setError(null);
@@ -437,10 +478,22 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   return (
     <div className="space-y-3">
       {showClaimCount ? (
-        <p className="print-hide inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-foreground">
-          <SealCheck weight="bold" className="size-3.5 text-primary" aria-hidden />
-          {claims.total - claims.unsourced} of {claims.total} claims from your sources
-        </p>
+        <div className="print-hide flex flex-wrap items-center gap-2">
+          <p className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-foreground">
+            <SealCheck weight="bold" className="size-3.5 text-primary" aria-hidden />
+            {claims.total - claims.unsourced - unchecked} of {claims.total} claims from your sources
+          </p>
+          {unchecked > 0 ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {unchecked} {unchecked === 1 ? "claim" : "claims"} could not be checked
+              </p>
+              <Button type="button" variant="outline" size="sm" onClick={() => void recheckClaims()} disabled={busy || checking || editing}>
+                {checking ? "Checking" : "Check again"}
+              </Button>
+            </>
+          ) : null}
+        </div>
       ) : null}
       {!editing ? (
         <StudySidePanel

@@ -496,6 +496,7 @@ describe("grounded generation", () => {
         text: "Metoprolol dramatically reverses pulmonary fibrosis within weeks of starting treatment. [S1 p.1]",
         response: { modelId: "provider/model" },
       })
+      .mockRejectedValueOnce({ statusCode: 503, message: "unavailable" })
       .mockRejectedValueOnce({ statusCode: 503, message: "unavailable" });
 
     const result = await generateStudyPackStep({
@@ -503,11 +504,11 @@ describe("grounded generation", () => {
       extractedTexts: [{ sourceId: "src-1", filename: "pharm.pdf", text: PHARM_SOURCE }],
     });
 
-    // One verify attempt only, even for a retryable provider error.
-    expect(verifyCalls()).toHaveLength(1);
+    // One retry, then the claim stays untagged and counted as unchecked.
+    expect(verifyCalls()).toHaveLength(2);
     expect(result.modelUsed).toBe("provider/model");
-    expect(result.payload.content).toContain(UNSOURCED_TOKEN);
-    expect(result.meta?.grounding).toMatchObject({ verifierFailed: true, unsourced: 1 });
+    expect(result.payload.content).not.toContain(UNSOURCED_TOKEN);
+    expect(result.meta?.grounding).toMatchObject({ verifierFailed: true, unsourced: 0, unchecked: 1 });
   });
 
   it("grounds Summary against the pack's sources and keeps the S<n> map", async () => {
@@ -516,6 +517,7 @@ describe("grounded generation", () => {
         text: "- Metoprolol dramatically reverses pulmonary fibrosis within weeks of treatment. [S1 p.1]",
         response: { modelId: "provider/model" },
       })
+      .mockResolvedValueOnce({ text: "not json" })
       .mockResolvedValueOnce({ text: "not json" });
 
     const citationSources = [{ index: 1, sourceId: "src-1", filename: "pharm.pdf", hasPages: true }];
@@ -526,7 +528,7 @@ describe("grounded generation", () => {
       groundingSources: [{ index: 1, text: PHARM_SOURCE }],
     });
 
-    expect(verifyCalls()).toHaveLength(1);
+    expect(verifyCalls()).toHaveLength(2);
     const verifyPrompt = (verifyCalls()[0]?.[0] as { prompt: string }).prompt;
     expect(verifyPrompt).toContain("Beta blockers such as propranolol");
     expect(result.meta).toMatchObject({ citationSources, grounding: { verifierFailed: true } });
@@ -573,7 +575,9 @@ describe("grounded generation", () => {
     expect(route).toMatch(/\.orderBy\(asc\(sources\.createdAt\), asc\(sources\.id\)\)/);
     expect(route).toMatch(/generated\.meta \?\? \{ citationSources: \[\] \}/);
     expect(route).toContain("readStudyDocumentMeta(upstream.contentJson)");
-    expect(route).toMatch(/eq\(sources\.reviewerId, reviewerId\), inArray\(sources\.id, ids\)/);
+    expect(route).toContain("loadGroundingSources(job.reviewerId, citationSources)");
+    const queries = readFileSync(path.join(root, "lib/queries.ts"), "utf8");
+    expect(queries).toMatch(/eq\(sources\.reviewerId, reviewerId\), inArray\(sources\.id, ids\)/);
   });
 });
 

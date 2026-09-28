@@ -503,6 +503,7 @@ export type StudyDocumentMeta = {
     unsourced: number;
     truncated: boolean;
     verifierFailed: boolean;
+    unchecked?: number;
   };
 };
 
@@ -669,6 +670,14 @@ function withoutUnsourcedTokens(text: string): string {
  * as when a reader keeps a flagged sentence. Such a save changes no study
  * content, so downstream modes are not out of date.
  */
+/**
+ * True when the two texts differ only in unsourced tokens, in either direction.
+ * Only a server-side re-check may add tokens without it counting as an edit.
+ */
+export function differsOnlyInUnsourcedTokens(before: string, after: string): boolean {
+  return before !== after && withoutUnsourcedTokens(before) === withoutUnsourcedTokens(after);
+}
+
 export function isUnsourcedMarkerOnlyChange(before: string, after: string): boolean {
   if (before === after) return false;
   const tokens = (text: string) => text.split(UNSOURCED_TOKEN).length - 1;

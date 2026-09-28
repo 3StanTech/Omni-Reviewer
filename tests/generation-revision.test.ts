@@ -96,6 +96,7 @@ vi.mock("@/lib/queries", () => {
     getViewForGeneration: vi.fn(async (_reviewerId: string, kind: string, runId: string) =>
       viewFor(kind, runId)),
     getLatestView: vi.fn(async (_reviewerId: string, kind: string) => viewFor(kind)),
+    loadGroundingSources: vi.fn(async () => []),
     persistViewForActiveClaim: vi.fn(async (args: {
       claimToken: string;
       step: Kind;
