@@ -73,3 +73,12 @@ describe("source page markers", () => {
     expect(hasPageMarkers(joinPages(["One"]))).toBe(true);
   });
 });
+
+describe("marker pattern state", () => {
+  it("keeps page 1 when hasPageMarkers runs first on the same text", () => {
+    const text = joinPages(["Penicillin binds PBPs.", "Vancomycin binds D-Ala-D-Ala."]);
+    expect(hasPageMarkers(text)).toBe(true);
+    expect(pageText(text, 1)).toBe("Penicillin binds PBPs.");
+    expect(splitPages(text).map((entry) => entry.page)).toEqual([1, 2]);
+  });
+});

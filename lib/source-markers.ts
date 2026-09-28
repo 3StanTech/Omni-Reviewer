@@ -7,7 +7,15 @@
  * and are cited as a whole source.
  */
 
-const MARKER_LINE = /^<<<page (\d{1,4})>>>$/gm;
+const MARKER_SOURCE = String.raw`^<<<page (\d{1,4})>>>$`;
+
+/**
+ * A fresh pattern per use: a shared global RegExp keeps lastIndex after
+ * test(), and matchAll() copies it, which silently skipped page 1.
+ */
+function markerLine(): RegExp {
+  return new RegExp(MARKER_SOURCE, "gm");
+}
 
 export function pageMarker(page: number): string {
   return `<<<page ${page}>>>`;
@@ -27,8 +35,7 @@ export function pageMarkerOverhead(page: number, isFirst: boolean): number {
 
 export function hasPageMarkers(text: string | null | undefined): boolean {
   if (!text) return false;
-  MARKER_LINE.lastIndex = 0;
-  return MARKER_LINE.test(text);
+  return markerLine().test(text);
 }
 
 export type SourcePage = { page: number; text: string };
@@ -38,7 +45,7 @@ export type SourcePage = { page: number; text: string };
  * callers treat as "the whole source".
  */
 export function splitPages(text: string): SourcePage[] {
-  const matches = [...text.matchAll(MARKER_LINE)];
+  const matches = [...text.matchAll(markerLine())];
   if (matches.length === 0) return [{ page: 0, text: text.trim() }];
 
   const pages: SourcePage[] = [];
@@ -64,5 +71,5 @@ export function pageCount(text: string): number {
 
 /** Remove marker lines for display or export. */
 export function stripPageMarkers(text: string): string {
-  return text.replace(MARKER_LINE, "").replace(/\n{3,}/g, "\n\n").trim();
+  return text.replace(markerLine(), "").replace(/\n{3,}/g, "\n\n").trim();
 }
