@@ -66,7 +66,7 @@ Generated only on explicit Generate or Redo. Tab changes never call the model. S
 1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables, KaTeX, and legacy semantic ink spans rendered neutrally; GFM footnotes are unsupported). Source of truth. It supports explicit Edit, Save changes, and Cancel.
 2. **Summary** - detailed summary of Locked In for last-minute review. It uses the same explicit Markdown editor and save/revision contract as Locked In.
 3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains. This mode has a last question. It does not schedule tomorrow's work.
-4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome and next interval. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
+4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome. Each button shows its next interval. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
 
 Looks (Night and Day) are chrome only. Legacy Thea-Style and RemNote-Style values in local storage normalize to Day; they do not add objects or layouts.
 
@@ -75,9 +75,39 @@ Highlights and notes are separate owner-scoped annotations on Locked In and Summ
 During reading, select text to Highlight or Add note. Contents, Notes, Earlier version, and the current reading position are progressive disclosures. Reading positions are local-only and keyed by owner, reviewer, mode, and content revision.
 
 Test Me answer attempts and misses are persisted per reviewer so missed items can
-be revisited. Card ratings use a small two-button SM-2 schedule and are stored
-as review history. An optional exam date caps future card due dates and shows a
-countdown on the pack. Pack rows show how many cards are due today.
+be revisited. Card ratings are stored as review history. Pack rows show how many
+cards are due today.
+
+## Scheduling, pacing, mastery and Today
+
+Carded schedules with FSRS (`ts-fsrs`, MIT) and two buttons, Again and Good.
+
+- **Again means tomorrow.** Again always brings the card back the next day. There are no same-day or minute-level steps, so a finite Carded session always ends.
+- **Good grows the interval.** Target retention is 0.9 and the longest interval is 365 days. There is no fuzz, so a given history always gives the same schedule.
+- **Exam cap.** An optional exam date on the pack caps every due date at the exam, shows a countdown on the pack, and makes cards due now once the exam has passed.
+- **Existing cards.** Cards from before FSRS were converted by replaying their review history. Cards never reviewed stay new.
+- **Next interval.** Each Carded button shows the interval it would give.
+
+### Exam pacing
+
+Only a pack with an exam date paces its new cards, so each is reviewed at least twice before the exam. New cards per day is the new cards remaining divided by the days left minus 2 (at least 1 day), rounded up, counted over a rolling 24 hours. The last 2 days are held back for second reviews. Due counts on the desk, pack rows and Carded use the paced number. A pack without an exam date shows every due new card.
+
+### Mastery
+
+Mastery is computed when a pack is read, from answers already stored. It makes no model calls and stores nothing new.
+
+- **Sections** are the `##` headings of the current Locked In, the same ones Contents lists.
+- **Evidence** is the latest Test Me answer for each question and the latest grade for each card. An item counts toward a section when it cites a page that section cites.
+- **Shown** once a section has 3 or more answered items. A section under 60% is weak.
+- **Where it shows.** Pack rows show pack mastery and the weakest section. Contents shows a bar per section.
+
+### Today
+
+A one-line bar on the desk sums up the day: cards due, weak sections, the nearest exam, and about how many minutes. It is hidden until there is a pack, and a part with nothing in it is left out. It opens a modal with:
+
+- **Do first.** Review due cards, re-test the weakest sections, then re-read one.
+- **Exam pacing.** New cards per day for each topic with an exam.
+- **Just browse.** Close the plan and pick any pack.
 
 ## Generation
 
@@ -136,7 +166,7 @@ countdown on the pack. Pack rows show how many cards are due today.
 | `AUTH_URL` | Canonical production URL |
 | `RESEND_API_KEY` | Password-reset email (server only) |
 | `EMAIL_FROM` | Optional From address for reset email |
-| `DATABASE_URL` | Neon Postgres (use direct/unpooled URL for `db:push`) |
+| `DATABASE_URL` | Neon Postgres (use the direct/unpooled URL for `db:baseline`, `db:migrate` and `db:backfill-fsrs`) |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob |
 | `OPENROUTER_API_KEY` | Generation (server only) |
 | `AI_MODEL_LOCKED_IN` | Locked In model id (`:free`) |
@@ -147,7 +177,7 @@ countdown on the pack. Pack rows show how many cards are due today.
 
 ## Operator notes
 
-1. Push schema with Neon **direct / unpooled** `DATABASE_URL` (`npm run db:push`). The Neon pooler cannot run migrations.
+1. Apply the schema with committed migrations, using Neon's **direct / unpooled** `DATABASE_URL` (the pooler cannot run migrations). Change `lib/schema.ts`, run `npm run db:generate -- --name <x>`, rehearse `npm run db:baseline` (once per database) and `npm run db:migrate` on a disposable Neon branch, then repeat on production only with the owner's go, after a snapshot. `npm run db:backfill-fsrs` is a one-time, idempotent run after `0001`. `npm run db:push` is for local scratch databases only, never production. See the README.
 2. Create the first invite: `npm run user:create -- you@example.com 'Name'` and enter its password at the hidden stdin prompt.
 3. Sign in; create topics only after a user exists (`topics.user_id` is required).
 4. Optional migrate path: if existing rows lack owners, add `user_id` nullable first, run `user:create` with `--bootstrap`, then tighten to not null.

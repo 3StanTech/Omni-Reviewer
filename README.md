@@ -15,12 +15,12 @@ Omni-Reviewer is a signed-in, invite-only multi-user study app. Accounts are cre
 1. **Locked In**. Comprehensive, cohesive, chronological long-form study document.
 2. **Summary**. Detailed summary of Locked In for last-minute review.
 3. **Test Me**. Questionnaire / quiz of the material, including an optional timed one-question run.
-4. **Carded**. Durable flashcards derived from Summary, with Again / Good scheduling.
+4. **Carded**. Durable flashcards derived from Summary, scheduled with FSRS (Again / Good).
 
 New Test Me generation produces multiple-choice questions and saves submitted
 answers and misses per reviewer. Existing legacy open-ended questions remain
 answerable with a text response, so older packs are not made unusable. Card
-reviews are persisted with a small SM-2 schedule, and an optional exam date
+reviews are persisted and scheduled with FSRS, and an optional exam date
 prevents cards from being scheduled after the exam. Locked In and card faces
 support explicit editing and pinning; generation asks for confirmation before
 replacing any edited or pinned content, and downstream modes show stale
@@ -76,7 +76,7 @@ no Blob) are handled directly.
 npm install
 cp .env.example .env.local
 # fill in values in .env.local
-# use Neon direct/unpooled DATABASE_URL for schema push
+# db:push is for a local scratch database only; see Schema changes and migrations
 npm run db:push
 npm run user:create -- you@example.com 'Your Name'
 npm run dev
@@ -90,7 +90,7 @@ Open [http://localhost:3000](http://localhost:3000) and sign in with the email a
 
 ## Required environment variables
 
-Names only — set values in `.env.local` (local) or your host (production):
+Names only. Set values in `.env.local` (local) or your host (production):
 
 | Name | Purpose |
 | --- | --- |
@@ -110,7 +110,27 @@ Names only — set values in `.env.local` (local) or your host (production):
 
 See `.env.example` for the full list.
 
-`db:push` must use Neon’s **direct / unpooled** connection string. The pooler endpoint cannot run migrations.
+Schema commands (`db:baseline`, `db:migrate`, `db:backfill-fsrs`, and `db:push` locally) must use Neon’s **direct / unpooled** connection string. The pooler endpoint cannot run migrations.
+
+## Scheduling and study engine
+
+- **FSRS.** Cards use `ts-fsrs` (MIT) with Again and Good only. Again always means tomorrow. Target retention is 0.9, the longest interval is 365 days, and there is no fuzz and no same-day step. Intervals are capped at the pack's exam date. Cards that existed before FSRS were converted by replaying their review history. The Carded buttons show the next interval.
+- **Pacing.** Only packs with an exam date. New cards are spread so each is reviewed at least twice before the exam: `ceil(newRemaining / max(1, daysUntilExam - 2))` per day, over a rolling 24 hours. Packs without an exam date show every due new card.
+- **Mastery.** Per Locked In `##` section, from the latest Test Me answer for each question and the latest card grade, mapped to sections by the pages they cite. Shown once a section has 3 or more answered items, and weak under 60%. Pack rows show pack mastery and the weakest section, and Contents shows a bar per section. No model calls.
+- **Today.** A one-line bar on the desk (cards due, weak sections, nearest exam, about N minutes) opens a modal with Do first, exam pacing per topic, and Just browse.
+
+## Schema changes and migrations
+
+Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as it stood before migrations began, and `0001` adds the FSRS columns.
+
+1. Change the schema in `lib/schema.ts`, then run `npm run db:generate -- --name <x>` and commit the new `drizzle/` files.
+2. Rehearse on a disposable Neon branch, with its direct URL as `DATABASE_URL`:
+   - `npm run db:baseline`, once per database. It verifies the database has no drift from `drizzle/0000_baseline`, then records the baseline. It changes only drizzle's own migrations table.
+   - `npm run db:migrate` applies the migrations after the baseline.
+3. Then production, with the owner's go, after a Neon snapshot. Run the same two commands against production's direct URL.
+4. `npm run db:backfill-fsrs` is a one-time run after `0001`. It sets FSRS state on cards that have none by replaying their reviews, and it is idempotent, so a second run changes nothing.
+
+`npm run db:push` is for local scratch databases only. Never run it against production.
 
 ## Privacy and generation contracts
 
@@ -150,8 +170,11 @@ password line to the command from a protected secret source.
 | `npm run build` | Production build |
 | `npm run start` | Start the production server |
 | `npm run lint` | Run ESLint |
-| `npm run db:push` | Push Drizzle schema (direct/unpooled `DATABASE_URL`) |
-| `npm run db:generate` | Generate Drizzle migrations |
+| `npm run db:generate` | Generate a Drizzle migration from `lib/schema.ts` (`-- --name <x>`) |
+| `npm run db:baseline` | Record `0000_baseline` on an existing database after a drift check (once per database, direct URL) |
+| `npm run db:migrate` | Apply committed migrations (direct/unpooled `DATABASE_URL`) |
+| `npm run db:backfill-fsrs` | One-time, idempotent FSRS backfill after `0001` (direct URL) |
+| `npm run db:push` | Push the schema to a local scratch database only |
 | `npm run user:create` | Invite a user (`tsx scripts/create-user.ts`) |
 | `npm test` | Run Vitest |
 
