@@ -43,7 +43,8 @@ data.
 
 | Upload kind | Behavior |
 | --- | --- |
-| Text PDF, DOCX, PPTX, image, text, pasted notes | Fully ingested and used as generation input. Scanned-PDF vision fallback is explicitly unavailable in this deployment until a bounded renderer is enabled. |
+| Text PDF, DOCX, PPTX, text, pasted notes | Fully ingested and used as generation input. |
+| Scanned or image-heavy PDF, photos of slides | Read page by page from the slide image (pages under about 200 characters of text), then used as generation input. Photos picked together become one source with a page per photo. HEIC is converted in the browser. |
 | Video, audio | Stored (blob reference only); **not** transcribed or parsed in v1 |
 
 DOCX and PPTX extraction reads bounded XML text from the office archive without a
@@ -55,9 +56,13 @@ transcription remain deferred.
 Ingest uses one bounded deadline beginning before Blob verification. Provider
 requests and Blob reads receive the route abort signal where supported; Blob
 streams cancel on abort. Office and PDF parsing run in a killable server worker,
-which is terminated on deadline or client cancellation. Scanned-PDF vision is
-disabled until a worker renderer can enforce page/operator/image/pixel limits;
-the API returns an explicit error rather than attempting unbounded rendering.
+which is terminated on deadline or client cancellation. Slide images are read
+in a separate step after upload: the browser renders each page (or photo) to a
+small JPEG, and the server sends batches of up to 8 to the vision model set in
+`AI_MODEL_VISION`. That costs about one free model request per 8 image pages,
+from the shared daily free-request cap. Reading resumes on the next visit if it
+is interrupted, and Generate waits while slides are being read. There are no new
+environment variables.
 Direct uploads acquire a durable, owner-scoped pathname reservation before
 upload, and source paths are unique. Reviewer/topic deletion first records a
 durable database tombstone, marks source rows for deletion, cleans only
@@ -151,6 +156,12 @@ password line to the command from a protected secret source.
 | `npm test` | Run Vitest |
 
 GitHub Actions runs `npm test` and `npm run lint` on main and pull requests.
+
+## Notable dependencies
+
+`heic-to` (LGPL-3.0) converts iPhone HEIC and HEIF photos to JPEG in the browser.
+It is loaded only when a HEIC file is picked, and the conversion runs in the browser.
+PDF pages are rendered with `unpdf`, which is also loaded on demand.
 
 ## Stack
 

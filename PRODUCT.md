@@ -22,7 +22,7 @@ Tristan and invited friends studying late at night from notes, PDFs, slides, and
 | **User** | Invite-only account (email + password). Owns topics and generation jobs. |
 | **Topic** | Top-level wayfinding tab. Holds many reviewers. Scoped to one user. |
 | **Reviewer** | A study pack: sources + four independent study modes. |
-| **Source** | An uploaded file (PDF, DOCX, PPTX, image, text, video, audio) or pasted notes with an ingest status. |
+| **Source** | An uploaded file (PDF, DOCX, PPTX, photos, text, video, audio) or pasted notes with an ingest status. |
 | **Study mode** | One of four persisted study surfaces for a reviewer (Locked In, Summary, Test Me, Carded). |
 
 ## Information architecture
@@ -37,19 +37,27 @@ Topic tabs are primary navigation. The reviewer workspace collapses the library 
 
 | Kind | Behavior | UI badge |
 | --- | --- | --- |
-| Text PDF, DOCX, PPTX, image, text, pasted notes | Fully ingested; used for generation | No badge when Ready; **Failed** with message when ingest fails |
+| Text PDF, DOCX, PPTX, text, pasted notes | Fully ingested; used for generation | No badge when Ready; **Failed** with message when ingest fails |
+| Scanned or image-heavy PDF, photos of slides | Read page by page from the slide image, then used for generation | Reading progress while pages are read; **Failed** with a Try again button if reading stops |
 | Video, audio | Stored as blob only; not transcribed | **Not yet processed** |
 
 DOCX and PPTX are parsed as bounded ZIP/XML text without a native canvas inside a
-killable server worker. Text PDFs use the same killable worker boundary. Scanned
-PDF vision fallback is explicitly unavailable in this deployment because the
-available PDF.js image API enumerates/decodes a complete page before returning
-it; enabling it requires a worker renderer with hard page, operator, image,
-pixel, byte, and CPU limits. Pasted notes are plain text in the database and
-have no Blob object to delete. File sources retain private Blob lifecycle
+killable server worker. Text PDFs use the same killable worker boundary. Pasted
+notes are plain text in the database and have no Blob object to delete. File sources retain private Blob lifecycle
 handling, with a single 55-second route deadline beginning before Blob
 verification.
 Failed sources keep an error message. Video/audio-only packs cannot generate in v1.
+
+### Slide images (scanned PDFs and photos)
+
+- **Automatic reading.** A scanned or image-heavy PDF is read automatically, page by page, as soon as it is uploaded. A page counts as image-only when it has under about 200 characters of text, so it is read from its slide image. The text a page already has is kept, and the reading is added after it, so figures, equations, and handwriting are not lost.
+- **Photos of slides.** Photos picked together become one source with a page per photo, in the order they were taken (then by name). The browser packs them into a single PDF, so citations, the source viewer, and deletion work as for any PDF. Up to 100 photos per source.
+- **HEIC.** iPhone HEIC and HEIF photos are supported and converted to JPEG in the browser, so the server never receives the HEIC file.
+- **Where the work happens.** The browser turns each page or photo into a small JPEG (long edge 1600 px, at most 800 KB). The server only receives these small images and calls the vision model, so the model key never reaches the browser.
+- **Cost.** About one free model request per 8 image pages, counted toward the shared daily free-request cap. A 40-slide scanned deck is about 5 requests.
+- **Interrupted reading resumes.** Pages already read are never read again. If the tab closes mid-read, reading picks up on the next visit. If the free limit is reached, reading stops and continues the next time the pack is opened.
+- **Generate waits.** While slides are being read in this tab, Generate and Redo are disabled with a note. A pack generated while some pages are unread simply lacks those pages until Redo.
+- **Failure.** A page with nothing readable is marked as such and is not retried, so reading always finishes.
 
 ## Four study modes
 
@@ -84,7 +92,7 @@ countdown on the pack. Pack rows show how many cards are due today.
 - Clear error when the pack is video/audio only or has no ingested text.
 - Pipeline (server, full pack): ready sources → Locked In → Summary and Test Me together in one claimed step → Carded; each mode is saved as it finishes. If Test Me fails while Summary succeeds, Carded still runs and the job ends partial so Resume can fill Test Me.
 - Models are OpenRouter `:free` ids (defaults and optional fallbacks). Do not use `openrouter/auto` as a primary model. Defaults were probed live with `data_collection: deny` on 2026-09-27: `dots-studio/dots-3-note-preview:free`, falling back to `qwen/qwen3.8-27b:free` and `cohere/north-mini-code:free`. Requests turn model reasoning off so the output budget goes to the answer. The request budget uses the smallest verified context window among the primary and its fallbacks.
-- The free OpenRouter tier allows 50 free-model requests per day on this key. A full pack uses about six (four steps plus up to two grounding checks).
+- The free OpenRouter tier allows 50 free-model requests per day on this key. A full pack uses about six (four steps plus up to two grounding checks). Reading scanned pages and photos adds about one request per 8 image pages, from the same daily cap.
 
 ## Citations and grounding
 
@@ -134,7 +142,7 @@ countdown on the pack. Pack rows show how many cards are due today.
 | `AI_MODEL_LOCKED_IN` | Locked In model id (`:free`) |
 | `AI_MODEL_SUMMARY` | Summary model id (`:free`) |
 | `AI_MODEL_JSON` | Test Me / Carded model id (`:free`) |
-| `AI_MODEL_VISION` | Vision model id for images (`:free`) |
+| `AI_MODEL_VISION` | Vision model id for slide images and photos (`:free`) |
 | `AI_MODEL_FALLBACKS` | Comma-separated `:free` fallbacks |
 
 ## Operator notes
