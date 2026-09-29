@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { pageMarkerOverhead, splitPages } from "@/lib/source-markers";
+import { hasMeaningfulText, pageMarkerOverhead, splitPages } from "@/lib/source-markers";
 
 type WorkerReply = { ok: true; text: string } | { ok: false; errorKind: string };
 
@@ -38,6 +38,35 @@ vi.mock("unpdf", () => ({
     }),
   }),
 }));
+
+// Ingest runs the real worker handler in-process, so an image-only PDF goes
+// through the same code path as production minus the thread boundary.
+vi.mock("@/lib/ingest-worker-client", () => ({
+  runKillableParser: async (args: { kind: string; bytes: Uint8Array }) => {
+    workerPort.replies = [];
+    await workerPort.handler?.({ kind: args.kind, bytes: args.bytes });
+    const reply = workerPort.replies[0] as WorkerReply;
+    if (!reply.ok) throw new Error(reply.errorKind);
+    return reply.text;
+  },
+}));
+vi.mock("@vercel/blob", () => ({
+  del: vi.fn(),
+  get: async (pathname: string) => ({
+    statusCode: 200,
+    stream: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+        controller.close();
+      },
+    }),
+    blob: { pathname, size: 4, contentType: "application/pdf" },
+  }),
+  head: vi.fn(),
+  put: vi.fn(),
+}));
+vi.mock("@vercel/blob/client", () => ({ handleUpload: vi.fn() }));
+vi.mock("@/lib/ai", () => ({ visionReadImages: vi.fn() }));
 
 const root = path.resolve(__dirname, "..");
 
@@ -94,8 +123,10 @@ describe("PDF text page markers", () => {
     }
   });
 
-  it("returns empty text when no page has text", async () => {
-    expect(await parse([[], [" "]])).toEqual({ ok: true, text: "" });
+  it("returns one marker per page when no page has text", async () => {
+    const reply = await parse([[], [" "]]);
+    expect(reply).toEqual({ ok: true, text: "<<<page 1>>>\n\n\n\n<<<page 2>>>\n\n" });
+    if (reply.ok) expect(splitPages(reply.text)).toEqual([{ page: 1, text: "" }, { page: 2, text: "" }]);
   });
 
   it("counts marker overhead toward the character limit", async () => {
@@ -110,5 +141,31 @@ describe("PDF text page markers", () => {
       ok: false,
       errorKind: "pdf-text-limit",
     });
+  });
+});
+
+describe("image-only PDF ingest", () => {
+  it("is ready with every page pending for the vision reader", async () => {
+    await import("@/lib/ingest-worker");
+    const { ingestSource } = await import("@/lib/ingest");
+    const { pendingVisionPages } = await import("@/lib/source-vision");
+    pdfPages.pages = [[], [" "], []];
+    const pathname =
+      "users/11111111-1111-1111-1111-111111111111/reviewers/22222222-2222-2222-2222-222222222222/33333333-3333-3333-3333-333333333333-scan.pdf";
+
+    const result = await ingestSource({
+      mime: "application/pdf",
+      blobUrl: `https://store.private.blob.vercel-storage.com/${pathname}`,
+      blobPathname: pathname,
+      filename: "scan.pdf",
+    });
+
+    expect(result.ingestStatus).toBe("ready");
+    expect(result.errorMessage).toBeNull();
+    const text = result.extractedText ?? "";
+    expect(splitPages(text).map((page) => page.page)).toEqual([1, 2, 3]);
+    expect(pendingVisionPages(text)).toEqual([1, 2, 3]);
+    // Generation leaves it out until at least one page is read.
+    expect(hasMeaningfulText(text)).toBe(false);
   });
 });

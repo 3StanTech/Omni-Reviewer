@@ -131,9 +131,9 @@ async function parsePdfText(bytes: Uint8Array): Promise<string> {
       }
       assertPdfWorkerMemory();
     }
-    // A PDF with no text at all stays empty so ingest can treat it as scanned.
-    if (pageTexts.every((text) => !text.trim())) return "";
-    // Blank pages keep their marker so page numbers match the PDF.
+    // Blank pages keep their marker so page numbers match the PDF. A PDF with
+    // no text at all (a scan or photo set) is marker-only; ingest keeps it as
+    // ready and its pages are read from their pictures in the browser.
     return joinPages(pageTexts);
   } finally {
     try {

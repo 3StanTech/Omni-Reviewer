@@ -17,9 +17,9 @@ import {
   PublicError,
 } from "@/lib/public-errors";
 import type { IngestStatus, SourceKind } from "@/lib/types";
-import { stripPageMarkers } from "@/lib/source-markers";
+import { hasPageMarkers, stripPageMarkers } from "@/lib/source-markers";
 
-/** Below this length, PDF text is treated as empty/tiny (likely scanned). */
+/** Below this length, PDF text without page markers has nothing to read. */
 const MIN_MEANINGFUL_PDF_TEXT = 40;
 
 /** Prevent unexpectedly large extraction output from reaching the model. */
@@ -211,7 +211,11 @@ async function ingestPdf(
       merged.replace(/\u0000/g, "").trim(),
     );
 
-    if (stripPageMarkers(cleaned).length >= MIN_MEANINGFUL_PDF_TEXT) {
+    // A PDF with page markers is ready even when its pages carry no text.
+    // Scanned and image-heavy pages are rendered in the browser and read by
+    // the vision model page by page (lib/source-vision.ts, the pages route),
+    // and generation skips a source until it holds meaningful text.
+    if (hasPageMarkers(cleaned) || stripPageMarkers(cleaned).length >= MIN_MEANINGFUL_PDF_TEXT) {
       return {
         kind: "pdf",
         ingestStatus: "ready",
@@ -220,13 +224,7 @@ async function ingestPdf(
       };
     }
 
-    // The existing PDF.js image API enumerates/decodes an entire page before
-    // returning it, so it cannot satisfy a killable hard image/pixel budget in
-    // this Vercel route. Keep text PDFs supported and fail scanned PDFs
-    // explicitly until a bounded worker renderer is available.
-    throw new PublicError(
-      "Scanned PDF vision fallback is unavailable in this deployment; upload a text PDF or paste the text.",
-    );
+    throw new PublicError("This PDF has no readable pages.");
   } catch (err) {
     return {
       kind: "pdf",

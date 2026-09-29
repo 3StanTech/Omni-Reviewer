@@ -237,13 +237,14 @@ describe("ingest", () => {
     });
   });
 
-  it("fails textless PDFs that have no embedded page images", async () => {
+  it("accepts a scanned PDF whose pages carry only markers, before any provider call", async () => {
     const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // %PDF
     const pathname = blobPath("scan.pdf");
     getBlob.mockResolvedValue(
       privateBlobResult(pathname, pdfBytes, "application/pdf"),
     );
-    runKillableParser.mockResolvedValue("");
+    // The worker always writes one marker per page, even for empty pages.
+    runKillableParser.mockResolvedValue("<<<page 1>>>\n\n\n\n<<<page 2>>>\n\n");
 
     const result = await ingestSource({
       mime: "application/pdf",
@@ -252,31 +253,54 @@ describe("ingest", () => {
       filename: "scan.pdf",
     });
 
-    expect(result.kind).toBe("pdf");
-    expect(result.ingestStatus).toBe("failed");
-    expect(result.errorMessage).toBeTruthy();
-    expect(result.errorMessage).toMatch(/scanned PDF vision fallback is unavailable/i);
+    expect(result).toEqual({
+      kind: "pdf",
+      ingestStatus: "ready",
+      extractedText: "<<<page 1>>>\n\n\n\n<<<page 2>>>",
+      errorMessage: null,
+    });
     expect(visionReadImages).not.toHaveBeenCalled();
   });
 
-  it("fails scanned PDFs explicitly before any provider call", async () => {
-    const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
-    const pathname = blobPath("scan.pdf");
+  it.each([["empty", ""], ["whitespace", " "], ["tiny unmarked", "Title"]])(
+    "fails %s PDF text without page markers",
+    async (_label, workerText) => {
+      const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+      const pathname = blobPath("scan.pdf");
+      getBlob.mockResolvedValue(
+        privateBlobResult(pathname, pdfBytes, "application/pdf"),
+      );
+      runKillableParser.mockResolvedValue(workerText);
+
+      const result = await ingestSource({
+        mime: "application/pdf",
+        blobUrl: blobUrl(pathname),
+        blobPathname: pathname,
+        filename: "scan.pdf",
+      });
+
+      expect(result.kind).toBe("pdf");
+      expect(result.ingestStatus).toBe("failed");
+      expect(result.errorMessage).toBe("This PDF has no readable pages.");
+      expect(visionReadImages).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still accepts unmarked PDF text of meaningful length", async () => {
+    const pathname = blobPath("legacy.pdf");
     getBlob.mockResolvedValue(
-      privateBlobResult(pathname, pdfBytes, "application/pdf"),
+      privateBlobResult(pathname, new Uint8Array([0x25, 0x50, 0x44, 0x46]), "application/pdf"),
     );
-    runKillableParser.mockResolvedValue(" ");
+    runKillableParser.mockResolvedValue("Antimicrobial agents inhibit bacterial cell wall synthesis.");
 
     const result = await ingestSource({
       mime: "application/pdf",
       blobUrl: blobUrl(pathname),
       blobPathname: pathname,
-      filename: "scan.pdf",
+      filename: "legacy.pdf",
     });
 
-    expect(result.ingestStatus).toBe("failed");
-    expect(result.errorMessage).toMatch(/scanned PDF vision fallback is unavailable/i);
-    expect(visionReadImages).not.toHaveBeenCalled();
+    expect(result.ingestStatus).toBe("ready");
   });
 
   it("cancels the killable PDF parser when the caller aborts", async () => {

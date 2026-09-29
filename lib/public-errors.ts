@@ -46,6 +46,7 @@ const SAFE_SOURCE_ERRORS = new Set([
   "Source ingest cancelled",
   "Source ingest aborted",
   "Scanned PDF vision fallback is unavailable in this deployment; upload a text PDF or paste the text.",
+  "This PDF has no readable pages.",
   "Office parser failed",
   "PDF parser failed",
   "Parser worker failed",

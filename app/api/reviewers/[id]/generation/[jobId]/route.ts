@@ -46,7 +46,7 @@ import {
 } from "@/lib/generation-step";
 import { parseCardedItems } from "@/lib/learning";
 import { generationJobs, reviewers, sources } from "@/lib/schema";
-import { hasPageMarkers } from "@/lib/source-markers";
+import { hasMeaningfulText, hasPageMarkers } from "@/lib/source-markers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -143,7 +143,9 @@ async function getStepInput(job: JobRow, step: StudyPackStep) {
       )
       .orderBy(asc(sources.createdAt), asc(sources.id));
     const extractedTexts = rows
-      .filter((row): row is { id: string; filename: string; text: string } => Boolean(row.text?.trim()))
+      // A scanned PDF is ready before its slide images are read; until then
+      // its text is page markers only and it is left out of the pack.
+      .filter((row): row is { id: string; filename: string; text: string } => hasMeaningfulText(row.text))
       .map((row) => ({ sourceId: row.id, filename: row.filename, text: row.text }));
     const citationSources: CitationSourceRef[] = extractedTexts.map((source, i) => ({
       index: i + 1,

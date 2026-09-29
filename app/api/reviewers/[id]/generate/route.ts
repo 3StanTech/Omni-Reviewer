@@ -18,6 +18,7 @@ import {
   reactivateGenerationJobForResume,
 } from "@/lib/queries";
 import { sources } from "@/lib/schema";
+import { hasMeaningfulText } from "@/lib/source-markers";
 import {
   loadGenerationViews,
   serializeGenerationJob,
@@ -187,8 +188,10 @@ export async function POST(
           eq(sources.ingestStatus, "ready"),
         ),
       );
+    // A scanned PDF is ready before its slide images are read; markers alone
+    // or "(no readable content)" slides give Locked In nothing to work from.
     const hasExtractedText = readySources.some(
-      (source) => Boolean(source.extractedText?.trim()),
+      (source) => hasMeaningfulText(source.extractedText),
     );
     if (!hasExtractedText) {
       return NextResponse.json(

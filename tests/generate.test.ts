@@ -42,11 +42,14 @@ vi.mock("@openrouter/ai-sdk-provider", () => ({
 }));
 
 import {
+  citationSourcesFor,
   generateCarded,
   generateStudyPack,
   generateStudyPackStep,
   generateTextFromPrompt,
+  getModelId,
   visionReadImages,
+  visionReadPages,
 } from "@/lib/ai";
 import {
   MAX_VISION_OUTPUT_TOKENS,
@@ -65,7 +68,7 @@ import {
   summaryPrompt,
   testMePrompt,
 } from "@/lib/prompts";
-import { joinPages } from "@/lib/source-markers";
+import { hasMeaningfulText, joinPages, withSlideImageText } from "@/lib/source-markers";
 
 const root = path.resolve(__dirname, "..");
 
@@ -114,6 +117,73 @@ describe("generate", () => {
     expect(generateText.mock.calls[0]?.[0]).toMatchObject({
       maxOutputTokens: MAX_VISION_OUTPUT_TOKENS,
     });
+  });
+
+  it("reads a slide batch in one request with each image labelled by its page", async () => {
+    generateText.mockResolvedValue({ text: "  <<<page 3>>>\nFigure  " });
+    const first = new Uint8Array([0xff, 0xd8, 0xff, 1]);
+    const second = new Uint8Array([0xff, 0xd8, 0xff, 2]);
+
+    const text = await visionReadPages(
+      [
+        { page: 3, mime: "image/jpeg", bytes: first },
+        { page: 7, mime: "image/jpeg", bytes: second },
+      ],
+      "Read the slides",
+    );
+
+    expect(text).toBe("<<<page 3>>>\nFigure");
+    expect(generateText).toHaveBeenCalledTimes(1);
+    const call = generateText.mock.calls[0]![0] as {
+      model: { modelId: string };
+      maxOutputTokens: number;
+      messages: Array<{ role: string; content: unknown[] }>;
+    };
+    expect(call.model.modelId).toBe(getModelId("vision"));
+    expect(call.model.modelId).toMatch(/:free$/);
+    expect(call.maxOutputTokens).toBe(MAX_VISION_OUTPUT_TOKENS);
+    expect(call.messages).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "Read the slides" },
+        { type: "text", text: "Slide 3:" },
+        { type: "image", image: first, mediaType: "image/jpeg" },
+        { type: "text", text: "Slide 7:" },
+        { type: "image", image: second, mediaType: "image/jpeg" },
+      ],
+    }]);
+  });
+
+  it("keeps single-image vision on the same request shape", async () => {
+    generateText.mockResolvedValue({ text: "Notes" });
+    const bytes = new Uint8Array([1, 2, 3]);
+    await visionReadImages([{ mime: "image/png", bytes }], "Read the image");
+    expect((generateText.mock.calls[0]![0] as { messages: unknown }).messages).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "Read the image" },
+        { type: "image", image: bytes, mediaType: "image/png" },
+      ],
+    }]);
+  });
+
+  it("leaves marker-only sources out of a pack and keeps S-numbering stable", () => {
+    const rows = [
+      { id: "a", filename: "a.pdf", text: joinPages(["Penicillin binds PBPs."]) },
+      { id: "scan", filename: "scan.pdf", text: joinPages(["", "", ""]) },
+      { id: "empty", filename: "empty.pdf", text: joinPages([withSlideImageText("", "")]) },
+      { id: "b", filename: "b.pdf", text: joinPages(["", withSlideImageText("", "Vancomycin structure")]) },
+    ];
+    const kept = rows.filter((row) => hasMeaningfulText(row.text))
+      .map((row) => ({ sourceId: row.id, filename: row.filename, text: row.text }));
+    expect(citationSourcesFor(kept).map((ref) => [ref.index, ref.sourceId])).toEqual([[1, "a"], [2, "b"]]);
+
+    const route = readFileSync(
+      path.join(root, "app/api/reviewers/[id]/generation/[jobId]/route.ts"),
+      "utf8",
+    );
+    expect(route).toContain("hasMeaningfulText(row.text)");
+    expect(route).not.toContain("row.text?.trim()");
   });
 
   it("calls pipeline in order Locked In → Summary → Test Me → Carded", async () => {
