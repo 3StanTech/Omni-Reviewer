@@ -306,5 +306,46 @@ describe("source pages route", () => {
       const logged = JSON.stringify(logMock.mock.calls[0]![2]);
       expect(logged).not.toContain("t".repeat(20));
     });
+
+    it("logs the provider's reason for a 400 without source text or keys", async () => {
+      const providerError = Object.assign(new Error("Bad Request"), {
+        statusCode: 400,
+        responseBody: JSON.stringify({
+          error: { message: "Invalid image payload:\n could not parse image_url for key sk-or-v1-abc123" },
+        }),
+      });
+      visionMock.mockRejectedValue(providerError);
+      const response = await POST(await batchRequest([{ page: 1, image: jpeg() }]), context);
+      expect(response.status).toBe(502);
+      const details = logMock.mock.calls[0]![2] as Record<string, unknown>;
+      expect(details).toMatchObject({ providerStatus: 400, reviewerId: "reviewer-1", sourceId: "source-1" });
+      expect(details.providerMessage).toContain("Invalid image payload");
+
+      const actual = await vi.importActual<typeof import("@/lib/public-errors")>("@/lib/public-errors");
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      actual.logRedactedError("Source ingest failed", providerError, {
+        ...details,
+        reviewerId: "11111111-1111-1111-1111-111111111111",
+      });
+      const logged = consoleError.mock.calls[0]![1] as Record<string, unknown>;
+      expect(logged.providerMessage).toBe(
+        "Invalid image payload: could not parse image_url for key sk-or-[redacted]",
+      );
+      expect(logged.providerStatus).toBe(400);
+    });
+
+    it("keeps a logged provider message to one capped line with image bytes redacted", async () => {
+      const { redactProviderMessage } = await vi.importActual<typeof import("@/lib/public-errors")>(
+        "@/lib/public-errors",
+      );
+      const message = redactProviderMessage(
+        `line one\nline two data:image/jpeg;base64,/9j/4AAQ ${"A".repeat(150)} ${"x ".repeat(400)}`,
+      );
+      expect(message).not.toContain("\n");
+      expect(message).not.toContain("/9j/");
+      expect(message).not.toContain("A".repeat(100));
+      expect(message.length).toBeLessThanOrEqual(300);
+      expect(message.startsWith("line one line two data:[redacted] [redacted]")).toBe(true);
+    });
   });
 });

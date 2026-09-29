@@ -132,7 +132,25 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   "providerCode",
   "requestId",
   "invalidKeys",
+  "providerMessage",
 ]);
+
+const MAX_PROVIDER_MESSAGE_CHARS = 300;
+
+/**
+ * A provider's own error text, for diagnosing a failed request. One line,
+ * capped, with API keys, data URLs and long base64 runs (image bytes)
+ * redacted before it can reach a log.
+ */
+export function redactProviderMessage(message: string): string {
+  return message
+    .replace(/sk-or-[A-Za-z0-9_-]*/g, "sk-or-[redacted]")
+    .replace(/data:[^\s"']+/g, "data:[redacted]")
+    .replace(/[A-Za-z0-9+/=]{100,}/g, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_PROVIDER_MESSAGE_CHARS);
+}
 
 const UUID_DETAIL_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -234,6 +252,14 @@ function sanitizeLogDetails(
 
     if (key === "step") {
       if (typeof value === "string" && SAFE_STEPS.has(value)) output[key] = value;
+      continue;
+    }
+
+    if (key === "providerMessage") {
+      if (typeof value === "string") {
+        const message = redactProviderMessage(value);
+        if (message) output[key] = message;
+      }
       continue;
     }
 

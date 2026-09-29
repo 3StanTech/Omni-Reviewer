@@ -237,6 +237,9 @@ export async function POST(request: Request, context: RouteContext) {
       providerStatus: parsed.status,
       providerCode: parsed.code,
       requestId: parsed.requestId,
+      // The provider's own reason (redacted and capped by logRedactedError);
+      // a 400 is otherwise invisible behind its classified code.
+      providerMessage: parsed.message,
     });
     const message = publicGenerationErrorMessage(classified.code, classified.message)
       ?? "Could not read the slide images. Try again.";
