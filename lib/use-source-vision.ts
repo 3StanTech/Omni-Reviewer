@@ -122,9 +122,32 @@ export function missingFollowUp(task: VisionTask, missing: readonly number[]): V
   return { sourceId: task.sourceId, pages: [...missing], final: true, attempt: 0, epoch: task.epoch };
 }
 
-/** A failed batch is tried once more, then its source stops. */
-export function failureDecision(task: VisionTask): "retry" | "stop" {
-  return task.attempt < 1 ? "retry" : "stop";
+export type FailureDecision =
+  | { kind: "split"; halves: [VisionTask, VisionTask] }
+  | { kind: "retry"; task: VisionTask }
+  | { kind: "give_up" };
+
+/**
+ * What to do after a batch fails for a reason other than quota or a changed
+ * source. Resending the same pages rarely helps (one bad image can fail the
+ * whole batch), so a batch is halved instead, down to single pages. A page
+ * reached by halving has already failed once, so it is not retried again;
+ * only a page sent alone from the start gets one more try. Eight pages cost
+ * at most 15 posts. Giving up on a page does not stop the rest of its source.
+ */
+export function failureDecision(task: VisionTask): FailureDecision {
+  if (task.pages.length > 1) {
+    const cut = Math.ceil(task.pages.length / 2);
+    const half = (from: number, to: number): VisionTask => ({
+      ...task,
+      pages: task.pages.slice(from, to),
+      images: task.images?.slice(from, to),
+      attempt: 1,
+    });
+    return { kind: "split", halves: [half(0, cut), half(cut, task.pages.length)] };
+  }
+  if (task.attempt < 1) return { kind: "retry", task: { ...task, attempt: task.attempt + 1 } };
+  return { kind: "give_up" };
 }
 
 /** A source changed under a merge re-reads its pending list once, then stops. */
@@ -164,6 +187,8 @@ type Job = {
   requeued: boolean;
   epoch: number;
   wrote: boolean;
+  /** A page was given up on; the source stops once its other batches finish. */
+  failed: boolean;
   /** Tasks queued or running for this source. */
   open: number;
   state: VisionProgress["state"];
@@ -251,6 +276,7 @@ export class VisionRunner {
         requeued: false,
         epoch: 0,
         wrote: false,
+        failed: false,
         open: 0,
         state: "reading",
       };
@@ -416,11 +442,15 @@ export class VisionRunner {
   private fail(task: VisionTask): void {
     const job = this.jobs.get(task.sourceId);
     if (!job || job.state !== "reading" || (task.epoch ?? 0) !== job.epoch) return;
-    if (failureDecision(task) === "retry") {
-      this.pushFront({ ...task, attempt: task.attempt + 1 });
-      return;
+    const decision = failureDecision(task);
+    if (decision.kind === "split") {
+      this.pushFront(decision.halves[1]);
+      this.pushFront(decision.halves[0]);
+    } else if (decision.kind === "retry") {
+      this.pushFront(decision.task);
+    } else {
+      job.failed = true;
     }
-    this.stop(task.sourceId, VISION_FAILED_MESSAGE, progressFor(job.total, job.pending));
   }
 
   private async refetch(sourceId: string, job: Job): Promise<void> {
@@ -454,14 +484,14 @@ export class VisionRunner {
     if (!job) return;
     job.open -= 1;
     if (job.open > 0 || job.state !== "reading") return;
-    if (job.pending.length > 0 && !job.requeued && !this.halted && !this.signal.aborted) {
+    if (job.pending.length > 0 && !job.failed && !job.requeued && !this.halted && !this.signal.aborted) {
       // The server still lists pages this pass did not settle: one more pass.
       job.requeued = true;
       this.enqueue(sourceId, job.pending, true);
       return;
     }
     if (this.halted || this.signal.aborted) return;
-    if (job.pending.length > 0) {
+    if (job.failed || job.pending.length > 0) {
       this.stop(sourceId, VISION_FAILED_MESSAGE, progressFor(job.total, job.pending));
       return;
     }

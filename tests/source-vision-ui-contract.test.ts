@@ -32,7 +32,11 @@ type Reply = { status: number; body: unknown } | ((batch: Posted) => { status: n
  * A fake pages route. Each source keeps a server-side pending list; a POST
  * reads what it is sent unless a scripted reply says otherwise.
  */
-function harness(initial: Record<string, number[]>, script: Record<string, Reply[]> = {}) {
+function harness(
+  initial: Record<string, number[]>,
+  script: Record<string, Reply[]> = {},
+  failWhen?: (batch: Posted) => boolean,
+) {
   const pending = new Map(Object.entries(initial).map(([id, pages]) => [id, [...pages]]));
   const posts: Posted[] = [];
   const gets: string[] = [];
@@ -59,6 +63,7 @@ function harness(initial: Record<string, number[]>, script: Record<string, Reply
       maxInFlight = Math.max(maxInFlight, inFlight);
       await new Promise((resolve) => setTimeout(resolve, 1));
       inFlight -= 1;
+      if (failWhen?.(posted)) return { status: 502, body: { error: "Model failed", code: "json_parse" } };
       const scripted = script[sourceId]?.shift();
       if (scripted) return typeof scripted === "function" ? scripted(posted) : scripted;
       const left = (pending.get(sourceId) ?? []).filter((page) => !batch.pages.includes(page));
@@ -145,12 +150,27 @@ describe("slide-image reading decisions", () => {
       .toEqual({ kind: "ok", read: [1], missing: [2], pending: [2, 5] });
   });
 
-  it("retries a failed batch once, then stops; re-GETs once on a change", () => {
-    const task = { sourceId: "s", pages: [1], final: false, attempt: 0 };
-    expect(failureDecision(task)).toBe("retry");
-    expect(failureDecision({ ...task, attempt: 1 })).toBe("stop");
+  it("halves a failed batch down to single pages, retrying only a lone page once", () => {
+    const task = { sourceId: "s", pages: range(1, 8), final: false, attempt: 0 };
+    const first = failureDecision(task);
+    expect(first.kind).toBe("split");
+    if (first.kind !== "split") return;
+    expect(first.halves.map((half) => half.pages)).toEqual([[1, 2, 3, 4], [5, 6, 7, 8]]);
+    const odd = failureDecision({ ...task, pages: [1, 2, 3] });
+    expect(odd.kind === "split" && odd.halves.map((half) => half.pages)).toEqual([[1, 2], [3]]);
+    // A page reached by halving already failed once: give up, no identical resend.
+    expect(failureDecision({ ...task, pages: [3], attempt: 1 })).toEqual({ kind: "give_up" });
+    // A page sent alone from the start gets one more try.
+    expect(failureDecision({ ...task, pages: [9] })).toMatchObject({ kind: "retry", task: { pages: [9], attempt: 1 } });
     expect(changedDecision(false)).toBe("refetch");
     expect(changedDecision(true)).toBe("stop");
+  });
+
+  it("keeps rendered images with their halves", () => {
+    const images = [1, 2, 3, 4].map((n) => new Blob([new Uint8Array(n)]));
+    const decision = failureDecision({ sourceId: "s", pages: [1, 2, 3, 4], final: false, attempt: 0, images });
+    expect(decision.kind === "split" && decision.halves.map((half) => half.images?.map((image) => image.size)))
+      .toEqual([[1, 2], [3, 4]]);
   });
 
   it("counts progress from the server's pending list", () => {
@@ -207,24 +227,45 @@ describe("VisionRunner", () => {
     expect(h.posts.length).toBeLessThanOrEqual(3);
   });
 
-  it("retries a failed batch once, then stops that source only", async () => {
-    const fail = { status: 502, body: { error: "Model failed" } };
-    const h = harness({ a: [1, 2], b: [1] }, { a: [fail, fail] });
+  it("isolates one bad page by halving, reads the rest, then stops that source only", async () => {
+    const bad = 3;
+    const h = harness({ a: range(1, 8), b: [1] }, {}, (batch) => batch.sourceId === "a" && batch.pages.includes(bad));
     await h.start();
-    expect(h.posts.filter((post) => post.sourceId === "a")).toHaveLength(2);
-    expect(h.progress.get("a")).toMatchObject({ state: "stopped", message: VISION_FAILED_MESSAGE });
+    const aPosts = h.posts.filter((p) => p.sourceId === "a").map((p) => p.pages);
+    // Two runners interleave, so compare the set of batches sent.
+    const key = (pages: number[]) => pages.join(",");
+    expect(aPosts.map(key).sort()).toEqual(
+      [range(1, 8), [1, 2, 3, 4], range(5, 8), [1, 2], [3, 4], [3], [4]].map(key).sort(),
+    );
+    // No identical batch is ever sent twice.
+    expect(new Set(aPosts.map((pages) => pages.join(","))).size).toBe(aPosts.length);
+    expect(h.pending.get("a")).toEqual([bad]);
+    expect(h.progress.get("a")).toMatchObject({ state: "stopped", message: VISION_FAILED_MESSAGE, done: 7, total: 8 });
     expect(h.progress.get("b")?.state).toBe("done");
 
     h.runner.retry("a");
     await h.runner.idle();
-    expect(h.progress.get("a")?.state).toBe("done");
+    expect(h.progress.get("a")?.state).toBe("stopped");
   });
 
-  it("recovers from one failure without stopping", async () => {
+  it("costs at most 15 posts when every page of 8 fails", async () => {
+    const fail = { status: 502, body: { error: "Model failed" } };
+    const h = harness({ a: range(1, 8) }, { a: Array.from({ length: 40 }, () => fail) });
+    await h.start();
+    expect(h.posts).toHaveLength(15);
+    expect(h.progress.get("a")).toMatchObject({ state: "stopped", message: VISION_FAILED_MESSAGE });
+  });
+
+  it("retries a lone failed page once", async () => {
     const h = harness({ a: [1] }, { a: [{ status: 500, body: {} }] });
     await h.start();
     expect(h.posts).toHaveLength(2);
     expect(h.progress.get("a")?.state).toBe("done");
+
+    const twice = harness({ a: [1] }, { a: [{ status: 500, body: {} }, { status: 500, body: {} }] });
+    await twice.start();
+    expect(twice.posts).toHaveLength(2);
+    expect(twice.progress.get("a")).toMatchObject({ state: "stopped", message: VISION_FAILED_MESSAGE });
   });
 
   it("re-GETs the pending list once when the source changed", async () => {
