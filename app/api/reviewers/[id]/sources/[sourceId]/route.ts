@@ -1,6 +1,3 @@
-import { createHash } from "node:crypto";
-
-import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
@@ -10,7 +7,6 @@ import {
   MAX_INGEST_BYTES,
   MAX_UPLOAD_BYTES,
 } from "@/lib/blob";
-import { db } from "@/lib/db";
 import { createIngestBudget, ingestSource } from "@/lib/ingest";
 import {
   beginSourceDeletion,
@@ -18,6 +14,8 @@ import {
   getReviewer,
   getSourceForReviewer,
   replaceFailedSourceIngest,
+  replaceSourceTextIfUnchanged,
+  sourceTextFingerprint,
 } from "@/lib/queries";
 import { logRedactedError, PublicError, publicErrorMessage } from "@/lib/public-errors";
 import { cappedBodyError, readCappedText } from "@/lib/request-body";
@@ -62,11 +60,16 @@ function sourceTextResponse(source: Source, pageParam: string | null): Response 
   const page = pageParam && /^\d{1,4}$/.test(pageParam) ? Number(pageParam) : null;
   const body = page === null || !hasPageMarkers(text)
     ? stripPageMarkers(text).slice(0, MAX_SOURCE_TEXT_VIEW_CHARS)
-    : pageText(text, page);
+    : stripSlideImageLine(pageText(text, page));
   return NextResponse.json(
     { page, pageCount: pageCount(text), text: body, hasFile: Boolean(source.blobPathname) },
     { headers: { "Cache-Control": "private, no-store" } },
   );
+}
+
+/** The slide-image marker is for prompts and grounding, never for display. */
+function stripSlideImageLine(page: string | null): string | null {
+  return page === null ? null : stripPageMarkers(page);
 }
 
 export async function GET(request: Request, context: RouteContext) {
@@ -269,10 +272,6 @@ async function readRetryReason(request: Request): Promise<string | null> {
   return null;
 }
 
-function textFingerprint(text: string | null): string {
-  return createHash("md5").update(text ?? "", "utf8").digest("hex");
-}
-
 /**
  * Re-read a ready PDF or PPTX from its stored blob so its text gains page
  * markers. The write is conditional on the row still holding the text and
@@ -322,30 +321,20 @@ async function refreshSourcePageMarkers(
       return NextResponse.json({ error: PAGE_MARKERS_NOT_FOUND }, { status: 422 });
     }
 
-    const result = await db.execute(sql`
-      UPDATE sources AS s
-      SET extracted_text = ${ingest.extractedText},
-          error_message = NULL
-      FROM reviewers AS r
-      INNER JOIN topics AS t ON t.id = r.topic_id
-      WHERE s.id = ${sourceId}
-        AND s.reviewer_id = ${reviewerId}
-        AND s.reviewer_id = r.id
-        AND t.user_id = ${userId}
-        AND s.ingest_status = 'ready'::ingest_status
-        AND s.deleting_at IS NULL
-        AND s.blob_pathname = ${source.blobPathname}
-        AND md5(coalesce(s.extracted_text, '')) = ${textFingerprint(source.extractedText)}
-        AND r.deleting_at IS NULL
-        AND t.deleting_at IS NULL
-      RETURNING s.id
-    `);
+    const updated = await replaceSourceTextIfUnchanged({
+      userId,
+      reviewerId,
+      sourceId,
+      blobPathname: source.blobPathname,
+      expectedFingerprint: sourceTextFingerprint(source.extractedText),
+      text: ingest.extractedText ?? "",
+    });
 
-    const row = await getSourceForReviewer(reviewerId, sourceId, userId);
+    const row = updated ?? await getSourceForReviewer(reviewerId, sourceId, userId);
     if (!row || row.deletingAt) {
       return NextResponse.json({ error: "Source not found" }, { status: 404 });
     }
-    if (result.rows.length === 0 && !hasPageMarkers(row.extractedText)) {
+    if (!updated && !hasPageMarkers(row.extractedText)) {
       return NextResponse.json(
         { error: "This source changed while refreshing. Try again." },
         { status: 409 },

@@ -12,6 +12,9 @@
     "app/api/reviewers/[id]/sources/[sourceId]/route.ts": {
       "maxDuration": 60,
       "memory": 2048
+    },
+    "app/api/reviewers/[id]/sources/[sourceId]/pages/route.ts": {
+      "maxDuration": 120
     }
   }
 }

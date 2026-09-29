@@ -13,8 +13,9 @@ vi.mock("@/lib/queries", () => ({
   getReviewer: vi.fn(),
   getSourceForReviewer: vi.fn(),
   replaceFailedSourceIngest: vi.fn(),
+  replaceSourceTextIfUnchanged: vi.fn(),
+  sourceTextFingerprint: vi.fn(),
 }));
-vi.mock("@/lib/db", () => ({ db: { execute: vi.fn() } }));
 vi.mock("@/lib/ingest", () => ({
   createIngestBudget: vi.fn(),
   ingestSource: vi.fn(),
@@ -25,10 +26,17 @@ vi.mock("@/lib/public-errors", async () => {
 });
 
 import { auth } from "@/auth";
-import { db } from "@/lib/db";
 import { deleteBlobIfUnreferenced, getPrivateBlob } from "@/lib/blob";
 import { createIngestBudget, ingestSource } from "@/lib/ingest";
-import { beginSourceDeletion, deleteSourceForOwner, getReviewer, getSourceForReviewer, replaceFailedSourceIngest } from "@/lib/queries";
+import {
+  beginSourceDeletion,
+  deleteSourceForOwner,
+  getReviewer,
+  getSourceForReviewer,
+  replaceFailedSourceIngest,
+  replaceSourceTextIfUnchanged,
+  sourceTextFingerprint,
+} from "@/lib/queries";
 import { DELETE, GET, POST } from "@/app/api/reviewers/[id]/sources/[sourceId]/route";
 
 const authMock = auth as unknown as ReturnType<typeof vi.fn>;
@@ -42,7 +50,8 @@ const ingestSourceMock = ingestSource as unknown as ReturnType<typeof vi.fn>;
 const createIngestBudgetMock = createIngestBudget as unknown as ReturnType<typeof vi.fn>;
 const replaceFailedMock = replaceFailedSourceIngest as unknown as ReturnType<typeof vi.fn>;
 
-const executeMock = db.execute as unknown as ReturnType<typeof vi.fn>;
+const replaceTextMock = replaceSourceTextIfUnchanged as unknown as ReturnType<typeof vi.fn>;
+const fingerprintMock = sourceTextFingerprint as unknown as ReturnType<typeof vi.fn>;
 
 const context = { params: Promise.resolve({ id: "reviewer-1", sourceId: "source-1" }) };
 
@@ -58,7 +67,9 @@ describe("source file route", () => {
     ingestSourceMock.mockReset();
     createIngestBudgetMock.mockReset();
     replaceFailedMock.mockReset();
-    executeMock.mockReset();
+    replaceTextMock.mockReset();
+    fingerprintMock.mockReset();
+    fingerprintMock.mockImplementation((text: string | null) => `md5:${text ?? ""}`);
     createIngestBudgetMock.mockReturnValue({
       signal: new AbortController().signal,
       throwIfExpired: () => undefined,
@@ -115,6 +126,22 @@ describe("source file route", () => {
       hasFile: false,
     });
     expect(getPrivateBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("hides the slide image marker in a cited page's text", async () => {
+    sourceMock.mockResolvedValue({
+      id: "source-1",
+      reviewerId: "reviewer-1",
+      kind: "pdf",
+      mime: "application/pdf",
+      blobPathname: "users/user-1/reviewers/reviewer-1/scan.pdf",
+      extractedText: "<<<page 1>>>\n\nTitle\n\n<<<slide image>>>\nGraph of the AM envelope",
+    });
+    const response = await GET(new Request("https://omni-reviewer.example?view=text&page=1"), context);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.text).toBe("Title\n\nGraph of the AM envelope");
+    expect(body.hasFile).toBe(true);
   });
 
   it("keeps the text view owner-scoped", async () => {
@@ -217,16 +244,14 @@ describe("source file route", () => {
       });
 
     it("re-reads a ready PDF from the stored blob and reports markers without exposing text", async () => {
-      sourceMock
-        .mockResolvedValueOnce(readySource)
-        .mockResolvedValueOnce({ ...readySource, extractedText: markedText });
+      sourceMock.mockResolvedValueOnce(readySource);
       ingestSourceMock.mockResolvedValue({
         kind: "pdf",
         ingestStatus: "ready",
         extractedText: markedText,
         errorMessage: null,
       });
-      executeMock.mockResolvedValue({ rows: [{ id: "source-1" }] });
+      replaceTextMock.mockResolvedValue({ ...readySource, extractedText: markedText });
 
       const response = await POST(refresh(), context);
       expect(response.status).toBe(200);
@@ -237,8 +262,33 @@ describe("source file route", () => {
       expect(serialized).not.toContain("blob.example");
       expect(serialized).not.toContain("Antimicrobial");
       expect(ingestSourceMock).toHaveBeenCalledWith(expect.objectContaining({ blobPathname: pathname }));
-      expect(executeMock).toHaveBeenCalledTimes(1);
+      expect(replaceTextMock).toHaveBeenCalledTimes(1);
+      expect(replaceTextMock).toHaveBeenCalledWith({
+        userId: "user-1",
+        reviewerId: "reviewer-1",
+        sourceId: "source-1",
+        blobPathname: pathname,
+        expectedFingerprint: "md5:Antimicrobial agents",
+        text: markedText,
+      });
       expect(replaceFailedMock).not.toHaveBeenCalled();
+    });
+
+    it("reports a concurrent change when the conditional write misses", async () => {
+      sourceMock
+        .mockResolvedValueOnce(readySource)
+        .mockResolvedValueOnce({ ...readySource, extractedText: "Edited elsewhere" });
+      ingestSourceMock.mockResolvedValue({
+        kind: "pdf",
+        ingestStatus: "ready",
+        extractedText: markedText,
+        errorMessage: null,
+      });
+      replaceTextMock.mockResolvedValue(null);
+
+      const response = await POST(refresh(), context);
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toMatch(/changed while refreshing/);
     });
 
     it.each([
@@ -252,7 +302,7 @@ describe("source file route", () => {
       expect(response.status).toBe(409);
       expect((await response.json()).error).toMatch(/ready PDF or PPTX/);
       expect(ingestSourceMock).not.toHaveBeenCalled();
-      expect(executeMock).not.toHaveBeenCalled();
+      expect(replaceTextMock).not.toHaveBeenCalled();
     });
 
     it("returns 404 for another owner's source", async () => {
@@ -262,7 +312,7 @@ describe("source file route", () => {
       const response = await POST(refresh(), context);
       expect(response.status).toBe(404);
       expect(ingestSourceMock).not.toHaveBeenCalled();
-      expect(executeMock).not.toHaveBeenCalled();
+      expect(replaceTextMock).not.toHaveBeenCalled();
     });
 
     it("keeps the stored text when the re-read finds no page numbers", async () => {
@@ -276,7 +326,7 @@ describe("source file route", () => {
 
       const response = await POST(refresh(), context);
       expect(response.status).toBe(422);
-      expect(executeMock).not.toHaveBeenCalled();
+      expect(replaceTextMock).not.toHaveBeenCalled();
     });
 
     it("lets a concurrent delete win", async () => {
@@ -289,7 +339,7 @@ describe("source file route", () => {
         extractedText: markedText,
         errorMessage: null,
       });
-      executeMock.mockResolvedValue({ rows: [] });
+      replaceTextMock.mockResolvedValue(null);
 
       const response = await POST(refresh(), context);
       expect(response.status).toBe(404);
@@ -333,7 +383,7 @@ describe("source file route", () => {
       }), context);
       expect(response.status).toBe(200);
       expect(replaceFailedMock).toHaveBeenCalled();
-      expect(executeMock).not.toHaveBeenCalled();
+      expect(replaceTextMock).not.toHaveBeenCalled();
     });
 
     it("still retries a failed source when the body is empty", async () => {
@@ -349,7 +399,7 @@ describe("source file route", () => {
       const response = await POST(new Request("https://omni-reviewer.example", { method: "POST" }), context);
       expect(response.status).toBe(200);
       expect(replaceFailedMock).toHaveBeenCalled();
-      expect(executeMock).not.toHaveBeenCalled();
+      expect(replaceTextMock).not.toHaveBeenCalled();
       expect((await response.json()).hasPageMarkers).toBe(true);
     });
   });

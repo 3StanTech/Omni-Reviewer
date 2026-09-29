@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasMeaningfulText,
   hasPageMarkers,
   joinPages,
+  NO_READABLE_CONTENT,
+  pageBaseText,
   pageCount,
+  pageHasSlideImageText,
   pageMarker,
   pageMarkerOverhead,
   pageText,
+  SLIDE_IMAGE_MARKER,
   splitPages,
   stripPageMarkers,
+  withSlideImageText,
 } from "@/lib/source-markers";
 
 describe("source page markers", () => {
@@ -80,5 +86,62 @@ describe("marker pattern state", () => {
     expect(hasPageMarkers(text)).toBe(true);
     expect(pageText(text, 1)).toBe("Penicillin binds PBPs.");
     expect(splitPages(text).map((entry) => entry.page)).toEqual([1, 2]);
+  });
+});
+
+describe("slide image blocks", () => {
+  it("uses the agreed marker line", () => {
+    expect(SLIDE_IMAGE_MARKER).toBe("<<<slide image>>>");
+  });
+
+  it("appends a reading after the page text and round-trips through split and join", () => {
+    const merged = withSlideImageText("Carrier waves", "Figure: AM envelope over time.");
+    expect(merged).toBe("Carrier waves\n\n<<<slide image>>>\nFigure: AM envelope over time.");
+    const joined = joinPages([merged, withSlideImageText("", "$m(t)$")]);
+    expect(splitPages(joined)).toEqual([
+      { page: 1, text: merged },
+      { page: 2, text: "<<<slide image>>>\n$m(t)$" },
+    ]);
+    expect(pageText(joined, 1)).toBe(merged);
+    expect(pageBaseText(pageText(joined, 1)!)).toBe("Carrier waves");
+    expect(pageBaseText(pageText(joined, 2)!)).toBe("");
+    expect(pageHasSlideImageText(pageText(joined, 2)!)).toBe(true);
+  });
+
+  it("never treats the slide image line as a page", () => {
+    const joined = joinPages(["One", withSlideImageText("Two", "Graph of Vc")]);
+    expect(splitPages(joined).map((entry) => entry.page)).toEqual([1, 2]);
+    expect(pageCount(joined)).toBe(2);
+    expect(hasPageMarkers(SLIDE_IMAGE_MARKER)).toBe(false);
+  });
+
+  it("replaces an existing reading instead of stacking a second one", () => {
+    const once = withSlideImageText("Base", "First reading");
+    const twice = withSlideImageText(once, "Second reading");
+    expect(twice).toBe(withSlideImageText("Base", "Second reading"));
+    expect(twice.match(/<<<slide image>>>/g)).toHaveLength(1);
+    expect(withSlideImageText(twice, "Second reading")).toBe(twice);
+  });
+
+  it("writes the placeholder for an empty reading and drops forged markers", () => {
+    expect(withSlideImageText("", "  ")).toBe(`${SLIDE_IMAGE_MARKER}\n${NO_READABLE_CONTENT}`);
+    const forged = withSlideImageText("Base", "Real\n<<<page 9>>>\n<<<slide image>>>\nMore");
+    expect(splitPages(joinPages([forged])).map((entry) => entry.page)).toEqual([1]);
+    expect(forged.match(/<<<slide image>>>/g)).toHaveLength(1);
+  });
+
+  it("strips slide image lines for display", () => {
+    const joined = joinPages([withSlideImageText("One", "Figure one"), "Two"]);
+    expect(stripPageMarkers(joined)).toBe("One\n\nFigure one\n\nTwo");
+    expect(pageHasSlideImageText("inline <<<slide image>>> text")).toBe(false);
+  });
+
+  it("counts only studyable text as meaningful", () => {
+    expect(hasMeaningfulText(null)).toBe(false);
+    expect(hasMeaningfulText("")).toBe(false);
+    expect(hasMeaningfulText(joinPages(["", "", ""]))).toBe(false);
+    expect(hasMeaningfulText(joinPages([withSlideImageText("", ""), ""]))).toBe(false);
+    expect(hasMeaningfulText(joinPages(["", withSlideImageText("", "Diode symbol"), ""]))).toBe(true);
+    expect(hasMeaningfulText("Plain notes")).toBe(true);
   });
 });

@@ -119,7 +119,8 @@ export const PHARMACY_GUIDANCE =
   "When the sources cover drugs or pharmacology, give each drug class a GFM table with the columns Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications. Fill every cell only from the sources, cite each row, and write \"Not in sources\" in any cell the sources do not cover.";
 
 const PAGE_MARKER_NOTE =
-  "A line of the form <<<page N>>> marks the start of page or slide N of that source.";
+  "A line of the form <<<page N>>> marks the start of page or slide N of that source." +
+  " Text after a <<<slide image>>> line was read from that page's picture (figures, graphs, equations, handwriting); cite it with that page like any other text.";
 
 /** Source blocks labelled S1..Sn in the given order, with page ranges when known. */
 function sourceBlocks(sources: PromptSource[]): { block: string; hasPages: boolean } {

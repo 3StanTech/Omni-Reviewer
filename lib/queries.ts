@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import { differsOnlyInUnsourcedTokens, isUnsourcedMarkerOnlyChange, type CitationSourceRef } from "@/lib/citations";
 import type { GroundingReport } from "@/lib/grounding";
 
@@ -3244,6 +3246,46 @@ export async function replaceFailedSourceIngest(
       AND s.ingest_status = 'failed'::ingest_status
       AND s.deleting_at IS NULL
       AND s.blob_pathname IS NOT NULL
+      AND r.deleting_at IS NULL
+      AND t.deleting_at IS NULL
+    RETURNING s.*
+  `);
+  const raw = result.rows[0] as Record<string, unknown> | undefined;
+  return raw ? sourceFromRawRow(raw) : null;
+}
+
+/** Matches Postgres `md5(coalesce(extracted_text, ''))` for conditional text writes. */
+export function sourceTextFingerprint(text: string | null): string {
+  return createHash("md5").update(text ?? "", "utf8").digest("hex");
+}
+
+/**
+ * Replace a ready source's text only while the row still holds the text and
+ * blob that were read, so a concurrent delete, replace, or merge always wins.
+ * Returns the updated row, or null when nothing was written.
+ */
+export async function replaceSourceTextIfUnchanged(args: {
+  userId: string;
+  reviewerId: string;
+  sourceId: string;
+  blobPathname: string;
+  expectedFingerprint: string;
+  text: string;
+}): Promise<Source | null> {
+  const result = await db.execute(sql`
+    UPDATE sources AS s
+    SET extracted_text = ${args.text},
+        error_message = NULL
+    FROM reviewers AS r
+    INNER JOIN topics AS t ON t.id = r.topic_id
+    WHERE s.id = ${args.sourceId}
+      AND s.reviewer_id = ${args.reviewerId}
+      AND s.reviewer_id = r.id
+      AND t.user_id = ${args.userId}
+      AND s.ingest_status = 'ready'::ingest_status
+      AND s.deleting_at IS NULL
+      AND s.blob_pathname = ${args.blobPathname}
+      AND md5(coalesce(s.extracted_text, '')) = ${args.expectedFingerprint}
       AND r.deleting_at IS NULL
       AND t.deleting_at IS NULL
     RETURNING s.*

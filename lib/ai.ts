@@ -308,36 +308,27 @@ export async function generateTextFromPrompt(
   });
 }
 
-export async function visionReadImages(
-  images: { mime: string; bytes: Uint8Array }[],
-  instruction: string,
-  options: { signal?: AbortSignal } = {},
-): Promise<string> {
-  if (images.length === 0) {
-    throw new Error("visionReadImages requires at least one image");
-  }
+type VisionContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; image: Uint8Array; mediaType: string };
 
+/**
+ * The one vision request both readers share, so the model, output cap, and
+ * retry policy cannot drift between single images and slide batches.
+ */
+async function runVision(
+  content: VisionContentPart[],
+  signal: AbortSignal | undefined,
+): Promise<string> {
   const modelId = modelIdForPurpose("vision");
 
-  const result = await withRetry(async (signal) => {
+  return withRetry(async (attemptSignal) => {
     const { text } = await generateText({
       model: getOpenRouterModel(modelId),
       maxRetries: 0,
-      abortSignal: signal,
+      abortSignal: attemptSignal,
       maxOutputTokens: MAX_VISION_OUTPUT_TOKENS,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: instruction },
-            ...images.map((img) => ({
-              type: "image" as const,
-              image: img.bytes,
-              mediaType: img.mime,
-            })),
-          ],
-        },
-      ],
+      messages: [{ role: "user", content }],
     });
     const normalizedText = text.trim();
     if (normalizedText.length > MAX_VISION_TEXT_CHARS) {
@@ -349,12 +340,55 @@ export async function visionReadImages(
     }
     return normalizedText;
   }, {
-    signal: options.signal,
+    signal,
     attempts: MAX_GENERATION_ATTEMPTS,
     deadlineMs: GENERATION_STEP_DEADLINE_MS,
   });
+}
 
-  return result;
+export async function visionReadImages(
+  images: { mime: string; bytes: Uint8Array }[],
+  instruction: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  if (images.length === 0) {
+    throw new Error("visionReadImages requires at least one image");
+  }
+  return runVision(
+    [
+      { type: "text", text: instruction },
+      ...images.map((img) => ({
+        type: "image" as const,
+        image: img.bytes,
+        mediaType: img.mime,
+      })),
+    ],
+    options.signal,
+  );
+}
+
+/**
+ * Read a batch of slide pictures in one request. Each image is preceded by a
+ * "Slide N:" label so the model can mark its reading with that page number.
+ */
+export async function visionReadPages(
+  pages: { page: number; mime: "image/jpeg"; bytes: Uint8Array }[],
+  instruction: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  if (pages.length === 0) {
+    throw new Error("visionReadPages requires at least one page");
+  }
+  return runVision(
+    [
+      { type: "text", text: instruction },
+      ...pages.flatMap((entry) => [
+        { type: "text" as const, text: `Slide ${entry.page}:` },
+        { type: "image" as const, image: entry.bytes, mediaType: entry.mime },
+      ]),
+    ],
+    options.signal,
+  );
 }
 
 function stripJsonFences(raw: string): string {
