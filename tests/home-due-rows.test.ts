@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { countDueTodayCards } from "@/lib/queries";
+import { pacedDueCounts } from "@/lib/queries";
+import { selectTodayCards } from "@/lib/pacing";
 
 const root = path.resolve(__dirname, "..");
 const EM_DASH = "\u2014";
@@ -14,36 +15,42 @@ function read(rel: string) {
   return readFileSync(path.join(root, rel), "utf8");
 }
 
-describe("due-today pack counts", () => {
+describe("paced due-today pack counts", () => {
   const now = new Date("2026-09-19T12:00:00.000Z");
+  const at = (days: number) => new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 
-  it("counts durable cards due at or before now", () => {
+  it("counts every due review card and all due new cards without an exam", () => {
     expect(
-      countDueTodayCards(
-        [
-          { dueAt: new Date("2026-09-19T12:00:00.000Z"), archivedAt: null },
-          { dueAt: new Date("2026-09-18T23:59:59.000Z"), archivedAt: null },
-          { dueAt: new Date("2026-09-19T12:00:01.000Z"), archivedAt: null },
-        ],
-        { now, reviewerDeletingAt: null },
+      pacedDueCounts(
+        { reviewDue: 3, newDue: 40, newRemaining: 50, introducedLast24h: 5 },
+        { examDate: null, deletingAt: null, now },
       ),
-    ).toBe(2);
+    ).toEqual({ dueToday: 43, newRemaining: 50, introducedLast24h: 5 });
   });
 
-  it("skips archived cards and cards on a deleting reviewer", () => {
+  it("matches selectTodayCards on the same cards with an exam", () => {
     const cards = [
-      { dueAt: new Date("2026-09-01T00:00:00.000Z"), archivedAt: null },
-      {
-        dueAt: new Date("2026-09-01T00:00:00.000Z"),
-        archivedAt: new Date("2026-09-18T00:00:00.000Z"),
-      },
+      ...Array.from({ length: 4 }, (_, i) => ({ id: `r${i}`, dueAt: at(-1), createdAt: at(-20), isNew: false })),
+      { id: "r-later", dueAt: at(2), createdAt: at(-20), isNew: false },
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `n${i}`, dueAt: at(-1), createdAt: at(-10 + i / 10), isNew: true })),
     ];
-    expect(countDueTodayCards(cards, { now, reviewerDeletingAt: null })).toBe(1);
+    const examDate = "2026-09-29";
+    for (const introducedLast24h of [0, 2, 10]) {
+      const expected = selectTodayCards(cards, { examDate, introducedLast24h, now }).length;
+      const counted = pacedDueCounts(
+        { reviewDue: 4, newDue: 30, newRemaining: 30, introducedLast24h },
+        { examDate, deletingAt: null, now },
+      ).dueToday;
+      expect(counted).toBe(expected);
+    }
+  });
+
+  it("counts 0 on a deleting reviewer", () => {
     expect(
-      countDueTodayCards(cards, {
-        now,
-        reviewerDeletingAt: new Date("2026-09-19T00:00:00.000Z"),
-      }),
+      pacedDueCounts(
+        { reviewDue: 3, newDue: 4, newRemaining: 4, introducedLast24h: 0 },
+        { examDate: null, deletingAt: at(-1), now },
+      ).dueToday,
     ).toBe(0);
   });
 });
@@ -57,9 +64,11 @@ describe("home pack row contract", () => {
     expect(queries).toContain("export async function listReviewersByTopic");
     expect(queries).toContain("dueTodayCount");
     expect(queries).toContain("eq(topics.userId, userId)");
-    expect(queries).toContain("cards.due_at <= now()");
-    expect(queries).toContain("cards.archived_at is null");
-    expect(queries).toContain("when ${reviewers.deletingAt} is not null then 0");
+    expect(queries).toContain("...pacedCountFields(reviewers.id, now)");
+    expect(queries).toContain("c.archived_at is null");
+    // NOT of the "new" predicate must never be NULL for a null-state card.
+    expect(queries).toContain("(c.fsrs_state IS NOT NULL AND c.fsrs_state = 0)");
+    expect(queries).toContain("if (args.deletingAt != null)");
   });
 
   it("passes examDate and dueTodayCount into pack rows", () => {

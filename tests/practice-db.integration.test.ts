@@ -20,6 +20,7 @@ import {
   retryMissedUntimedPracticeSession,
   reviewCard,
 } from "@/lib/queries";
+import { fsrsNext } from "@/lib/fsrs";
 import { cardReviews, cards, reviewers, testAttempts, testSessions, topics, users, views } from "@/lib/schema";
 
 const runIntegration = process.env.RUN_DB_INTEGRATION === "1";
@@ -399,7 +400,18 @@ describeDb("practice session SQL integration", () => {
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ clientRequestId: requestId, rating: "good" });
     const [scheduled] = await db.select().from(cards).where(eq(cards.id, cardId));
-    expect(scheduled).toMatchObject({ revision: 2, repetitions: 1, intervalDays: 1, easeFactor: 25 });
+    const firstGood = fsrsNext(null, "good", new Date());
+    expect(scheduled).toMatchObject({
+      revision: 2,
+      repetitions: 1,
+      intervalDays: firstGood.scheduledDays,
+      scheduledDays: firstGood.scheduledDays,
+      fsrsState: firstGood.state,
+      lapses: 0,
+      easeFactor: 25,
+    });
+    expect(scheduled?.stability).toBeCloseTo(firstGood.stability, 4);
+    expect(history[0]).toMatchObject({ fsrsState: firstGood.state, intervalDays: firstGood.scheduledDays, repetitions: 1 });
 
     const sameRequestDifferentRating = await reviewPost(
       new Request("https://omni-reviewer.example/api/review", {
@@ -415,7 +427,9 @@ describeDb("practice session SQL integration", () => {
       revision: scheduled?.revision,
       dueAt: scheduled?.dueAt,
       repetitions: 1,
-      intervalDays: 1,
+      intervalDays: scheduled?.intervalDays,
+      fsrsState: scheduled?.fsrsState,
+      stability: scheduled?.stability,
       easeFactor: 25,
     });
     expect(await db.select().from(cardReviews).where(eq(cardReviews.cardId, cardId))).toHaveLength(1);
@@ -445,10 +459,12 @@ describeDb("practice session SQL integration", () => {
     const afterRace = await db.select().from(cardReviews).where(eq(cardReviews.cardId, cardId));
     expect(afterRace).toHaveLength(2);
     const [once] = await db.select().from(cards).where(eq(cards.id, cardId));
-    const singleStep = once?.easeFactor === 23
-      ? { repetitions: 0, intervalDays: 1, easeFactor: 23 }
-      : { repetitions: 2, intervalDays: 6, easeFactor: 25 };
-    expect(once).toMatchObject({ revision: 3, ...singleStep });
+    const winner = afterRace.find((row) => row.clientRequestId !== requestId);
+    const singleStep = winner?.rating === "again"
+      ? { repetitions: 2, intervalDays: 1, lapses: 1 }
+      : { repetitions: 2, lapses: 0 };
+    expect(once).toMatchObject({ revision: 3, easeFactor: 25, fsrsState: 2, ...singleStep });
+    expect(winner).toMatchObject({ fsrsState: 2, repetitions: 2, intervalDays: once?.intervalDays });
   }, 30_000);
 
   it("isolates sittings and reviews from another owner without disturbing them", async () => {

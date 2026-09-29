@@ -18,13 +18,13 @@ import { firstPageCitation } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
 import { stripCitations } from "@/lib/citations";
 import { parseCardedItems } from "@/lib/learning";
-import { scheduleCardReview } from "@/lib/sm2";
 import { isClozeCardFront, renderClozeText } from "@/lib/learning";
 import {
   captureDueQueue,
   type CapturedCard,
   reconcileDueSession,
 } from "@/lib/practice-session";
+import { selectTodayCards } from "@/lib/pacing";
 import type { CardedItem } from "@/lib/types";
 import { cn, readApiError } from "@/lib/utils";
 
@@ -38,6 +38,10 @@ type DurableCardView = CardedItem & {
   repetitions: number;
   easeFactor: number;
   lastReviewedAt: string | null;
+  createdAt: string;
+  firstReviewedAt: string | null;
+  isNew: boolean;
+  nextIntervals: { again: { days: number }; good: { days: number } };
 };
 
 type CardedViewProps = {
@@ -66,28 +70,34 @@ function isInteractiveInsideFace(target: EventTarget | null): boolean {
     && Boolean(target.closest("button, a, [data-cite-source]"));
 }
 
-function isDueNow(dueAt: string, now: number) {
-  const due = new Date(dueAt).getTime();
-  return Number.isFinite(due) && due <= now;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Today's paced queue: the same `selectTodayCards` the pack row counts with. */
+function todayCards(cards: DurableCardView[], examDate: string | null, nowMs: number) {
+  const now = new Date(nowMs);
+  const introducedLast24h = cards.filter((card) => {
+    const first = card.firstReviewedAt ? new Date(card.firstReviewedAt).getTime() : NaN;
+    return Number.isFinite(first) && first > nowMs - DAY_MS;
+  }).length;
+  return selectTodayCards(
+    cards.map((card) => ({
+      id: card.id,
+      dueAt: new Date(card.dueAt),
+      createdAt: new Date(card.createdAt),
+      isNew: card.isNew,
+      card,
+    })),
+    { examDate, introducedLast24h, now },
+  ).map((entry) => entry.card);
 }
 
-function gradePreview(
-  card: DurableCardView,
-  rating: "again" | "good",
-  examDate: string | null,
-): string {
-  const next = scheduleCardReview({
-    dueAt: new Date(card.dueAt),
-    intervalDays: card.intervalDays,
-    repetitions: card.repetitions,
-    easeFactor: card.easeFactor,
-  }, rating, new Date(), examDate);
-  return nextIntervalCopy(rating, next.intervalDays);
+function gradePreview(card: DurableCardView, rating: "again" | "good"): string {
+  return intervalCopy(card.nextIntervals[rating].days);
 }
 
-function nextIntervalCopy(rating: "again" | "good", intervalDays: number) {
-  if (rating === "again") return "show tonight";
-  return intervalDays === 1 ? "next in 1 day" : `next in ${intervalDays} days`;
+function intervalCopy(days: number) {
+  if (days <= 0) return "today";
+  return days === 1 ? "tomorrow" : `in ${days} days`;
 }
 
 export function CardedView({
@@ -103,15 +113,18 @@ export function CardedView({
     [contentJson, content],
   );
   const cards = durableCards.length > 0 ? durableCards : generatedCards;
-  // Remaining due is dueAt <= now, so the cutoff has to be wall clock.
+  // Remaining due is the paced selection at dueAt <= now, so the cutoff has to be wall clock.
   /* eslint-disable react-hooks/purity -- dueAt <= now needs Date.now */
-  const remainingDue = useMemo(() => {
-    const now = Date.now();
-    return durableCards.filter((item) => isDueNow(item.dueAt, now)).length;
-  }, [durableCards]);
+  const remainingDue = useMemo(
+    () => todayCards(durableCards, examDate, Date.now()).length,
+    [durableCards, examDate],
+  );
   /* eslint-enable react-hooks/purity */
   const [mode, setMode] = useState<"due" | "browse">("due");
-  const [queue, setQueue] = useState<CapturedCard[]>(() => captureDueQueue(durableCards, Date.now()));
+  const [queue, setQueue] = useState<CapturedCard[]>(() => {
+    const now = Date.now();
+    return captureDueQueue(todayCards(durableCards, examDate, now), now);
+  });
   const [ratedIds, setRatedIds] = useState<string[]>([]);
   const [browseIndex, setBrowseIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
@@ -136,7 +149,8 @@ export function CardedView({
   }, []);
 
   function captureQueue() {
-    setQueue(captureDueQueue(durableCards, Date.now()));
+    const now = Date.now();
+    setQueue(captureDueQueue(todayCards(durableCards, examDate, now), now));
     setRatedIds([]);
     setFlipped(false);
     setClozeRevealed(false);
@@ -229,7 +243,7 @@ export function CardedView({
       onCardsChange(durableCards.map((item) => item.id === data.card.id ? data.card : item));
       setRatedIds((current) => current.includes(card.id) ? current : [...current, card.id]);
       requestIds.current.delete(card.id);
-      setScheduleHint(nextIntervalCopy(rating, data.card.intervalDays));
+      setScheduleHint(`Next review ${intervalCopy(data.card.intervalDays)}`);
       if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
       advanceTimer.current = window.setTimeout(() => {
         if (epoch !== reviewEpoch.current) return;
@@ -504,10 +518,10 @@ export function CardedView({
           ) : (
             <>
               <Button type="button" variant="outline" onClick={() => void review("again")} disabled={busy}>
-                Again, {gradePreview(card, "again", examDate)}
+                Again, {gradePreview(card, "again")}
               </Button>
               <Button type="button" variant="secondary" onClick={() => void review("good")} disabled={busy}>
-                Good, {gradePreview(card, "good", examDate)}
+                Good, {gradePreview(card, "good")}
               </Button>
             </>
           )}

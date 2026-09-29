@@ -73,6 +73,10 @@ export type SerializedCard = {
   repetitions: number;
   easeFactor: number;
   lastReviewedAt: string | null;
+  createdAt: string;
+  firstReviewedAt: string | null;
+  isNew: boolean;
+  nextIntervals: { again: { days: number }; good: { days: number } };
 };
 
 export type SerializedAttemptStats = {

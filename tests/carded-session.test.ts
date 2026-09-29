@@ -11,7 +11,7 @@ describe("Carded finite session UI", () => {
   const queries = readFileSync(path.join(root, "lib/queries.ts"), "utf8");
 
   it("captures a due queue and shows completed/total with Browse all", () => {
-    expect(src).toContain("useState<CapturedCard[]>(() => captureDueQueue(durableCards, Date.now()))");
+    expect(src).toContain("return captureDueQueue(todayCards(durableCards, examDate, now), now);");
     expect(src).toContain("captureDueQueue");
     expect(src).toContain("reconcileDueSession");
     expect(src).toContain("Browse all");

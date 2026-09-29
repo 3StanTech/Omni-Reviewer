@@ -4,16 +4,19 @@ import { auth } from "@/auth";
 import { AppShell } from "@/components/app-shell";
 import type { ViewsPayload } from "@/lib/serialize-view";
 import { ReviewerWorkspace } from "@/components/reviewer-workspace";
+import { SectionMasteryProvider } from "@/components/study-side-panel";
 import type { SourceListItem } from "@/components/source-panel";
 import {
   getReviewer,
   getCardsForReviewer,
+  getMasteryForReviewer,
   getTopic,
   listReviewersByTopic,
   listTestAttemptStats,
   listSourcesForUi,
   listTopics,
   listViewMetaByReviewer,
+  serializeCard,
 } from "@/lib/queries";
 import type { IngestStatus, SourceKind } from "@/lib/types";
 
@@ -43,7 +46,7 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer || reviewer.topicId !== topicId) notFound();
 
-  const [sourceRows, viewMeta, cards, testAttemptStats, topics, topicPacks] =
+  const [sourceRows, viewMeta, cards, testAttemptStats, topics, topicPacks, mastery] =
     await Promise.all([
       listSourcesForUi(reviewerId, userId),
       listViewMetaByReviewer(reviewerId, userId),
@@ -51,6 +54,7 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
       listTestAttemptStats(reviewerId, userId),
       listTopics(userId),
       listReviewersByTopic(topicId, userId),
+      getMasteryForReviewer(reviewerId, userId),
     ]);
   const dueTodayCount = topicPacks.reduce(
     (sum, pack) => sum + pack.dueTodayCount,
@@ -112,7 +116,8 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
       selectedTopicId={topic.id}
       dueTodayCount={dueTodayCount}
     >
-      <ReviewerWorkspace
+      <SectionMasteryProvider sections={mastery?.sections ?? null}>
+        <ReviewerWorkspace
         userId={userId}
         topicId={topic.id}
         topicName={topic.name}
@@ -127,16 +132,13 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
         }
         examDate={reviewer.examDate}
       initialMode={initialMode}
-        initialCards={cards.map((card) => ({
-          ...card,
-          dueAt: card.dueAt.toISOString(),
-          lastReviewedAt: card.lastReviewedAt?.toISOString() ?? null,
-        }))}
+        initialCards={cards.map(serializeCard)}
         initialTestAttemptStats={testAttemptStats.map((stats) => ({
           ...stats,
           lastAttemptedAt: stats.lastAttemptedAt?.toISOString() ?? null,
         }))}
       />
+      </SectionMasteryProvider>
     </AppShell>
   );
 }

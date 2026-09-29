@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 
 vi.mock("server-only", () => ({}));
 const authMock = vi.hoisted(() => vi.fn());
@@ -24,10 +24,19 @@ import {
   recordTestAttempts,
   recordTimedTestAttempt,
   reserveBlobForRegistration,
+  backfillFsrs,
+  getCardsForReviewer,
+  getMasteryForReviewer,
+  getMasteryForUser,
+  getTodayPlan,
+  listPacedDueCounts,
+  listReviewersByTopic,
   reviewCard,
   serializeCard,
   updateStudyView,
 } from "@/lib/queries";
+import { fsrsNext, fsrsStateFromHistory } from "@/lib/fsrs";
+import { selectTodayCards } from "@/lib/pacing";
 import {
   blobReservations,
   cardReviews,
@@ -385,6 +394,25 @@ describeDb("Neon learning integration", () => {
     const rows = await db.select().from(cardReviews).where(eq(cardReviews.cardId, cardId));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.rating).toBe("good");
+    const expected = fsrsNext(null, "good", new Date());
+    const [stored] = await db.select().from(cards).where(eq(cards.id, cardId));
+    expect(stored).toMatchObject({
+      fsrsState: expected.state,
+      scheduledDays: expected.scheduledDays,
+      intervalDays: expected.scheduledDays,
+      repetitions: 1,
+      lapses: 0,
+      easeFactor: 25,
+    });
+    expect(stored?.stability).toBeCloseTo(expected.stability, 4);
+    expect(stored?.difficulty).toBeCloseTo(expected.difficulty, 4);
+    expect(rows[0]).toMatchObject({ fsrsState: expected.state, intervalDays: expected.scheduledDays, repetitions: 1 });
+    expect(rows[0]?.stability).toBeCloseTo(expected.stability, 4);
+    expect(result).toMatchObject({ isNew: false, nextIntervals: { again: { days: 1 } } });
+    expect(serializeCard(result)).toMatchObject({
+      createdAt: expect.stringContaining("T"),
+      firstReviewedAt: expect.stringContaining("T"),
+    });
 
     const routeResponse = await reviewPost(
       new Request("https://omni-reviewer.example", {
@@ -624,4 +652,278 @@ describeDb("Neon learning integration", () => {
     expect(current).toEqual([{ attemptToken: replacementToken, state: "reserved" }]);
     await releaseBlobReservation(userId, reviewer4, pathname, replacementToken);
   }, 30_000);
+});
+
+describeDb("Neon FSRS integration", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const userId = randomUUID();
+  const topicId = randomUUID();
+
+  function isoDate(date: Date) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  async function seedReviewer(examDate: string | null) {
+    const reviewerId = randomUUID();
+    await db.insert(reviewers).values({ id: reviewerId, topicId, name: `FSRS ${reviewerId}`, examDate });
+    return reviewerId;
+  }
+
+  async function seedCard(
+    reviewerId: string,
+    values: Partial<typeof cards.$inferInsert> = {},
+    reviews: { rating: "again" | "good"; reviewedAt: Date }[] = [],
+  ) {
+    const id = randomUUID();
+    await db.insert(cards).values({ id, reviewerId, sourceKey: id, front: "Front", back: "Back", ...values });
+    for (const review of reviews) {
+      await db.insert(cardReviews).values({
+        userId,
+        reviewerId,
+        cardId: id,
+        rating: review.rating,
+        dueAt: review.reviewedAt,
+        intervalDays: 1,
+        repetitions: 1,
+        easeFactor: 25,
+        reviewedAt: review.reviewedAt,
+      });
+    }
+    return id;
+  }
+
+  beforeAll(async () => {
+    authMock.mockResolvedValue({ user: { id: userId } });
+    await db.insert(users).values({
+      id: userId,
+      email: `fsrs-integration-${userId}@example.invalid`,
+      passwordHash: "integration-only",
+    });
+    await db.insert(topics).values({ id: topicId, userId, name: "FSRS integration" });
+  }, 60_000);
+
+  afterAll(async () => {
+    await db.delete(users).where(eq(users.id, userId));
+  }, 60_000);
+
+  it("replays a null-state card's history on its first FSRS review", async () => {
+    const reviewerId = await seedReviewer(null);
+    const now = Date.now();
+    const createdAt = new Date(now - 12 * DAY_MS);
+    const reviews = [
+      { rating: "good" as const, reviewedAt: new Date(now - 10 * DAY_MS) },
+      { rating: "good" as const, reviewedAt: new Date(now - 4 * DAY_MS) },
+    ];
+    const cardId = await seedCard(reviewerId, {
+      createdAt,
+      dueAt: new Date(now - DAY_MS),
+      repetitions: 2,
+      intervalDays: 6,
+      lastReviewedAt: reviews[1]!.reviewedAt,
+    }, reviews);
+
+    const result = await reviewCard({ reviewerId, userId, cardId, expectedRevision: 1, rating: "good" });
+    if (!result || "stale" in result) throw new Error("replayed review did not update");
+    const expected = fsrsNext(fsrsStateFromHistory(reviews, createdAt), "good", new Date());
+    const [stored] = await db.select().from(cards).where(eq(cards.id, cardId));
+    expect(stored).toMatchObject({
+      fsrsState: expected.state,
+      repetitions: 3,
+      lapses: 0,
+      scheduledDays: expected.scheduledDays,
+    });
+    expect(stored?.stability).toBeCloseTo(expected.stability, 3);
+    const history = await db.select().from(cardReviews).where(eq(cardReviews.cardId, cardId));
+    expect(history).toHaveLength(3);
+    expect(history.filter((row) => row.fsrsState != null)).toHaveLength(1);
+  }, 30_000);
+
+  it("keeps a replayed client_request_id to one FSRS step", async () => {
+    const reviewerId = await seedReviewer(null);
+    const cardId = await seedCard(reviewerId, { fsrsState: 0 });
+    const requestId = randomUUID();
+    const results = await Promise.all(Array.from({ length: 4 }, () =>
+      reviewCard({ reviewerId, userId, cardId, expectedRevision: 1, rating: "again", clientRequestId: requestId }),
+    ));
+    expect(results.every((row) => row && !("stale" in row))).toBe(true);
+    const history = await db.select().from(cardReviews).where(eq(cardReviews.cardId, cardId));
+    expect(history).toHaveLength(1);
+    const [stored] = await db.select().from(cards).where(eq(cards.id, cardId));
+    expect(stored).toMatchObject({ revision: 2, repetitions: 1, intervalDays: 1 });
+  }, 30_000);
+
+  it("counts paced due cards exactly like selectTodayCards on an exam pack", async () => {
+    const now = Date.now();
+    const examDate = isoDate(new Date(now + 10 * DAY_MS));
+    const reviewerId = await seedReviewer(examDate);
+    const past = new Date(now - DAY_MS);
+    const future = new Date(now + 3 * DAY_MS);
+    for (let i = 0; i < 3; i += 1) {
+      await seedCard(reviewerId, { fsrsState: 2, stability: 3, difficulty: 5, dueAt: past }, [
+        { rating: "good", reviewedAt: new Date(now - 5 * DAY_MS) },
+      ]);
+    }
+    await seedCard(reviewerId, { fsrsState: 2, stability: 3, difficulty: 5, dueAt: future }, [
+      { rating: "good", reviewedAt: new Date(now - 5 * DAY_MS) },
+    ]);
+    for (let i = 0; i < 12; i += 1) {
+      await seedCard(reviewerId, { fsrsState: 0, dueAt: past, createdAt: new Date(now - (30 - i) * 60_000) });
+    }
+    await seedCard(reviewerId, { dueAt: past });
+    await seedCard(reviewerId, { dueAt: past });
+    await seedCard(reviewerId, { dueAt: past, lastReviewedAt: new Date(now - 3 * DAY_MS) }, [
+      { rating: "good", reviewedAt: new Date(now - 3 * DAY_MS) },
+    ]);
+    await seedCard(reviewerId, { fsrsState: 2, stability: 2, difficulty: 5, dueAt: future }, [
+      { rating: "good", reviewedAt: new Date(now - 60 * 60_000) },
+    ]);
+    await seedCard(reviewerId, { fsrsState: 0, dueAt: past, archivedAt: new Date(now - DAY_MS) });
+
+    const [row] = (await listReviewersByTopic(topicId, userId)).filter((pack) => pack.id === reviewerId);
+    const paced = (await listPacedDueCounts(userId)).get(reviewerId);
+    const learning = await getCardsForReviewer(reviewerId, userId);
+    const at = new Date();
+    const introducedLast24h = learning.filter(
+      (card) => card.firstReviewedAt && card.firstReviewedAt.getTime() > at.getTime() - DAY_MS,
+    ).length;
+    const selected = selectTodayCards(learning, { examDate, introducedLast24h, now: at });
+
+    expect(introducedLast24h).toBe(1);
+    expect(paced).toEqual({ dueToday: selected.length, newRemaining: 14, introducedLast24h: 1 });
+    expect(row?.dueTodayCount).toBe(selected.length);
+    // 4 due reviews (one replayed from history) plus ceil(14 / 7) - 1 new card.
+    expect(selected.length).toBe(5);
+  }, 60_000);
+
+  it("backfills replayed state capped at the exam, and a rerun changes nothing", async () => {
+    const now = Date.now();
+    const examDate = isoDate(new Date(now + 2 * DAY_MS));
+    const reviewerId = await seedReviewer(examDate);
+    const keptDue = new Date(now - 7 * DAY_MS);
+    const newId = await seedCard(reviewerId, { dueAt: keptDue });
+    const reviews = [
+      { rating: "good" as const, reviewedAt: new Date(now - 30 * DAY_MS) },
+      { rating: "good" as const, reviewedAt: new Date(now - 20 * DAY_MS) },
+      { rating: "good" as const, reviewedAt: new Date(now - DAY_MS) },
+    ];
+    const replayedId = await seedCard(reviewerId, {
+      createdAt: new Date(now - 31 * DAY_MS),
+      lastReviewedAt: reviews[2]!.reviewedAt,
+    }, reviews);
+
+    await backfillFsrs();
+    const snapshot = async () =>
+      db.select().from(cards).where(eq(cards.reviewerId, reviewerId)).orderBy(cards.id);
+    const first = await snapshot();
+    const fresh = first.find((card) => card.id === newId);
+    const replayed = first.find((card) => card.id === replayedId);
+    expect(fresh).toMatchObject({ fsrsState: 0, dueAt: keptDue });
+    const state = fsrsStateFromHistory(reviews, new Date(now - 31 * DAY_MS))!;
+    expect(replayed).toMatchObject({ fsrsState: state.state, repetitions: 3, lapses: 0 });
+    expect(replayed!.dueAt.getTime()).toBeLessThanOrEqual(new Date(`${examDate}T00:00:00.000Z`).getTime());
+
+    await backfillFsrs();
+    expect(await snapshot()).toEqual(first);
+  }, 60_000);
+});
+
+describeDb("Neon mastery and Today owner scoping", () => {
+  const ownerId = randomUUID();
+  const otherId = randomUUID();
+  const ownerTopicId = randomUUID();
+  const otherTopicId = randomUUID();
+  const ownerPackId = randomUUID();
+  const otherPackId = randomUUID();
+  const lockedIn = [
+    "## Alpha",
+    "Alpha fact. [S1 p.1]",
+    "",
+    "## Beta",
+    "Beta fact. [S1 p.2]",
+  ].join("\n");
+  const testMe = JSON.stringify(
+    ["a1", "a2", "a3"].map((id) => ({
+      id,
+      question: `Question ${id}?`,
+      choices: ["Right", "Wrong"],
+      answer: "Right",
+      explanation: "Because. [S1 p.1]",
+    })),
+  );
+
+  async function seedPack(userId: string, topicId: string, reviewerId: string, correct: boolean) {
+    await db.insert(users).values({
+      id: userId,
+      email: `mastery-integration-${userId}@example.invalid`,
+      passwordHash: "integration-only",
+    });
+    await db.insert(topics).values({ id: topicId, userId, name: `Mastery ${userId}` });
+    await db.insert(reviewers).values({ id: reviewerId, topicId, name: `Pack ${reviewerId}` });
+    await db.insert(views).values([
+      { reviewerId, kind: "locked_in", content: lockedIn },
+      { reviewerId, kind: "test_me", content: testMe },
+    ]);
+    const attemptedAt = new Date();
+    await db.insert(testAttempts).values(
+      ["a1", "a2", "a3"].map((itemId) => ({
+        userId,
+        reviewerId,
+        viewRevision: 1,
+        itemId,
+        selectedAnswer: correct ? "Right" : "Wrong",
+        correct,
+        attemptedAt,
+      })),
+    );
+    const cardId = randomUUID();
+    await db.insert(cards).values({ id: cardId, reviewerId, sourceKey: cardId, front: "Front", back: "Back [S1 p.2]" });
+    await db.insert(cardReviews).values({
+      userId,
+      reviewerId,
+      cardId,
+      rating: correct ? "good" : "again",
+      dueAt: attemptedAt,
+      intervalDays: 1,
+      repetitions: 1,
+      easeFactor: 25,
+      reviewedAt: attemptedAt,
+    });
+  }
+
+  beforeAll(async () => {
+    // The owner missed everything; the other user answered everything right.
+    await seedPack(ownerId, ownerTopicId, ownerPackId, false);
+    await seedPack(otherId, otherTopicId, otherPackId, true);
+  }, 60_000);
+
+  afterAll(async () => {
+    await db.delete(users).where(inArray(users.id, [ownerId, otherId]));
+  }, 60_000);
+
+  it("computes the owner's mastery and returns nothing for another user's pack", async () => {
+    const own = await getMasteryForReviewer(ownerPackId, ownerId);
+    expect(own?.pack).toEqual({ score: 0, items: 4 });
+    const alpha = own?.sections.find((section) => section.title === "Alpha");
+    expect(alpha).toMatchObject({ score: 0, items: 3, weak: true });
+    expect(own?.weakest?.title).toBe("Alpha");
+
+    expect(await getMasteryForReviewer(otherPackId, ownerId)).toBeNull();
+
+    const all = await getMasteryForUser(ownerId);
+    expect([...all.keys()]).toEqual([ownerPackId]);
+    expect(all.get(ownerPackId)).toEqual(own);
+  }, 60_000);
+
+  it("builds the Today plan from the owner's packs only", async () => {
+    const today = await getTodayPlan(ownerId);
+    expect(today).not.toBeNull();
+    expect(Object.keys(today!.packTopicIds)).toEqual([ownerPackId]);
+    expect(today!.packTopicIds[ownerPackId]).toBe(ownerTopicId);
+    expect([...today!.mastery.keys()]).toEqual([ownerPackId]);
+    const retest = today!.plan.doFirst.find((item) => item.kind === "retest");
+    expect(retest).toMatchObject({ packId: ownerPackId, title: "Alpha", missed: 3 });
+    for (const item of today!.plan.doFirst) expect(item.packId).toBe(ownerPackId);
+
+    expect(await getTodayPlan(randomUUID())).toBeNull();
+  }, 60_000);
 });

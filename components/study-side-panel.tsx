@@ -1,9 +1,36 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
+import { MasteryBar } from "@/components/mastery-bar";
 import type { AnnotationRecord } from "@/lib/annotations";
-import { outlineHeadingHref, studyOutline } from "@/lib/study-outline";
+import type { SectionMastery } from "@/lib/mastery";
+import { outlineHeadingHref, studyOutline, type StudyHeading } from "@/lib/study-outline";
+
+const SectionMasteryContext = createContext<SectionMastery[] | null>(null);
+
+/** Supplies the pack's section mastery (loaded on the server) to Contents. */
+export function SectionMasteryProvider({ sections, children }: { sections: SectionMastery[] | null; children: ReactNode }) {
+  return <SectionMasteryContext.Provider value={sections}>{children}</SectionMasteryContext.Provider>;
+}
+
+/** The Contents list: a mastery bar beside each section heading, or a muted note when it has no score yet. */
+export function ContentsList({ headings, sections, onNavigate }: { headings: StudyHeading[]; sections: SectionMastery[] | null; onNavigate?: () => void }) {
+  const byId = new Map((sections ?? []).map((section) => [section.id, section]));
+  return (
+    <ol className="space-y-1">
+      {headings.length ? headings.map((heading) => {
+        const section = byId.get(heading.id);
+        return (
+          <li key={heading.id} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5" style={{ paddingLeft: `${Math.max(0, heading.level - 1) * 0.75}rem` }}>
+            <a className="min-w-0 break-words text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" href={outlineHeadingHref(heading.id)} onClick={onNavigate}>{heading.text}</a>
+            {section ? (section.score === null ? <span className="text-xs text-muted-foreground">Not enough answers yet</span> : <MasteryBar score={section.score} label />) : null}
+          </li>
+        );
+      }) : <li className="text-muted-foreground">No headings yet.</li>}
+    </ol>
+  );
+}
 
 type StudySidePanelProps = {
   markdown: string;
@@ -18,6 +45,7 @@ type PanelKind = "contents" | "notes" | "earlier";
 export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBusy = false, onLoadEarlier }: StudySidePanelProps) {
   const [open, setOpen] = useState<PanelKind | null>(null);
   const headings = useMemo(() => studyOutline(markdown), [markdown]);
+  const sectionMastery = useContext(SectionMasteryContext);
   const active = annotations.filter((annotation) => !annotation.archivedAt);
   const earlier = annotations.filter((annotation) => annotation.archivedAt);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -118,7 +146,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
             <h3 id={panelHeadingId} className="font-semibold">{open === "contents" ? "Contents" : open === "notes" ? "Notes" : "Earlier version"}</h3>
             <button type="button" className="min-h-11 min-w-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" onClick={() => setOpen(null)}>Close</button>
           </div>
-          {open === "contents" ? <nav className="mt-3" aria-label="Document contents"><ol className="space-y-1">{headings.length ? headings.map((heading) => <li key={heading.id} style={{ paddingLeft: `${Math.max(0, heading.level - 1) * 0.75}rem` }}><a className="text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" href={outlineHeadingHref(heading.id)} onClick={() => setOpen(null)}>{heading.text}</a></li>) : <li className="text-muted-foreground">No headings yet.</li>}</ol></nav> : null}
+          {open === "contents" ? <nav className="mt-3" aria-label="Document contents"><ContentsList headings={headings} sections={sectionMastery} onNavigate={() => setOpen(null)} /></nav> : null}
           {open === "notes" ? <ul className="mt-3 space-y-2">{active.length ? active.map((annotation) => <li key={annotation.id}><span className={`user-annotation-${annotation.color} rounded px-1`}>{annotation.quote}</span>{annotation.note ? <span className="text-muted-foreground"> · {annotation.note}</span> : null}</li>) : <li className="text-muted-foreground">No highlights or notes yet.</li>}</ul> : null}
           {open === "earlier" ? (
             <div className="mt-3 space-y-3">

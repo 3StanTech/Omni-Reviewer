@@ -81,7 +81,22 @@ import {
   MAX_TEST_ATTEMPT_SELECTED_ANSWER_CHARS,
 } from "@/lib/learning-limits";
 import { publicSourceErrorMessage, PublicError } from "@/lib/public-errors";
-import { scheduleCardReview } from "@/lib/sm2";
+import {
+  examCap,
+  fsrsNext,
+  fsrsPreview,
+  fsrsStateFromHistory,
+  type FsrsCardState,
+} from "@/lib/fsrs";
+import { newCardAllowance } from "@/lib/pacing";
+import {
+  computeMastery,
+  MASTERY_WEAK_THRESHOLD,
+  sectionsFromLockedIn,
+  type MasteryInput,
+  type MasteryResult,
+} from "@/lib/mastery";
+import { buildTodayPlan, type TodayPack, type TodayPlan } from "@/lib/today-plan";
 import {
   missedItemIds,
   resolveUntimedAttemptReread,
@@ -176,30 +191,97 @@ export async function beginTopicDeletion(
 
 export type ReviewerByTopic = Reviewer & { dueTodayCount: number };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Per-pack inputs and result of the paced due selection (`selectTodayCards`). */
+export type PacedDueCounts = {
+  dueToday: number;
+  newRemaining: number;
+  introducedLast24h: number;
+};
+
+type PacedCountRow = {
+  reviewDue: number;
+  newDue: number;
+  newRemaining: number;
+  introducedLast24h: number;
+};
+
 /**
- * Due-today math for home pack rows. A durable card counts when it is not
- * archived and `dueAt` is at or before `now`. Deleting reviewers contribute 0.
+ * A card is new when `fsrs_state = 0`, or when it has no FSRS state and no
+ * reviews yet. `c` is the aliased `cards` row. Every branch is null-safe so
+ * `NOT` of this is never NULL: a bare `c.fsrs_state = 0` is NULL for a
+ * null-state card, which would drop replayed cards from the review count.
  */
-export function countDueTodayCards(
-  cardRows: ReadonlyArray<{ dueAt: Date; archivedAt: Date | null }>,
-  args: { now: Date; reviewerDeletingAt: Date | null },
-): number {
-  if (args.reviewerDeletingAt != null) return 0;
-  const nowMs = args.now.getTime();
-  let n = 0;
-  for (const card of cardRows) {
-    if (card.archivedAt != null) continue;
-    if (card.dueAt.getTime() > nowMs) continue;
-    n += 1;
+const cardIsNewSql = sql.raw(`(
+  (c.fsrs_state IS NOT NULL AND c.fsrs_state = 0)
+  OR (c.fsrs_state IS NULL AND NOT EXISTS (SELECT 1 FROM card_reviews cr WHERE cr.card_id = c.id))
+)`);
+
+/**
+ * Correlated counts that feed `newCardAllowance`, all in the caller's single
+ * query. Live cards only. Introduced = the card's first review is under 24h old.
+ */
+function pacedCountFields(reviewerId: typeof reviewers.id, now: Date) {
+  const since = new Date(now.getTime() - DAY_MS);
+  return {
+    reviewDue: sql<number>`(
+      select count(*)::int from cards c
+      where c.reviewer_id = ${reviewerId} and c.archived_at is null
+        and c.due_at <= ${now} and not ${cardIsNewSql}
+    )`.mapWith(Number),
+    newDue: sql<number>`(
+      select count(*)::int from cards c
+      where c.reviewer_id = ${reviewerId} and c.archived_at is null
+        and c.due_at <= ${now} and ${cardIsNewSql}
+    )`.mapWith(Number),
+    newRemaining: sql<number>`(
+      select count(*)::int from cards c
+      where c.reviewer_id = ${reviewerId} and c.archived_at is null and ${cardIsNewSql}
+    )`.mapWith(Number),
+    introducedLast24h: sql<number>`(
+      select count(*)::int from (
+        select cr.card_id
+        from card_reviews cr
+        inner join cards c on c.id = cr.card_id and c.archived_at is null
+        where cr.reviewer_id = ${reviewerId}
+        group by cr.card_id
+        having min(cr.reviewed_at) > ${since}
+      ) introduced
+    )`.mapWith(Number),
+  };
+}
+
+/**
+ * The SQL twin of `selectTodayCards(...).length`: every due review card plus
+ * due new cards up to the pack's new-card allowance. Deleting packs count 0.
+ */
+export function pacedDueCounts(
+  row: PacedCountRow,
+  args: { examDate: string | null; deletingAt: Date | null; now: Date },
+): PacedDueCounts {
+  if (args.deletingAt != null) {
+    return { dueToday: 0, newRemaining: 0, introducedLast24h: 0 };
   }
-  return n;
+  const allowance = newCardAllowance({
+    examDate: args.examDate,
+    newRemaining: row.newRemaining,
+    introducedLast24h: row.introducedLast24h,
+    now: args.now,
+  });
+  return {
+    dueToday: row.reviewDue + Math.min(row.newDue, allowance),
+    newRemaining: row.newRemaining,
+    introducedLast24h: row.introducedLast24h,
+  };
 }
 
 export async function listReviewersByTopic(
   topicId: string,
   userId: string,
 ): Promise<ReviewerByTopic[]> {
-  return db
+  const now = new Date();
+  const rows = await db
     .select({
       id: reviewers.id,
       topicId: reviewers.topicId,
@@ -208,23 +290,284 @@ export async function listReviewersByTopic(
       lastGeneratedAt: reviewers.lastGeneratedAt,
       examDate: reviewers.examDate,
       deletingAt: reviewers.deletingAt,
-      dueTodayCount: sql<number>`
-        case
-          when ${reviewers.deletingAt} is not null then 0
-          else (
-            select count(*)::int
-            from cards
-            where cards.reviewer_id = ${reviewers.id}
-              and cards.due_at <= now()
-              and cards.archived_at is null
-          )
-        end
-      `.mapWith(Number),
+      ...pacedCountFields(reviewers.id, now),
     })
     .from(reviewers)
     .innerJoin(topics, eq(reviewers.topicId, topics.id))
     .where(and(eq(reviewers.topicId, topicId), eq(topics.userId, userId)))
     .orderBy(asc(reviewers.createdAt));
+  return rows.map(({ reviewDue, newDue, newRemaining, introducedLast24h, ...reviewer }) => ({
+    ...reviewer,
+    dueTodayCount: pacedDueCounts(
+      { reviewDue, newDue, newRemaining, introducedLast24h },
+      { examDate: reviewer.examDate, deletingAt: reviewer.deletingAt, now },
+    ).dueToday,
+  }));
+}
+
+/**
+ * Paced due counts for every pack this owner has, in one query, keyed by
+ * reviewer id. Feeds the Today plan.
+ */
+export async function listPacedDueCounts(
+  userId: string,
+  now = new Date(),
+): Promise<Map<string, PacedDueCounts>> {
+  const rows = await db
+    .select({
+      id: reviewers.id,
+      examDate: reviewers.examDate,
+      deletingAt: reviewers.deletingAt,
+      ...pacedCountFields(reviewers.id, now),
+    })
+    .from(reviewers)
+    .innerJoin(topics, eq(reviewers.topicId, topics.id))
+    .where(eq(topics.userId, userId));
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      pacedDueCounts(row, { examDate: row.examDate, deletingAt: row.deletingAt, now }),
+    ]),
+  );
+}
+
+type OwnedPack = {
+  id: string;
+  name: string;
+  topicId: string;
+  topicName: string;
+  examDate: string | null;
+};
+
+/** This owner's live packs (neither the pack nor its topic is being deleted). */
+async function listOwnedPacks(userId: string): Promise<OwnedPack[]> {
+  return db
+    .select({
+      id: reviewers.id,
+      name: reviewers.name,
+      topicId: reviewers.topicId,
+      topicName: topics.name,
+      examDate: reviewers.examDate,
+    })
+    .from(reviewers)
+    .innerJoin(topics, eq(reviewers.topicId, topics.id))
+    .where(and(eq(topics.userId, userId), isNull(topics.deletingAt), isNull(reviewers.deletingAt)))
+    .orderBy(asc(topics.sortOrder), asc(topics.createdAt), asc(reviewers.createdAt));
+}
+
+export type SittingAttempt = MasteryInput["attempts"][number] & { sessionId: string | null };
+export type PackEvidence = { input: MasteryInput; attempts: SittingAttempt[] };
+
+/**
+ * Mastery inputs for the given packs, one query per table (no N+1). Every
+ * query is owner-scoped on its own: views and cards through the topic owner,
+ * attempts and card reviews through their `user_id`. Rows for ids outside
+ * `reviewerIds` are ignored.
+ */
+async function loadPackEvidence(userId: string, reviewerIds: string[]): Promise<Map<string, PackEvidence>> {
+  const evidence = new Map<string, PackEvidence>();
+  if (reviewerIds.length === 0) return evidence;
+  for (const id of reviewerIds) {
+    evidence.set(id, {
+      input: { lockedIn: null, testItems: [], attempts: [], cards: [], cardReviews: [] },
+      attempts: [],
+    });
+  }
+  const ownedPacks = and(inArray(reviewers.id, reviewerIds), eq(topics.userId, userId));
+
+  const [viewRows, attemptRows, cardRows, reviewRows] = await Promise.all([
+    db
+      .select({
+        reviewerId: views.reviewerId,
+        kind: views.kind,
+        content: views.content,
+        contentJson: views.contentJson,
+      })
+      .from(views)
+      .innerJoin(reviewers, eq(views.reviewerId, reviewers.id))
+      .innerJoin(topics, eq(reviewers.topicId, topics.id))
+      .where(and(ownedPacks, inArray(views.kind, ["locked_in", "test_me"]))),
+    db
+      .select({
+        reviewerId: testAttempts.reviewerId,
+        itemId: testAttempts.itemId,
+        correct: testAttempts.correct,
+        attemptedAt: testAttempts.attemptedAt,
+        sessionId: testAttempts.sessionId,
+      })
+      .from(testAttempts)
+      .where(and(inArray(testAttempts.reviewerId, reviewerIds), eq(testAttempts.userId, userId))),
+    db
+      .select({
+        reviewerId: cards.reviewerId,
+        id: cards.id,
+        back: cards.back,
+        archivedAt: cards.archivedAt,
+      })
+      .from(cards)
+      .innerJoin(reviewers, eq(cards.reviewerId, reviewers.id))
+      .innerJoin(topics, eq(reviewers.topicId, topics.id))
+      .where(and(ownedPacks, isNull(cards.archivedAt))),
+    db
+      .select({
+        reviewerId: cardReviews.reviewerId,
+        cardId: cardReviews.cardId,
+        rating: cardReviews.rating,
+        reviewedAt: cardReviews.reviewedAt,
+      })
+      .from(cardReviews)
+      .where(and(inArray(cardReviews.reviewerId, reviewerIds), eq(cardReviews.userId, userId))),
+  ]);
+
+  for (const row of viewRows) {
+    const pack = evidence.get(row.reviewerId);
+    if (!pack) continue;
+    if (row.kind === "locked_in") pack.input.lockedIn = row.content;
+    else pack.input.testItems = parseTestMeItems(row.contentJson, row.content);
+  }
+  for (const row of attemptRows) {
+    const pack = evidence.get(row.reviewerId);
+    if (!pack) continue;
+    pack.input.attempts.push({ itemId: row.itemId, correct: row.correct, attemptedAt: row.attemptedAt });
+    pack.attempts.push(row);
+  }
+  for (const row of cardRows) {
+    evidence.get(row.reviewerId)?.input.cards.push({ id: row.id, back: row.back, archivedAt: row.archivedAt });
+  }
+  for (const row of reviewRows) {
+    evidence.get(row.reviewerId)?.input.cardReviews.push({
+      cardId: row.cardId,
+      rating: row.rating,
+      reviewedAt: row.reviewedAt,
+    });
+  }
+  return evidence;
+}
+
+/** Section mastery for one owned pack, or null when the pack is not this owner's. */
+export async function getMasteryForReviewer(
+  reviewerId: string,
+  userId: string,
+): Promise<MasteryResult | null> {
+  const reviewer = await getReviewer(reviewerId, userId);
+  if (!reviewer || reviewer.deletingAt) return null;
+  const evidence = await loadPackEvidence(userId, [reviewerId]);
+  const pack = evidence.get(reviewerId);
+  return pack ? computeMastery(pack.input) : null;
+}
+
+/** Section mastery for every live pack this owner has, keyed by reviewer id. */
+export async function getMasteryForUser(userId: string): Promise<Map<string, MasteryResult>> {
+  const packs = await listOwnedPacks(userId);
+  const evidence = await loadPackEvidence(userId, packs.map((pack) => pack.id));
+  return new Map([...evidence].map(([id, pack]) => [id, computeMastery(pack.input)]));
+}
+
+/** Session-less attempts further apart than this start a new sitting. */
+export const LEGACY_SITTING_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * Wrong answers from the pack's latest sitting, one per item (its last answer
+ * in that sitting). A sitting is a test session. Attempts without a session
+ * were saved one request at a time, so consecutive session-less attempts
+ * less than LEGACY_SITTING_GAP_MS apart form one sitting.
+ */
+export function latestSittingMisses(attempts: SittingAttempt[]): SittingAttempt[] {
+  const ordered = [...attempts].sort((a, b) => a.attemptedAt.getTime() - b.attemptedAt.getTime());
+  const sittingOf = new Map<SittingAttempt, string>();
+  let legacySitting = 0;
+  let previousLegacy: number | null = null;
+  for (const attempt of ordered) {
+    if (attempt.sessionId) {
+      sittingOf.set(attempt, `session:${attempt.sessionId}`);
+      continue;
+    }
+    const time = attempt.attemptedAt.getTime();
+    if (previousLegacy !== null && time - previousLegacy > LEGACY_SITTING_GAP_MS) legacySitting += 1;
+    previousLegacy = time;
+    sittingOf.set(attempt, `legacy:${legacySitting}`);
+  }
+  const latest = ordered.at(-1);
+  if (!latest) return [];
+  const sitting = sittingOf.get(latest);
+  const lastPerItem = new Map<string, SittingAttempt>();
+  for (const attempt of ordered) {
+    if (sittingOf.get(attempt) === sitting) lastPerItem.set(attempt.itemId, attempt);
+  }
+  return [...lastPerItem.values()].filter((attempt) => !attempt.correct);
+}
+
+/**
+ * Section words and latest-sitting misses per section id. Misses reuse the
+ * mastery page mapping: mastery over only those wrong answers counts, per
+ * section, the missed items citing that section's pages.
+ */
+export function sectionEstimates(pack: PackEvidence): Pick<TodayPack, "sectionWords" | "missedBySection"> {
+  const sectionWords = Object.fromEntries(
+    sectionsFromLockedIn(pack.input.lockedIn ?? "").map((section) => [section.id, section.words]),
+  );
+  const missed = computeMastery({
+    lockedIn: pack.input.lockedIn,
+    testItems: pack.input.testItems,
+    attempts: latestSittingMisses(pack.attempts),
+    cards: [],
+    cardReviews: [],
+  });
+  const missedBySection = Object.fromEntries(missed.sections.map((section) => [section.id, section.items]));
+  return { sectionWords, missedBySection };
+}
+
+/** What a pack row shows: the pack score and its weakest section's title when that section is weak. */
+export function packMasterySummary(result: MasteryResult | null | undefined): {
+  score: number | null;
+  weakTitle: string | null;
+} | null {
+  if (!result) return null;
+  const weakTitle =
+    result.weakest && result.weakest.score < MASTERY_WEAK_THRESHOLD ? result.weakest.title : null;
+  return { score: result.pack.score, weakTitle };
+}
+
+export type TodayData = {
+  plan: TodayPlan;
+  /** Topic id per pack id, for building pack links. */
+  packTopicIds: Record<string, string>;
+  mastery: Map<string, MasteryResult>;
+};
+
+/**
+ * The Today plan for this owner from paced due counts plus section mastery.
+ * Null when the owner has no live packs (the Today bar is then hidden).
+ */
+export async function getTodayPlan(userId: string, now = new Date()): Promise<TodayData | null> {
+  const [packs, paced] = await Promise.all([listOwnedPacks(userId), listPacedDueCounts(userId, now)]);
+  if (packs.length === 0) return null;
+  const evidence = await loadPackEvidence(userId, packs.map((pack) => pack.id));
+
+  const mastery = new Map<string, MasteryResult>();
+  const todayPacks: TodayPack[] = packs.map((pack) => {
+    const packEvidence = evidence.get(pack.id);
+    const result = packEvidence ? computeMastery(packEvidence.input) : null;
+    if (result) mastery.set(pack.id, result);
+    const counts = paced.get(pack.id) ?? { dueToday: 0, newRemaining: 0, introducedLast24h: 0 };
+    const hasWeak = result?.sections.some((section) => section.weak) ?? false;
+    return {
+      id: pack.id,
+      topicId: pack.topicId,
+      topicName: pack.topicName,
+      name: pack.name,
+      examDate: pack.examDate,
+      ...counts,
+      mastery: result,
+      ...(hasWeak && packEvidence ? sectionEstimates(packEvidence) : {}),
+    };
+  });
+
+  return {
+    plan: buildTodayPlan({ packs: todayPacks, now }),
+    packTopicIds: Object.fromEntries(packs.map((pack) => [pack.id, pack.topicId])),
+    mastery,
+  };
 }
 
 /** Reviewers with an in-progress untimed sitting for this owner. */
@@ -2453,18 +2796,114 @@ function normalizeReviewedCard(row: unknown, base: Card): Card {
   } as Card;
 }
 
-export function serializeCard(row: Card) {
+export type NextIntervals = { again: { days: number }; good: { days: number } };
+
+/** A durable card with its schedule preview, ready for the Carded payload. */
+export type LearningCard = Card & {
+  isNew: boolean;
+  nextIntervals: NextIntervals;
+  firstReviewedAt: Date | null;
+};
+
+/** Whole days from `from` to `due`, at least 0 (the capped gap the UI shows). */
+function gapDays(due: Date, from: Date): number {
+  return Math.max(0, Math.round((due.getTime() - from.getTime()) / DAY_MS));
+}
+
+/** FSRS state stored on the card. State 0 (new) schedules like a fresh card. */
+function storedFsrsState(card: Card): FsrsCardState | null {
+  if (card.fsrsState == null || card.fsrsState === 0) return null;
+  return {
+    state: card.fsrsState as FsrsCardState["state"],
+    stability: card.stability ?? 0,
+    difficulty: card.difficulty ?? 0,
+    reps: card.repetitions,
+    lapses: card.lapses,
+    scheduledDays: card.scheduledDays ?? card.intervalDays,
+    lastReview: card.lastReviewedAt,
+    due: card.dueAt,
+  };
+}
+
+type ReviewHistory = { rating: CardRating; reviewedAt: Date }[];
+
+/** Ordered reviews per card, for cards that still need a lazy replay. */
+async function loadReviewHistory(cardIds: string[]): Promise<Map<string, ReviewHistory>> {
+  const history = new Map<string, ReviewHistory>();
+  if (cardIds.length === 0) return history;
+  const rows = await db
+    .select({
+      cardId: cardReviews.cardId,
+      rating: cardReviews.rating,
+      reviewedAt: cardReviews.reviewedAt,
+    })
+    .from(cardReviews)
+    .where(inArray(cardReviews.cardId, cardIds))
+    .orderBy(asc(cardReviews.reviewedAt));
+  for (const row of rows) {
+    const list = history.get(row.cardId) ?? [];
+    list.push({ rating: row.rating, reviewedAt: row.reviewedAt });
+    history.set(row.cardId, list);
+  }
+  return history;
+}
+
+/** Stored FSRS state, or the replay of a card's history when none is stored. */
+function cardFsrsState(card: Card, history: ReviewHistory | undefined): FsrsCardState | null {
+  if (card.fsrsState != null) return storedFsrsState(card);
+  return fsrsStateFromHistory(history ?? [], card.createdAt);
+}
+
+/** Adds `isNew`, `nextIntervals` and `firstReviewedAt` to durable cards. */
+async function toLearningCards(
+  rows: Card[],
+  examDate: string | null,
+  now = new Date(),
+): Promise<LearningCard[]> {
+  if (rows.length === 0) return [];
+  const firstReviews = await db
+    .select({ cardId: cardReviews.cardId, first: sql<Date>`min(${cardReviews.reviewedAt})`.mapWith(cardReviews.reviewedAt) })
+    .from(cardReviews)
+    .where(inArray(cardReviews.cardId, rows.map((row) => row.id)))
+    .groupBy(cardReviews.cardId);
+  const firstById = new Map(firstReviews.map((row) => [row.cardId, row.first]));
+  const history = await loadReviewHistory(
+    rows.filter((row) => row.fsrsState == null && firstById.has(row.id)).map((row) => row.id),
+  );
+  return rows.map((row) => {
+    const firstReviewedAt = firstById.get(row.id) ?? null;
+    const state = cardFsrsState(row, history.get(row.id));
+    const preview = fsrsPreview(state, now, examDate);
+    return {
+      ...row,
+      isNew: row.fsrsState === 0 || (row.fsrsState == null && firstReviewedAt == null),
+      firstReviewedAt,
+      nextIntervals: {
+        again: { days: preview.again.days },
+        good: { days: preview.good.days },
+      },
+    };
+  });
+}
+
+export function serializeCard(row: LearningCard) {
   return {
     ...durableCard(row),
     dueAt: row.dueAt.toISOString(),
     lastReviewedAt: row.lastReviewedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    firstReviewedAt: row.firstReviewedAt?.toISOString() ?? null,
+    isNew: row.isNew,
+    nextIntervals: row.nextIntervals,
   };
 }
+
+export type SerializedLearningCard = ReturnType<typeof serializeCard>;
 
 export async function getCardsForReviewer(
   reviewerId: string,
   userId: string,
-): Promise<Card[]> {
+): Promise<LearningCard[]> {
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer) return [];
   let rows = await db
@@ -2472,7 +2911,7 @@ export async function getCardsForReviewer(
     .from(cards)
     .where(and(eq(cards.reviewerId, reviewerId), isNull(cards.archivedAt)))
     .orderBy(asc(cards.dueAt), asc(cards.createdAt));
-  if (rows.length > 0) return rows;
+  if (rows.length > 0) return toLearningCards(rows, reviewer.examDate);
 
   const view = await getLatestView(reviewerId, "carded");
   const items = view ? parseCardedItems(view.contentJson, view.content) : [];
@@ -2497,7 +2936,7 @@ export async function getCardsForReviewer(
     .from(cards)
     .where(and(eq(cards.reviewerId, reviewerId), isNull(cards.archivedAt)))
     .orderBy(asc(cards.dueAt), asc(cards.createdAt));
-  return rows;
+  return toLearningCards(rows, reviewer.examDate);
 }
 
 export async function updateCard(args: {
@@ -2531,7 +2970,9 @@ export async function updateCard(args: {
       ),
     )
     .returning();
-  return row ?? { stale: true as const };
+  if (!row) return { stale: true as const };
+  const [learning] = await toLearningCards([row], reviewer.examDate);
+  return learning;
 }
 
 export async function syncGeneratedCards(args: {
@@ -2844,7 +3285,7 @@ export async function reviewCard(args: {
   expectedRevision: number;
   rating: CardRating;
   clientRequestId?: string;
-}) {
+}): Promise<LearningCard | { stale: true } | null> {
   const reviewer = await getReviewer(args.reviewerId, args.userId);
   if (!reviewer) return null;
   const [current] = await db
@@ -2856,18 +3297,18 @@ export async function reviewCard(args: {
   if (!args.clientRequestId && current.revision !== args.expectedRevision) {
     return { stale: true as const };
   }
-  const next = scheduleCardReview(
-    {
-      dueAt: current.dueAt,
-      intervalDays: current.intervalDays,
-      repetitions: current.repetitions,
-      easeFactor: current.easeFactor,
-    },
+  // A card the backfill has not reached yet replays its history once here.
+  const history = current.fsrsState == null
+    ? (await loadReviewHistory([current.id])).get(current.id)
+    : undefined;
+  const reviewedAt = new Date();
+  const next = fsrsNext(
+    cardFsrsState(current, history),
     args.rating,
-    new Date(),
+    reviewedAt,
     reviewer.examDate,
   );
-  const reviewedAt = new Date();
+  const intervalDays = gapDays(next.due, reviewedAt);
   const requestId = args.clientRequestId ?? null;
   const returningCard = sql`
         id,
@@ -2882,19 +3323,32 @@ export async function reviewCard(args: {
         interval_days AS "intervalDays",
         repetitions,
         ease_factor AS "easeFactor",
-        last_reviewed_at AS "lastReviewedAt"
+        last_reviewed_at AS "lastReviewedAt",
+        fsrs_state AS "fsrsState",
+        stability,
+        difficulty,
+        lapses,
+        scheduled_days AS "scheduledDays"
   `;
+  const setSchedule = sql`
+        due_at = ${next.due},
+        interval_days = ${intervalDays},
+        repetitions = ${next.reps},
+        fsrs_state = ${next.state},
+        stability = ${next.stability},
+        difficulty = ${next.difficulty},
+        lapses = ${next.lapses},
+        scheduled_days = ${next.scheduledDays},
+        last_reviewed_at = ${reviewedAt},
+        revision = revision + 1,
+        updated_at = ${reviewedAt}
+  `;
+  const enrich = async (row: Card) => (await toLearningCards([row], reviewer.examDate))[0]!;
   if (!requestId) {
     const result = await db.execute(sql`
       WITH updated AS (
         UPDATE cards
-        SET due_at = ${next.dueAt},
-            interval_days = ${next.intervalDays},
-            repetitions = ${next.repetitions},
-            ease_factor = ${next.easeFactor},
-            last_reviewed_at = ${reviewedAt},
-            revision = revision + 1,
-            updated_at = ${reviewedAt}
+        SET ${setSchedule}
         WHERE id = ${args.cardId}
           AND reviewer_id = ${args.reviewerId}
           AND revision = ${args.expectedRevision}
@@ -2909,6 +3363,9 @@ export async function reviewCard(args: {
           interval_days,
           repetitions,
           ease_factor,
+          fsrs_state,
+          stability,
+          difficulty,
           reviewed_at
         )
         SELECT
@@ -2920,6 +3377,9 @@ export async function reviewCard(args: {
           updated."intervalDays",
           updated.repetitions,
           updated."easeFactor",
+          updated."fsrsState",
+          updated.stability,
+          updated.difficulty,
           ${reviewedAt}
         FROM updated
         RETURNING card_id
@@ -2930,7 +3390,7 @@ export async function reviewCard(args: {
     `);
     const [updated] = result.rows;
     if (!updated) return { stale: true as const };
-    return normalizeReviewedCard(updated, current);
+    return enrich(normalizeReviewedCard(updated, current));
   }
   const result = await db.execute(sql`
     WITH existing_request AS MATERIALIZED (
@@ -2943,13 +3403,7 @@ export async function reviewCard(args: {
     ),
     updated AS (
       UPDATE cards
-      SET due_at = ${next.dueAt},
-          interval_days = ${next.intervalDays},
-          repetitions = ${next.repetitions},
-          ease_factor = ${next.easeFactor},
-          last_reviewed_at = ${reviewedAt},
-          revision = revision + 1,
-          updated_at = ${reviewedAt}
+      SET ${setSchedule}
       WHERE id = ${args.cardId}
         AND reviewer_id = ${args.reviewerId}
         AND revision = ${args.expectedRevision}
@@ -2966,6 +3420,9 @@ export async function reviewCard(args: {
         interval_days,
         repetitions,
         ease_factor,
+        fsrs_state,
+        stability,
+        difficulty,
         reviewed_at
       )
       SELECT
@@ -2978,6 +3435,9 @@ export async function reviewCard(args: {
         updated."intervalDays",
         updated.repetitions,
         updated."easeFactor",
+        updated."fsrsState",
+        updated.stability,
+        updated.difficulty,
         ${reviewedAt}
       FROM updated
       ON CONFLICT (card_id, client_request_id)
@@ -2990,7 +3450,7 @@ export async function reviewCard(args: {
     INNER JOIN inserted ON inserted.card_id = updated.id
   `);
   const [updated] = result.rows;
-  if (updated) return normalizeReviewedCard(updated, current);
+  if (updated) return enrich(normalizeReviewedCard(updated, current));
   const [replay] = await db
     .select({ cardId: cardReviews.cardId })
     .from(cardReviews)
@@ -3008,9 +3468,75 @@ export async function reviewCard(args: {
       .from(cards)
       .where(and(eq(cards.id, args.cardId), eq(cards.reviewerId, args.reviewerId)))
       .limit(1);
-    return latest ?? current;
+    return enrich(latest ?? current);
   }
   return { stale: true as const };
+}
+
+/** Counts from one `backfillFsrs` run. */
+export type FsrsBackfillCounts = {
+  scanned: number;
+  replayed: number;
+  markedNew: number;
+  skipped: number;
+};
+
+/**
+ * Sets FSRS state on every card that has none, 200 cards per batch. Cards with
+ * reviews get their replayed state and a due date capped at the exam; cards
+ * without reviews become new and keep `due_at`. Each UPDATE requires
+ * `fsrs_state IS NULL`, so a rerun changes nothing.
+ */
+export async function backfillFsrs(
+  { now = new Date(), batchSize = 200 }: { now?: Date; batchSize?: number } = {},
+): Promise<FsrsBackfillCounts> {
+  const counts: FsrsBackfillCounts = { scanned: 0, replayed: 0, markedNew: 0, skipped: 0 };
+  let afterId: string | null = null;
+  for (;;) {
+    const batch: { card: Card; examDate: string | null }[] = await db
+      .select({ card: cards, examDate: reviewers.examDate })
+      .from(cards)
+      .innerJoin(reviewers, eq(cards.reviewerId, reviewers.id))
+      .where(and(
+        isNull(cards.fsrsState),
+        afterId ? gt(cards.id, afterId) : undefined,
+      ))
+      .orderBy(asc(cards.id))
+      .limit(batchSize);
+    if (batch.length === 0) break;
+    afterId = batch[batch.length - 1]!.card.id;
+    counts.scanned += batch.length;
+    const history = await loadReviewHistory(batch.map(({ card }) => card.id));
+    const updates = batch.map(({ card, examDate }) => {
+      const state = fsrsStateFromHistory(history.get(card.id) ?? [], card.createdAt);
+      const guard = and(eq(cards.id, card.id), isNull(cards.fsrsState));
+      if (!state) {
+        return db.update(cards).set({ fsrsState: 0 }).where(guard).returning({ id: cards.id });
+      }
+      const due = examCap(state.due, now, examDate);
+      return db
+        .update(cards)
+        .set({
+          fsrsState: state.state,
+          stability: state.stability,
+          difficulty: state.difficulty,
+          lapses: state.lapses,
+          scheduledDays: state.scheduledDays,
+          dueAt: due,
+          intervalDays: gapDays(due, state.lastReview ?? now),
+          repetitions: state.reps,
+        })
+        .where(guard)
+        .returning({ id: cards.id });
+    });
+    const results = await db.batch(updates as [typeof updates[number], ...typeof updates]);
+    results.forEach((rows, index) => {
+      if (rows.length === 0) counts.skipped += 1;
+      else if (history.has(batch[index]!.card.id)) counts.replayed += 1;
+      else counts.markedNew += 1;
+    });
+  }
+  return counts;
 }
 
 export async function updateReviewerExamDate(

@@ -1,22 +1,47 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import {
   ReviewerList,
   type ReviewerListItem,
 } from "@/components/reviewer-list";
+import { TodayBar } from "@/components/today-bar";
+import { TodayModal, type TodayHrefs } from "@/components/today-modal";
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
 import { useTopicNav } from "@/components/topic-shelf";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { outlineHeadingHref } from "@/lib/study-outline";
+import type { TodayPlan } from "@/lib/today-plan";
+
+export type StudyHomeToday = {
+  plan: TodayPlan;
+  /** Topic id per pack id, for pack links. */
+  packTopicIds: Record<string, string>;
+};
+
+/**
+ * Today links into a pack: due cards open Carded, a re-test opens Test Me
+ * (where Retry missed lives), a re-read opens Locked In at the section heading.
+ */
+export function todayHrefs(packTopicIds: Record<string, string>): TodayHrefs {
+  const pack = (packId: string) => `/topics/${packTopicIds[packId] ?? ""}/reviewers/${packId}`;
+  return {
+    review: (packId) => `${pack(packId)}?mode=carded`,
+    retest: (packId) => `${pack(packId)}?mode=test_me`,
+    reread: (packId, sectionId) => `${pack(packId)}?mode=locked_in${outlineHeadingHref(sectionId)}`,
+  };
+}
 
 type StudyHomeProps = {
   topics: TopicListItem[];
   selectedId: string | null;
   topicName: string | null;
   reviewers: ReviewerListItem[];
+  /** Null while the user has no packs; the Today bar is then hidden. */
+  today: StudyHomeToday | null;
 };
 
 function ReviewerListSkeleton() {
@@ -44,8 +69,12 @@ export function StudyHome({
   selectedId,
   topicName,
   reviewers,
+  today,
 }: StudyHomeProps) {
   const topicNav = useTopicNav();
+  const [todayOpen, setTodayOpen] = useState(false);
+  const packTopicIds = today?.packTopicIds;
+  const hrefs = useMemo(() => todayHrefs(packTopicIds ?? {}), [packTopicIds]);
   const shelfOpen = topicNav?.shelfOpen ?? true;
   const duePack = reviewers.find((reviewer) => reviewer.dueTodayCount > 0) ?? null;
   const [localOptimisticId, setLocalOptimisticId] = useState<string | null>(
@@ -66,15 +95,30 @@ export function StudyHome({
 
   return (
     <div className="flex flex-col gap-8">
-      {duePack && selectedId ? (
-        <Button
-          nativeButton={false}
-          render={
-            <Link href={`/topics/${selectedId}/reviewers/${duePack.id}?mode=carded`} />
-          }
-        >
-          Practice due cards
-        </Button>
+      {today || (duePack && selectedId) ? (
+        <div className="flex flex-col gap-3">
+          {today ? (
+            <>
+              <TodayBar plan={today.plan} onOpen={() => setTodayOpen(true)} />
+              <TodayModal
+                plan={today.plan}
+                open={todayOpen}
+                onOpenChange={setTodayOpen}
+                hrefs={hrefs}
+              />
+            </>
+          ) : null}
+          {duePack && selectedId ? (
+            <Button
+              nativeButton={false}
+              render={
+                <Link href={`/topics/${selectedId}/reviewers/${duePack.id}?mode=carded`} />
+              }
+            >
+              Practice due cards
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       <div className={shelfOpen ? "md:hidden" : undefined}>
         <TopicTabs

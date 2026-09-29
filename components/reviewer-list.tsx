@@ -11,9 +11,11 @@ import {
   PencilSimple,
   Plus,
   Trash,
+  WarningCircle,
 } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/empty-state";
+import { MasteryBar } from "@/components/mastery-bar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -44,7 +46,30 @@ export type ReviewerListItem = {
   examDate: string | null;
   dueTodayCount: number;
   hasActiveSitting?: boolean;
+  /** Pack mastery, and the weakest section's title when that section is weak. */
+  mastery?: { score: number | null; weakTitle: string | null } | null;
 };
+
+/** The pack row's mastery bar and weak-section chip; nothing until the pack has a score. */
+export function PackMastery({ mastery }: { mastery: ReviewerListItem["mastery"] }) {
+  if (!mastery) return null;
+  return (
+    <>
+      {mastery.score !== null ? (
+        <span className="inline-flex items-center gap-1.5">
+          Mastery
+          <MasteryBar score={mastery.score} label />
+        </span>
+      ) : null}
+      {mastery.weakTitle ? (
+        <span className="inline-flex max-w-full min-w-0 items-center gap-1">
+          <WarningCircle weight="bold" aria-hidden className="size-3.5 shrink-0 text-warning" />
+          <span className="truncate">Weak: {mastery.weakTitle}</span>
+        </span>
+      ) : null}
+    </>
+  );
+}
 
 type ReviewerListProps = {
   topicId: string | null;
@@ -275,6 +300,7 @@ export function ReviewerList({
                       <span>{reviewer.dueTodayCount} due</span>
                     ) : null}
                     {reviewer.examDate ? <span>{reviewer.examDate}</span> : null}
+                    <PackMastery mastery={reviewer.mastery} />
                   </span>
                 </span>
                 <PackRowChevron />

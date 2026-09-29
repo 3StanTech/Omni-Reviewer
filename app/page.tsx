@@ -5,7 +5,13 @@ import { AppShell } from "@/components/app-shell";
 import type { ReviewerListItem } from "@/components/reviewer-list";
 import { StudyHome } from "@/components/study-home";
 import type { TopicListItem } from "@/components/topic-tabs";
-import { listActiveUntimedReviewerIds, listReviewersByTopic, listTopics } from "@/lib/queries";
+import {
+  getTodayPlan,
+  listActiveUntimedReviewerIds,
+  listReviewersByTopic,
+  listTopics,
+  packMasterySummary,
+} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -38,12 +44,11 @@ export default async function HomePage({ searchParams }: HomeProps) {
   const selectedTopic =
     topics.find((t) => t.id === selectedId) ?? null;
 
-  const [reviewers, activeUntimed] = selectedId
-    ? await Promise.all([
-      listReviewersByTopic(selectedId, userId),
-      listActiveUntimedReviewerIds(userId),
-    ])
-    : [[], []];
+  const [reviewers, activeUntimed, today] = await Promise.all([
+    selectedId ? listReviewersByTopic(selectedId, userId) : [],
+    selectedId ? listActiveUntimedReviewerIds(userId) : [],
+    getTodayPlan(userId),
+  ]);
   const activeUntimedIds = new Set(activeUntimed);
 
   const serializedReviewers: ReviewerListItem[] = reviewers.map((r) => ({
@@ -57,6 +62,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
     examDate: r.examDate,
     dueTodayCount: r.dueTodayCount,
     hasActiveSitting: activeUntimedIds.has(r.id),
+    mastery: packMasterySummary(today?.mastery.get(r.id)),
   }));
 
   const dueTodayCount = serializedReviewers.reduce(
@@ -77,6 +83,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
         selectedId={selectedId}
         topicName={selectedTopic?.name ?? null}
         reviewers={serializedReviewers}
+        today={today ? { plan: today.plan, packTopicIds: today.packTopicIds } : null}
       />
     </AppShell>
   );

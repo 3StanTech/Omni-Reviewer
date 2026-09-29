@@ -8,6 +8,8 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  real,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -371,6 +373,12 @@ export const cards = pgTable(
     repetitions: integer("repetitions").notNull().default(0),
     easeFactor: integer("ease_factor").notNull().default(25),
     lastReviewedAt: timestamp("last_reviewed_at", { withTimezone: true }),
+    /** FSRS state: 0 new, 1 learning, 2 review, 3 relearning. Null until backfilled or first reviewed. */
+    fsrsState: smallint("fsrs_state"),
+    stability: real("stability"),
+    difficulty: real("difficulty"),
+    lapses: integer("lapses").notNull().default(0),
+    scheduledDays: integer("scheduled_days"),
     originGenerationRunId: uuid("origin_generation_run_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -469,6 +477,9 @@ export const cardReviews = pgTable("card_reviews", {
   intervalDays: integer("interval_days").notNull(),
   repetitions: integer("repetitions").notNull(),
   easeFactor: integer("ease_factor").notNull(),
+  fsrsState: smallint("fsrs_state"),
+  stability: real("stability"),
+  difficulty: real("difficulty"),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

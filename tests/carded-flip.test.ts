@@ -50,18 +50,17 @@ describe("Carded recall flip", () => {
   it("shows memorize chrome and remaining due, not a quiz score", () => {
     expect(src).toContain("Memorize. No choices.");
     expect(src).toContain("Remaining {remainingDue} due");
-    expect(src).toContain("dueAt");
-    expect(src).toContain("due <= now");
+    expect(src).toContain("todayCards(durableCards, examDate, Date.now()).length");
+    expect(src).toContain("selectTodayCards(");
     expect(src).not.toContain("Card {safeIndex + 1} of {cards.length}");
     expect(src).not.toMatch(/\{safeIndex \+ 1\} of \{cards\.length\}/);
   });
 
-  it("shows the next interval from the schedule after rating, then advances", () => {
-    expect(src).toContain('if (rating === "again") return "show tonight"');
-    expect(src).toContain("next in ${intervalDays} days");
-    expect(src).toContain('"next in 1 day"');
-    expect(src).toContain("data.card.intervalDays");
-    expect(src).toContain("setScheduleHint(nextIntervalCopy(rating, data.card.intervalDays))");
+  it("previews each button from the card's nextIntervals and hints the saved interval", () => {
+    expect(src).not.toContain("@/lib/sm2");
+    expect(src).toContain("card.nextIntervals[rating].days");
+    expect(src).toContain('days === 1 ? "tomorrow" : `in ${days} days`');
+    expect(src).toContain("setScheduleHint(`Next review ${intervalCopy(data.card.intervalDays)}`)");
     expect(src).toContain("setTimeout");
     expect(src).toContain("setRatedIds");
     expect(src).toContain("clientRequestId");
