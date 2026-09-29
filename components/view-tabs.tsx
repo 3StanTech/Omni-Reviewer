@@ -36,6 +36,8 @@ type ViewTabsProps = {
   hasReadySource: boolean;
   showRedo: boolean;
   busy: boolean;
+  /** Set while something must finish first; Redo shows it and waits. */
+  busyReason?: string | null;
   onRedo: (kind: ViewKind, forceOverwrite?: boolean) => void;
   reviewerId: string;
   reviewerName?: string;
@@ -136,6 +138,7 @@ export function ViewTabs({
   hasReadySource,
   showRedo,
   busy,
+  busyReason = null,
   onRedo,
   reviewerId,
   reviewerName = "",
@@ -168,7 +171,7 @@ export function ViewTabs({
   const studyPack = useMemo(() => ({ reviewerName }), [reviewerName]);
 
   const copy = MODE_COPY[tab];
-  const blockReason = redoBlockReason(tab, views, hasReadySource);
+  const blockReason = busyReason ?? redoBlockReason(tab, views, hasReadySource);
   const redoDisabled = busy || viewsLoading || Boolean(blockReason);
   const needsConfirm = modeHasContent(tab, views);
 

@@ -11,6 +11,7 @@ export function GenerationControls({
   hasViews,
   hasCompleteViews,
   sourcesAreMediaOnly,
+  busyReason = null,
   onGenerate,
   onResume,
 }: {
@@ -19,6 +20,8 @@ export function GenerationControls({
   hasViews: boolean;
   hasCompleteViews: boolean;
   sourcesAreMediaOnly: boolean;
+  /** Set while something must finish first; Generate and Resume wait for it. */
+  busyReason?: string | null;
   onGenerate: () => void;
   onResume: () => void;
 }) {
@@ -42,14 +45,19 @@ export function GenerationControls({
         <Button
           type="button"
           onClick={resumeAllowed ? onResume : onGenerate}
-          disabled={(hasCompleteViews && !resumeAllowed) || (!canStart && !resumeAllowed)}
-          title={resumeAllowed ? "Resume the saved generation" : help}
+          disabled={Boolean(busyReason) || (hasCompleteViews && !resumeAllowed) || (!canStart && !resumeAllowed)}
+          title={busyReason ?? (resumeAllowed ? "Resume the saved generation" : help)}
         >
           {state.busy ? <CircleNotch className="animate-spin" weight="bold" /> : <Sparkle weight="fill" />}
           {state.busy ? "Generating" : label}
         </Button>
         <p className="text-xs text-muted-foreground">{help}</p>
       </div>
+      {busyReason ? (
+        <p role="status" className="text-xs text-muted-foreground">
+          {busyReason}
+        </p>
+      ) : null}
     </div>
   );
 }

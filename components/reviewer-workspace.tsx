@@ -28,6 +28,7 @@ import type { ViewKind } from "@/lib/types";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
 import { useGeneration } from "@/lib/use-generation";
+import { useSourceVision } from "@/lib/use-source-vision";
 import type { GenerationRequest } from "@/lib/generation-plan";
 import type { LockedInDraftController } from "@/components/locked-in-editor";
 import {
@@ -84,6 +85,8 @@ export type SerializedAttemptStats = {
 const NOT_GENERATED_YET =
   "Not generated yet. Upload Ready sources, then generate";
 const MS_PER_DAY = 86_400_000;
+const READING_SLIDES_NOTE =
+  "Reading slide images first. Generate unlocks when it finishes.";
 
 function examCountdownCopy(examDate: string): string | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(examDate);
@@ -245,6 +248,12 @@ export function ReviewerWorkspace({
     setGeneratedAt(stampFromViews(next) ?? new Date().toISOString());
   }
 
+  // Hosted here, not in SourcePanel, so reading keeps going while the Sources
+  // list is collapsed or the panel remounts when the layout switches.
+  const vision = useSourceVision({ reviewerId, sources });
+  const readingSlides = vision.reading;
+  const busyReason = readingSlides ? READING_SLIDES_NOTE : null;
+
   const generation = useGeneration({
     userId,
     reviewerId,
@@ -275,6 +284,7 @@ export function ReviewerWorkspace({
   }
 
   function startRedo(kind: ViewKind, forceOverwrite = false) {
+    if (busyReason) return;
     const request: GenerationRequest = {
       intent: "redo",
       kind,
@@ -300,6 +310,7 @@ export function ReviewerWorkspace({
   }
 
   function requestRedo(kind: ViewKind, forceOverwrite: boolean): boolean {
+    if (busyReason) return false;
     return requestDraftAction({ type: "redo", kind, forceOverwrite });
   }
 
@@ -419,9 +430,10 @@ export function ReviewerWorkspace({
     <SourcePanel
       userId={userId}
       reviewerId={reviewerId}
-      initialSources={initialSources}
+      initialSources={sources}
       onSourcesChange={setSources}
       expanded={sourcesExpanded}
+      vision={vision}
     />
     </div>
   );
@@ -447,6 +459,7 @@ export function ReviewerWorkspace({
         hasViews={hasViews}
         hasCompleteViews={hasCompleteViews}
         sourcesAreMediaOnly={sourcesAreMediaOnly}
+        busyReason={busyReason}
         onGenerate={() => void generation.start({ intent: "generate_missing" })}
         onResume={() => void generation.resume()}
       />
@@ -487,6 +500,7 @@ export function ReviewerWorkspace({
         hasReadySource={hasReadySource}
         showRedo={hasViews}
         busy={generation.state.busy}
+        busyReason={busyReason}
         cards={cards}
         examDate={currentExamDate}
         testAttemptStats={testAttemptStats}

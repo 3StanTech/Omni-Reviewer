@@ -19,6 +19,8 @@ import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MAX_PASTE_TEXT_CHARS, MAX_PASTE_TITLE_CHARS } from "@/lib/paste";
+import { buildPhotoSetFile, isHeic } from "@/lib/photo-set";
+import type { SourceVision, VisionProgress } from "@/lib/use-source-vision";
 import type { IngestStatus, SourceKind } from "@/lib/types";
 import { buildClientBlobPathname, readApiError } from "@/lib/utils";
 
@@ -44,7 +46,22 @@ type SourcePanelProps = {
   onSourcesChange?: (sources: SourceListItem[]) => void;
   /** When false, hide upload/paste/list. Parent owns the Sources control. */
   expanded?: boolean;
+  /**
+   * Slide-image reading, hosted by the parent so it keeps running while this
+   * panel is hidden or remounted.
+   */
+  vision?: Pick<SourceVision, "progress" | "register" | "retry">;
 };
+
+const PHOTO_EXTENSIONS = /\.(jpe?g|png|webp|gif|heic|heif)$/i;
+const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"]);
+
+/** Picked photos become one photo-set PDF; everything else uploads as is. */
+export function isPhotoFile(file: File): boolean {
+  const type = file.type.toLowerCase();
+  if (type) return PHOTO_TYPES.has(type) || isHeic(file);
+  return PHOTO_EXTENSIONS.test(file.name);
+}
 
 function canRetryStoredFile(source: Pick<SourceListItem, "kind" | "ingestStatus" | "blobPathname">): boolean {
   return source.ingestStatus === "failed"
@@ -102,6 +119,42 @@ function KindIcon({ kind }: { kind: SourceKind }) {
   }
 }
 
+/** Slide-image reading for one row. A finished read adds nothing. */
+function VisionStatus({
+  progress,
+  onRetry,
+}: {
+  progress: VisionProgress | undefined;
+  onRetry: () => void;
+}) {
+  if (!progress || progress.state === "done") return null;
+  if (progress.state === "reading") {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <CircleNotch
+          aria-hidden
+          className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+          weight="bold"
+        />
+        <span aria-live="polite">
+          Reading slide images: {progress.done} of {progress.total}
+        </span>
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <p role="status" className="text-xs text-warning">
+        {progress.message}
+      </p>
+      <Button type="button" variant="ghost" size="xs" onClick={onRetry}>
+        <ArrowClockwise />
+        Try again
+      </Button>
+    </div>
+  );
+}
+
 function normalizeSource(raw: Record<string, unknown>): SourceListItem {
   return {
     id: String(raw.id),
@@ -134,11 +187,13 @@ export function SourcePanel({
   initialSources,
   onSourcesChange,
   expanded = true,
+  vision,
 }: SourcePanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [sources, setSources] = useState(initialSources);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
+  const [preparing, setPreparing] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
@@ -154,76 +209,94 @@ export function SourcePanel({
     onSourcesChange?.(next);
   }
 
+  /** Upload one file to Blob and register it as a source. */
+  async function uploadOne(file: File): Promise<SourceListItem> {
+    setProgress(0);
+    const pathname = buildClientBlobPathname(userId, reviewerId, file.name);
+    const multipart = file.size > 4 * 1024 * 1024;
+    const tokenResponse = await fetch("/api/blob/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "blob.generate-client-token",
+        payload: {
+          pathname,
+          multipart,
+          clientPayload: JSON.stringify({
+            reviewerId,
+            filename: file.name,
+          }),
+        },
+      }),
+    });
+    if (!tokenResponse.ok) throw new Error(await readApiError(tokenResponse));
+    const tokenPayload = (await tokenResponse.json()) as {
+      clientToken?: unknown;
+      attemptToken?: unknown;
+    };
+    if (
+      typeof tokenPayload.clientToken !== "string" ||
+      typeof tokenPayload.attemptToken !== "string"
+    ) {
+      throw new Error("Upload token response was invalid. Try again.");
+    }
+    // The server mints the opaque attempt identity together with the Blob
+    // client token. Keep it only for this registration request.
+    const attemptToken = tokenPayload.attemptToken;
+    const blob = await put(pathname, file, {
+      access: "private",
+      token: tokenPayload.clientToken,
+      contentType: file.type || undefined,
+      multipart,
+      onUploadProgress: ({ percentage }) => {
+        setProgress(Math.round(percentage));
+      },
+    });
+
+    const res = await fetch(`/api/reviewers/${reviewerId}/sources`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name,
+        mime: file.type || "application/octet-stream",
+        blob_url: blob.url,
+        blob_pathname: blob.pathname,
+        attempt_token: attemptToken,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(await readApiError(res));
+    }
+
+    const source = normalizeSource((await res.json()) as Record<string, unknown>);
+    // Reading reuses these bytes instead of downloading the PDF again.
+    if (source.kind === "pdf") vision?.register(source.id, file);
+    return source;
+  }
+
   async function handleFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
     setError(null);
     setUploading(true);
 
     const files = Array.from(fileList);
+    const photos = files.filter(isPhotoFile);
+    const others = files.filter((file) => !isPhotoFile(file));
     const next = [...sources];
 
     try {
-      for (const file of files) {
-        setProgress(0);
-        const pathname = buildClientBlobPathname(userId, reviewerId, file.name);
-        const multipart = file.size > 4 * 1024 * 1024;
-        const tokenResponse = await fetch("/api/blob/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "blob.generate-client-token",
-            payload: {
-              pathname,
-              multipart,
-              clientPayload: JSON.stringify({
-                reviewerId,
-                filename: file.name,
-              }),
-            },
-          }),
+      for (const file of others) {
+        next.push(await uploadOne(file));
+        commit([...next]);
+      }
+      if (photos.length > 0) {
+        setPreparing({ done: 0, total: photos.length });
+        const photoSet = await buildPhotoSetFile(photos, (done, total) => {
+          setPreparing({ done, total });
         });
-        if (!tokenResponse.ok) throw new Error(await readApiError(tokenResponse));
-        const tokenPayload = (await tokenResponse.json()) as {
-          clientToken?: unknown;
-          attemptToken?: unknown;
-        };
-        if (
-          typeof tokenPayload.clientToken !== "string" ||
-          typeof tokenPayload.attemptToken !== "string"
-        ) {
-          throw new Error("Upload token response was invalid. Try again.");
-        }
-        // The server mints the opaque attempt identity together with the Blob
-        // client token. Keep it only for this registration request.
-        const attemptToken = tokenPayload.attemptToken;
-        const blob = await put(pathname, file, {
-          access: "private",
-          token: tokenPayload.clientToken,
-          contentType: file.type || undefined,
-          multipart,
-          onUploadProgress: ({ percentage }) => {
-            setProgress(Math.round(percentage));
-          },
-        });
-
-        const res = await fetch(`/api/reviewers/${reviewerId}/sources`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: file.name,
-            mime: file.type || "application/octet-stream",
-            blob_url: blob.url,
-            blob_pathname: blob.pathname,
-            attempt_token: attemptToken,
-          }),
-        });
-
-        if (!res.ok) {
-          throw new Error(await readApiError(res));
-        }
-
-        const raw = (await res.json()) as Record<string, unknown>;
-        next.push(normalizeSource(raw));
+        setPreparing(null);
+        next.push(await uploadOne(photoSet));
         commit([...next]);
       }
     } catch (err) {
@@ -235,6 +308,7 @@ export function SourcePanel({
     } finally {
       setUploading(false);
       setProgress(null);
+      setPreparing(null);
       if (inputRef.current) inputRef.current.value = "";
     }
   }
@@ -353,8 +427,8 @@ export function SourcePanel({
             Sources
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            PDF, DOCX, PPTX, image, text, or pasted notes. Video and audio stay
-            unprocessed in v1.
+            PDFs, slides, documents and photos of slides. Pages that are mostly
+            images are read automatically.
           </p>
         </div>
         <div>
@@ -371,7 +445,7 @@ export function SourcePanel({
             type="file"
             className="sr-only"
             multiple
-            accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.csv,.html,.mp4,.webm,.mov,.avi,.mkv,.mp3,.wav,.ogg,.m4a,.aac,.flac,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,image/*,text/*,video/*,audio/*"
+            accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif,.heic,.heif,image/heic,image/heif,.txt,.md,.csv,.html,.mp4,.webm,.mov,.avi,.mkv,.mp3,.wav,.ogg,.m4a,.aac,.flac,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,image/*,text/*,video/*,audio/*"
             disabled={uploading}
             onChange={(e) => void handleFiles(e.target.files)}
           />
@@ -384,7 +458,9 @@ export function SourcePanel({
             {uploading ? (
               <>
                 <CircleNotch className="animate-spin" weight="bold" />
-                {progress !== null ? `Uploading ${progress}%` : "Uploading"}
+                {preparing
+                  ? `Preparing ${preparing.total} ${preparing.total === 1 ? "photo" : "photos"}… ${preparing.done} of ${preparing.total}`
+                  : progress !== null ? `Uploading ${progress}%` : "Uploading"}
               </>
             ) : (
               <>
@@ -492,6 +568,10 @@ export function SourcePanel({
                     {source.errorMessage}
                   </p>
                 ) : null}
+                <VisionStatus
+                  progress={vision?.progress[source.id]}
+                  onRetry={() => vision?.retry(source.id)}
+                />
                 {refreshError?.id === source.id ? (
                   <p role="alert" className="text-xs text-destructive">
                     {refreshError.message}
