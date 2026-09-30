@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 
+import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
 import { EmptyState } from "@/components/empty-state";
 import { MarkdownBody } from "@/components/study-markdown";
 import { OpenCitedSlide, TimedTestMe } from "@/components/timed-test-me";
@@ -216,7 +217,7 @@ function UntimedSitting({
     function onKeyDown(event: KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey || submitted || !item) return;
       const target = event.target;
-      if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable='true']")) return;
+      if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable='true'], [data-ask-panel]")) return;
       const choice = item.choices?.[Number(event.key) - 1];
       if (/^[1-4]$/.test(event.key) && choice) {
         setSelected(choice);
@@ -577,7 +578,10 @@ function SittingItem({
             <MarkdownBody source={item.answer} inline />
           </div>
           {item.explanation ? <MarkdownBody source={item.explanation} /> : null}
-          {correct ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
+          <div className="flex flex-wrap gap-2 empty:-mt-2">
+            {correct ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
+            {correct ? null : <ExplainThisButton request={{ kind: "explain", target: { type: "test_item", itemId: item.id, chosen: selected.slice(0, EXPLAIN_CHOSEN_MAX_CHARS) } }} />}
+          </div>
         </div>
       ) : null}
     </article>

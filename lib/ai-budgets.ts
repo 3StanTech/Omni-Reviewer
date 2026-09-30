@@ -5,7 +5,10 @@ import {
   MAX_GROUNDING_VERIFY_OUTPUT_TOKENS,
 } from "@/lib/learning-limits";
 
-export type BudgetPurpose = "locked_in" | "summary" | "test_me" | "carded" | "json" | "vision" | "verify";
+export type BudgetPurpose = "locked_in" | "summary" | "test_me" | "carded" | "json" | "vision" | "verify" | "ask";
+
+/** Output target for one Ask answer: about 250 words plus citations, with room to spare. */
+export const ASK_OUTPUT_TOKENS = 1_200;
 
 export type SourceLengthBand = "short" | "medium" | "long";
 
@@ -77,6 +80,8 @@ function outputTarget(purpose: BudgetPurpose, band: SourceLengthBand): number {
       return 12_000;
     case "verify":
       return MAX_GROUNDING_VERIFY_OUTPUT_TOKENS;
+    case "ask":
+      return ASK_OUTPUT_TOKENS;
   }
 }
 

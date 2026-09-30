@@ -10,6 +10,8 @@ import {
   SourcePanel,
   type SourceListItem,
 } from "@/components/source-panel";
+import { AskProvider } from "@/components/ask-provider";
+import { useSectionMastery } from "@/components/study-side-panel";
 import { ViewTabs } from "@/components/view-tabs";
 import { GenerationControls } from "@/components/generation-controls";
 import { GenerationStatus } from "@/components/generation-status";
@@ -152,7 +154,12 @@ export function ReviewerWorkspace({
   initialTestAttemptStats,
   initialMode = "locked_in",
 }: ReviewerWorkspaceProps) {
+  const sectionMastery = useSectionMastery();
   const [sources, setSources] = useState(initialSources);
+  const packSources = useMemo(
+    () => sources.map((source) => ({ id: source.id, filename: source.filename, hasPageMarkers: source.hasPageMarkers })),
+    [sources],
+  );
   const [views, setViews] = useState(initialViews);
   const [generatedAt, setGeneratedAt] = useState(lastGeneratedAt);
   const [viewsLoading, setViewsLoading] = useState(() =>
@@ -252,6 +259,15 @@ export function ReviewerWorkspace({
     setGeneratedAt(stampFromViews(next) ?? new Date().toISOString());
   }
 
+  function refreshCards() {
+    void fetch(`/api/reviewers/${reviewerId}/cards`)
+      .then(async (response) => (response.ok ? (await response.json()) as { cards: SerializedCard[] } : null))
+      .then((data) => {
+        if (data) setCards(data.cards);
+      })
+      .catch(() => undefined);
+  }
+
   // Hosted here, not in SourcePanel, so reading keeps going while the Sources
   // list is collapsed or the panel remounts when the layout switches.
   const vision = useSourceVision({ reviewerId, sources });
@@ -262,14 +278,7 @@ export function ReviewerWorkspace({
     userId,
     reviewerId,
     onViews: applyGenerated,
-    onCardsRefresh: () => {
-      void fetch(`/api/reviewers/${reviewerId}/cards`)
-        .then(async (response) => (response.ok ? (await response.json()) as { cards: SerializedCard[] } : null))
-        .then((data) => {
-          if (data) setCards(data.cards);
-        })
-        .catch(() => undefined);
-    },
+    onCardsRefresh: refreshCards,
   });
 
   function protectedRevisionSnapshot() {
@@ -510,6 +519,7 @@ export function ReviewerWorkspace({
         testAttemptStats={testAttemptStats}
         reviewerId={reviewerId}
         reviewerName={reviewerName}
+        packSources={packSources}
         onCardsChange={setCards}
         onTestAttemptStatsChange={setTestAttemptStats}
         onViewsChange={setViews}
@@ -526,6 +536,7 @@ export function ReviewerWorkspace({
   );
 
   return (
+    <AskProvider reviewerId={reviewerId} sections={sectionMastery} onCardCreated={refreshCards}>
     <div data-draft-guarded className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
       <div className="space-y-1">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -636,5 +647,6 @@ export function ReviewerWorkspace({
         </DialogContent>
       </Dialog>
     </div>
+    </AskProvider>
   );
 }

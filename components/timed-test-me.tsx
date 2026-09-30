@@ -11,6 +11,7 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 
+import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
 import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
 import { Button } from "@/components/ui/button";
@@ -373,7 +374,10 @@ export function TimedTestMe({
             </p>
             <div className="text-sm text-muted-foreground"><strong className="text-foreground">Answer:</strong> <MarkdownBody source={item.answer} inline /></div>
             {item.explanation ? <MarkdownBody source={item.explanation} /> : null}
-            {results[item.id] ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
+            <div className="flex flex-wrap gap-2 empty:-mt-2">
+              {results[item.id] ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
+              {results[item.id] ? null : <ExplainThisButton request={{ kind: "explain", target: { type: "test_item", itemId: item.id, chosen: selected.slice(0, EXPLAIN_CHOSEN_MAX_CHARS) } }} />}
+            </div>
           </div>
         ) : null}
       </article>

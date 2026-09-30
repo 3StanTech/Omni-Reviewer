@@ -2,7 +2,11 @@
 
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
+import { useOptionalAsk } from "@/components/ask-provider";
 import { MasteryBar } from "@/components/mastery-bar";
+import { SourceViewerProvider } from "@/components/source-modal";
+import { MarkdownBody } from "@/components/study-markdown";
+import { UnsourcedActionsProvider } from "@/components/unsourced-tag";
 import type { AnnotationRecord } from "@/lib/annotations";
 import type { SectionMastery } from "@/lib/mastery";
 import { outlineHeadingHref, studyOutline, type StudyHeading } from "@/lib/study-outline";
@@ -12,6 +16,73 @@ const SectionMasteryContext = createContext<SectionMastery[] | null>(null);
 /** Supplies the pack's section mastery (loaded on the server) to Contents. */
 export function SectionMasteryProvider({ sections, children }: { sections: SectionMastery[] | null; children: ReactNode }) {
   return <SectionMasteryContext.Provider value={sections}>{children}</SectionMasteryContext.Provider>;
+}
+
+/** The pack's section mastery, or null outside the pack page. */
+export function useSectionMastery(): SectionMastery[] | null {
+  return useContext(SectionMasteryContext);
+}
+
+/**
+ * Answers saved from Ask, shown under Notes. Loads on first view; renders
+ * nothing outside a pack or when there are none.
+ */
+function FromAsk() {
+  const ask = useOptionalAsk();
+  const ensureLoaded = ask?.ensureLoaded;
+  const [error, setError] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  useEffect(() => {
+    ensureLoaded?.();
+  }, [ensureLoaded]);
+  if (!ask) return null;
+  const { saved, savedStatus } = ask;
+  if (savedStatus === "ready" && saved.length === 0) return null;
+
+  async function remove(messageId: string) {
+    setRemovingId(messageId);
+    setError(null);
+    try {
+      await ask?.removeSaved(messageId);
+    } catch {
+      setError("Notes did not update. Try again.");
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  return (
+    <section className="mt-4 border-t border-border/60 pt-3" aria-label="From Ask">
+      <h4 className="text-xs font-semibold text-muted-foreground">From Ask</h4>
+      {savedStatus === "loading" && saved.length === 0 ? (
+        <p role="status" className="mt-2 text-muted-foreground">Loading saved answers</p>
+      ) : null}
+      {savedStatus === "error" && saved.length === 0 ? (
+        <p role="alert" className="mt-2 text-destructive">Saved answers did not load. Close Notes and open it again.</p>
+      ) : null}
+      <ul className="mt-2 space-y-4">
+        {saved.map(({ answer, question }) => (
+          <li key={answer.id} className="space-y-1.5">
+            {question ? <p className="font-medium text-foreground">{question.content}</p> : null}
+            <UnsourcedActionsProvider value={null}>
+              <SourceViewerProvider reviewerId={ask.reviewerId} citationSources={answer.citationSources}>
+                <MarkdownBody source={answer.content} />
+              </SourceViewerProvider>
+            </UnsourcedActionsProvider>
+            <button
+              type="button"
+              className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40 disabled:opacity-50"
+              disabled={removingId === answer.id}
+              onClick={() => void remove(answer.id)}
+            >
+              Remove from Notes
+            </button>
+          </li>
+        ))}
+      </ul>
+      {error ? <p role="alert" className="mt-2 text-destructive">{error}</p> : null}
+    </section>
+  );
 }
 
 /** The Contents list: a mastery bar beside each section heading, or a muted note when it has no score yet. */
@@ -74,6 +145,12 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
   useEffect(() => {
     if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
+      // A source viewer opened from a saved answer owns Escape and Tab while it is open.
+      const panel = panelRef.current;
+      const otherDialogOpen = [...document.querySelectorAll("[role='dialog']:not([hidden])")].some(
+        (dialog) => dialog !== panel && !panel?.contains(dialog),
+      );
+      if (otherDialogOpen) return;
       if (event.key === "Escape") {
         event.preventDefault();
         setOpen(null);
@@ -147,7 +224,12 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
             <button type="button" className="min-h-11 min-w-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" onClick={() => setOpen(null)}>Close</button>
           </div>
           {open === "contents" ? <nav className="mt-3" aria-label="Document contents"><ContentsList headings={headings} sections={sectionMastery} onNavigate={() => setOpen(null)} /></nav> : null}
-          {open === "notes" ? <ul className="mt-3 space-y-2">{active.length ? active.map((annotation) => <li key={annotation.id}><span className={`user-annotation-${annotation.color} rounded px-1`}>{annotation.quote}</span>{annotation.note ? <span className="text-muted-foreground"> · {annotation.note}</span> : null}</li>) : <li className="text-muted-foreground">No highlights or notes yet.</li>}</ul> : null}
+          {open === "notes" ? (
+            <>
+              <ul className="mt-3 space-y-2">{active.length ? active.map((annotation) => <li key={annotation.id}><span className={`user-annotation-${annotation.color} rounded px-1`}>{annotation.quote}</span>{annotation.note ? <span className="text-muted-foreground"> · {annotation.note}</span> : null}</li>) : <li className="text-muted-foreground">No highlights or notes yet.</li>}</ul>
+              <FromAsk />
+            </>
+          ) : null}
           {open === "earlier" ? (
             <div className="mt-3 space-y-3">
               {earlier.length ? <ul className="space-y-2 text-muted-foreground">{earlier.map((annotation) => <li key={annotation.id}>“{annotation.quote}”{annotation.note ? ` · ${annotation.note}` : ""}</li>)}</ul> : <p className="text-muted-foreground">No earlier annotations loaded yet.</p>}

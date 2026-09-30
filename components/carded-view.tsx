@@ -11,6 +11,7 @@ import {
   Presentation,
 } from "@phosphor-icons/react";
 
+import { ExplainThisButton } from "@/components/ask-provider";
 import { EmptyState } from "@/components/empty-state";
 import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
@@ -264,7 +265,7 @@ export function CardedView({
     function onKeyDown(event: KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
-      if (target instanceof HTMLElement && (target.closest("input, textarea, [contenteditable='true']"))) return;
+      if (target instanceof HTMLElement && (target.closest("input, textarea, [contenteditable='true'], [data-ask-panel]"))) return;
       if (browsing || editing || busy || dueStale || !isDurableCard(card)) return;
       if (event.key === " " && !flipped) {
         event.preventDefault();
@@ -402,6 +403,9 @@ export function CardedView({
         {dueStale ? <span className="text-warning">This card changed. Start a new due session before rating it.</span> : null}
         {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
         {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
+        {isDurableCard(card) && flipped ? (
+          <ExplainThisButton request={{ kind: "explain", target: { type: "card", cardId: card.id } }} />
+        ) : null}
         {backCitation && backPage !== null && sourceViewer.available ? (
           <Button
             type="button"

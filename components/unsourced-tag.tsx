@@ -10,10 +10,11 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { WarningCircle } from "@phosphor-icons/react";
+import { ChatCircleDots, WarningCircle } from "@phosphor-icons/react";
 
 import { Button } from "@/components/ui/button";
-import type { UnsourcedResolution } from "@/lib/citations";
+import { MAX_ASK_QUESTION_CHARS } from "@/lib/ask-types";
+import { stripCitations, type UnsourcedResolution } from "@/lib/citations";
 import { cn } from "@/lib/utils";
 
 export const UNSOURCED_TAG_LABEL = "Not from your uploaded sources";
@@ -39,9 +40,25 @@ type UnsourcedActions = {
 const UnsourcedActionsContext = createContext<UnsourcedActions | null>(null);
 export const UnsourcedActionsProvider = UnsourcedActionsContext.Provider;
 
+/**
+ * Set by the pack's Ask provider: sends the tagged sentence to Ask as an
+ * "Ask why" question. Null outside a pack, and the action stays hidden there.
+ */
+const AskWhyContext = createContext<((sentence: string) => void) | null>(null);
+export const AskWhyProvider = AskWhyContext.Provider;
+
 function claimBefore(root: HTMLElement | null): HTMLElement | null {
   const previous = root?.previousElementSibling;
   return previous instanceof HTMLElement && previous.classList.contains("study-claim") ? previous : null;
+}
+
+/** The tagged sentence as plain text: chips and citations removed, bounded for the Ask limit. */
+function claimSentence(root: HTMLElement | null): string {
+  const claim = claimBefore(root);
+  if (!claim) return "";
+  const copy = claim.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll("[data-study-skip]").forEach((node) => node.remove());
+  return stripCitations(copy.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_ASK_QUESTION_CHARS);
 }
 
 const POPOVER_MAX_WIDTH = 320;
@@ -54,6 +71,7 @@ const VIEWPORT_GUTTER = 16;
  */
 export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number | null; inert?: boolean }) {
   const actions = useContext(UnsourcedActionsContext);
+  const askWhy = useContext(AskWhyContext);
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverId = useId();
@@ -61,6 +79,7 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState(false);
   const [pending, setPending] = useState(false);
+  const [sentence, setSentence] = useState("");
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({});
 
   useEffect(() => {
@@ -106,6 +125,7 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
       setOpen(false);
       return;
     }
+    setSentence(askWhy ? claimSentence(rootRef.current) : "");
     const rect = rootRef.current?.getBoundingClientRect();
     const width = Math.min(POPOVER_MAX_WIDTH, window.innerWidth - VIEWPORT_GUTTER * 2);
     if (rect) {
@@ -142,6 +162,7 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
   }
 
   const canAct = Boolean(actions) && occurrence !== null;
+  const canAskWhy = Boolean(askWhy) && sentence.length > 0;
   const actionsDisabled = !actions || actions.disabled || pending;
 
   return (
@@ -187,28 +208,47 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
             <span className="mt-1 block text-muted-foreground">{UNSOURCED_EXPLANATION_BODY}</span>
           </>
         )}
-        {canAct ? (
+        {canAct || canAskWhy ? (
           <span className="mt-3 flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="min-h-11 sm:min-h-8"
-              disabled={actionsDisabled}
-              onClick={() => void resolve("keep")}
-            >
-              Keep
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="min-h-11 sm:min-h-8"
-              disabled={actionsDisabled}
-              onClick={() => void resolve("delete")}
-            >
-              Delete sentence
-            </Button>
+            {canAct ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11 sm:min-h-8"
+                  disabled={actionsDisabled}
+                  onClick={() => void resolve("keep")}
+                >
+                  Keep
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11 sm:min-h-8"
+                  disabled={actionsDisabled}
+                  onClick={() => void resolve("delete")}
+                >
+                  Delete sentence
+                </Button>
+              </>
+            ) : null}
+            {canAskWhy ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-h-11 sm:min-h-8"
+                onClick={() => {
+                  setOpen(false);
+                  askWhy?.(sentence);
+                }}
+              >
+                <ChatCircleDots weight="bold" aria-hidden />
+                Ask why
+              </Button>
+            ) : null}
           </span>
         ) : null}
       </span>

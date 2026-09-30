@@ -27,14 +27,23 @@ export const SOURCE_LIST_UNAVAILABLE =
 
 type OpenSourceArgs = { source: number; page: number | null };
 
+/** An upload of this pack, for opening a page by id when no citation list applies (search links). */
+export type PackSourceRef = { id: string; filename: string; hasPageMarkers?: boolean | null };
+
 type SourceViewerValue = {
   openSource: (args: OpenSourceArgs) => void;
+  /**
+   * Open a page of one of the pack's uploads by id, independent of any view's
+   * citation list. Returns false when the pack has no such upload.
+   */
+  openSourceById: (args: { sourceId: string; page: number | null }) => boolean;
   /** True when the pack stores which upload each citation points to. */
   available: boolean;
 };
 
 const SourceViewerContext = createContext<SourceViewerValue>({
   openSource: () => undefined,
+  openSourceById: () => false,
   available: false,
 });
 
@@ -49,16 +58,21 @@ function isPdf(ref: CitationSourceRef): boolean {
   return /\.pdf$/i.test(ref.filename);
 }
 
+type ViewerTarget = { source: number | null; sourceId: string | null; page: number | null };
+
 export function SourceViewerProvider({
   reviewerId,
   citationSources,
+  packSources,
   children,
 }: {
   reviewerId: string;
   citationSources: CitationSourceRef[] | null;
+  /** The pack's uploads. Only `openSourceById` reads it; citation chips still resolve through `citationSources`. */
+  packSources?: PackSourceRef[];
   children?: ReactNode;
 }) {
-  const [target, setTarget] = useState<OpenSourceArgs | null>(null);
+  const [target, setTarget] = useState<ViewerTarget | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const [documents] = useState(() => new Map<string, Promise<PdfDocument>>());
   const available = Boolean(citationSources && citationSources.length > 0);
@@ -66,11 +80,32 @@ export function SourceViewerProvider({
   const openSource = useCallback((args: OpenSourceArgs) => {
     const active = document.activeElement;
     openerRef.current = active instanceof HTMLElement ? active : null;
-    setTarget({ source: args.source, page: args.page && args.page > 0 ? args.page : null });
+    setTarget({ source: args.source, sourceId: null, page: args.page && args.page > 0 ? args.page : null });
   }, []);
 
-  const value = useMemo(() => ({ openSource, available }), [available, openSource]);
-  const ref = target ? citationSources?.find((entry) => entry.index === target.source) ?? null : null;
+  const openSourceById = useCallback(
+    (args: { sourceId: string; page: number | null }) => {
+      if (!packSources?.some((entry) => entry.id === args.sourceId)) return false;
+      const active = document.activeElement;
+      openerRef.current = active instanceof HTMLElement ? active : null;
+      setTarget({ source: null, sourceId: args.sourceId, page: args.page && args.page > 0 ? args.page : null });
+      return true;
+    },
+    [packSources],
+  );
+
+  const value = useMemo(
+    () => ({ openSource, openSourceById, available }),
+    [available, openSource, openSourceById],
+  );
+  let ref: CitationSourceRef | null = null;
+  if (target?.sourceId) {
+    const entry = packSources?.find((candidate) => candidate.id === target.sourceId);
+    // Unknown page marker state counts as paged: the viewer falls back to text when a page is missing.
+    if (entry) ref = { index: 0, sourceId: entry.id, filename: entry.filename, hasPages: entry.hasPageMarkers !== false };
+  } else if (target) {
+    ref = citationSources?.find((entry) => entry.index === target.source) ?? null;
+  }
 
   return (
     <SourceViewerContext.Provider value={value}>

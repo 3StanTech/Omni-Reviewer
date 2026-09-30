@@ -15,6 +15,9 @@
     },
     "app/api/reviewers/[id]/sources/[sourceId]/pages/route.ts": {
       "maxDuration": 120
+    },
+    "app/api/reviewers/[id]/ask/route.ts": {
+      "maxDuration": 120
     }
   }
 }

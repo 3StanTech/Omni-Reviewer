@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ArrowsClockwise, CircleNotch } from "@phosphor-icons/react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
 import { LockedInView } from "@/components/locked-in-view";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
-import { SourceViewerProvider } from "@/components/source-modal";
+import { SourceViewerProvider, useSourceViewer, type PackSourceRef } from "@/components/source-modal";
 import { StudyPackContext } from "@/components/study-document";
 import { citationSourcesForMode } from "@/lib/citations";
 import { SummaryView } from "@/components/summary-view";
@@ -41,6 +42,8 @@ type ViewTabsProps = {
   onRedo: (kind: ViewKind, forceOverwrite?: boolean) => void;
   reviewerId: string;
   reviewerName?: string;
+  /** The pack's uploads, so a search link can open a page by upload id. */
+  packSources?: PackSourceRef[];
   cards: SerializedCard[];
   testAttemptStats: SerializedAttemptStats[];
   onCardsChange: (cards: SerializedCard[]) => void;
@@ -104,6 +107,36 @@ const MODE_COPY: Record<
   },
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A search result can link to `?sourceId=<uuid>&page=<p>` (or `?source=<n>&page=<p>`). Open that page in the
+ * source viewer, then drop those params so a reload or a shared URL does
+ * not reopen it. Other params and the hash stay.
+ */
+function SourceDeepLink() {
+  const searchParams = useSearchParams();
+  const { openSource, openSourceById } = useSourceViewer();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("sourceId") && !params.has("source") && !params.has("page")) return;
+    const sourceId = params.get("sourceId") ?? "";
+    const source = Number(params.get("source"));
+    const page = Number.isInteger(Number(params.get("page"))) && Number(params.get("page")) >= 1 ? Number(params.get("page")) : null;
+    // The upload id works for any pack; the citation index only resolves where the view stores its list.
+    const opened = UUID_PATTERN.test(sourceId) && openSourceById({ sourceId, page });
+    if (!opened && Number.isInteger(source) && source >= 1) openSource({ source, page });
+    params.delete("sourceId");
+    params.delete("source");
+    params.delete("page");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+  }, [openSource, openSourceById, searchParams]);
+
+  return null;
+}
+
 function modeHasContent(kind: ViewKind, views: ViewsPayload): boolean {
   const view = views[kind];
   if (!view) return false;
@@ -142,6 +175,7 @@ export function ViewTabs({
   onRedo,
   reviewerId,
   reviewerName = "",
+  packSources,
   cards,
   testAttemptStats,
   onCardsChange,
@@ -192,8 +226,11 @@ export function ViewTabs({
   }
 
   return (
-    <SourceViewerProvider reviewerId={reviewerId} citationSources={citationSources}>
+    <SourceViewerProvider reviewerId={reviewerId} citationSources={citationSources} packSources={packSources}>
     <StudyPackContext.Provider value={studyPack}>
+    <Suspense fallback={null}>
+      <SourceDeepLink />
+    </Suspense>
     <Tabs
       value={tab}
       onValueChange={(next) => selectTab(next as ViewKind)}

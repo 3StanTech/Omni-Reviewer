@@ -3,6 +3,7 @@ import { BookOpen } from "@phosphor-icons/react/dist/ssr";
 import type { ReactNode } from "react";
 
 import { MoodControl } from "@/components/mood-control";
+import { SearchPacks } from "@/components/search-packs";
 import { SignOutButton } from "@/components/sign-out-button";
 import {
   TopicNavProvider,
@@ -71,6 +72,7 @@ export function AppShell({
                 ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
+                <SearchPacks />
                 <MoodControl />
                 {actions}
                 <SignOutButton />

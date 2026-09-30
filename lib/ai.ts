@@ -4,10 +4,20 @@ import { generateObject, generateText, NoObjectGeneratedError } from "ai";
 import { z } from "zod";
 
 import {
+  ASK_OUTPUT_TOKENS,
   assertGenerationBudget,
   estimateTokensFromText,
   generationBudget,
 } from "@/lib/ai-budgets";
+import {
+  buildAskPrompt,
+  groundAnswer,
+  parseAskAnswer,
+  selectAskSources,
+  type AskHistoryMessage,
+  type AskPagesSent,
+  type AskSourceInput,
+} from "@/lib/ask";
 import {
   dropUnknownSourceCitations,
   type CitationSourceRef,
@@ -15,6 +25,7 @@ import {
 } from "@/lib/citations";
 import {
   GenerationError,
+  publicGenerationErrorMessage,
   toGenerationError,
 } from "@/lib/generation-errors";
 import {
@@ -51,6 +62,7 @@ import {
   MIN_GROUNDING_VERIFY_MS,
 } from "@/lib/learning-limits";
 import {
+  PROMPT_LIMITS,
   PromptInputLimitError,
   assertPromptWithinLimit,
   cardedPrompt,
@@ -62,7 +74,7 @@ import {
 import { hasPageMarkers } from "@/lib/source-markers";
 import type { CardedItem, TestMeItem } from "@/lib/types";
 
-export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision";
+export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision" | "ask";
 
 export type StudyPackStep = "locked_in" | "summary" | "test_me" | "carded";
 
@@ -149,6 +161,7 @@ function modelIdForPurpose(purpose: GenerationPurpose): string {
     case "locked_in":
       return env.AI_MODEL_LOCKED_IN;
     case "summary":
+    case "ask":
       return env.AI_MODEL_SUMMARY;
     case "json":
       return env.AI_MODEL_JSON;
@@ -255,6 +268,8 @@ export async function generateTextFromPrompt(
     purpose: GenerationPurpose;
     signal?: AbortSignal;
     sourceTokens?: number;
+    /** Overall deadline across attempts; defaults to the generation step deadline. */
+    deadlineMs?: number;
   } = { purpose: "locked_in" },
 ): Promise<{ text: string; modelUsed: string }> {
   assertPromptWithinLimit(prompt);
@@ -266,7 +281,7 @@ export async function generateTextFromPrompt(
     {
       contextWindowTokens: contextWindowForRequest(modelId),
       attempts: MAX_GENERATION_ATTEMPTS,
-      deadlineMs: GENERATION_STEP_DEADLINE_MS,
+      deadlineMs: options.deadlineMs ?? GENERATION_STEP_DEADLINE_MS,
       safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
     },
   );
@@ -1010,6 +1025,103 @@ export async function generateCarded(
     elementSchema: cardedItemSchema,
   });
   return result.items;
+}
+
+/** Ask answers must finish inside the route's 120 s function limit. */
+export const ASK_DEADLINE_MS = 90_000;
+
+/** Room kept for page labels and joins the prompt adds around each source. */
+const ASK_PROMPT_SLACK_CHARS = 2_000;
+const ASK_PER_SOURCE_SLACK_CHARS = 200;
+
+/**
+ * Characters of source text Ask may send: the model's context window minus
+ * the answer, the safety margin and the rest of the prompt (instructions,
+ * history, question), capped by the combined source limit.
+ */
+export function askSourceCharBudget(args: {
+  sources: readonly AskSourceInput[];
+  history: readonly AskHistoryMessage[];
+  question: string;
+}): number {
+  const windowTokens = contextWindowForRequest(modelIdForPurpose("ask"));
+  const promptTokens = Math.min(windowTokens, PROMPT_LIMITS.maxPromptTokens) -
+    ASK_OUTPUT_TOKENS - GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS;
+  const frame = buildAskPrompt({
+    sources: args.sources.map((source) => ({ ...source, text: "" })),
+    history: args.history,
+    question: args.question,
+  });
+  const overhead = frame.length + ASK_PROMPT_SLACK_CHARS + args.sources.length * ASK_PER_SOURCE_SLACK_CHARS;
+  return Math.max(0, Math.min(PROMPT_LIMITS.maxCombinedSourceChars, promptTokens * 4 - overhead));
+}
+
+export type AskAnswer = {
+  markdown: string;
+  refused: boolean;
+  citationSources: CitationSourceRef[];
+  pagesSent: AskPagesSent;
+  modelUsed: string;
+};
+
+/**
+ * Answer a question from the pack's own sources in one model request. The
+ * answer is grounded with the text check only; the verifier is never called.
+ * A refusal is returned as written, without grounding tags.
+ */
+export async function answerFromPack(args: {
+  /** Pack sources in citation order; entry i is cited as S<i+1>. */
+  sources: readonly AskSourceInput[];
+  history: readonly AskHistoryMessage[];
+  question: string;
+  /** Text the pages are ranked against; defaults to the question. */
+  rankingText?: string;
+  signal?: AbortSignal;
+}): Promise<AskAnswer> {
+  const budgetChars = askSourceCharBudget(args);
+  const { texts, pagesSent } = selectAskSources(args.sources, args.rankingText ?? args.question, budgetChars);
+  const prompt = buildAskPrompt({ sources: texts, history: args.history, question: args.question });
+  const { text, modelUsed } = await generateTextFromPrompt(prompt, {
+    purpose: "ask",
+    signal: args.signal,
+    deadlineMs: ASK_DEADLINE_MS,
+  });
+  const parsed = parseAskAnswer(text, args.sources.length);
+  const citationSources = citationSourcesFor(args.sources);
+  if (!parsed.refused && !parsed.markdown) {
+    throw new GenerationError("unavailable", "The model returned no answer text. Try again.", true);
+  }
+  if (parsed.refused) {
+    return { markdown: parsed.markdown, refused: parsed.refused, citationSources, pagesSent, modelUsed };
+  }
+  const grounded = await groundAnswer(
+    parsed.markdown,
+    texts.map((source, i) => ({ index: i + 1, text: source.text })),
+  );
+  return { markdown: grounded.markdown, refused: false, citationSources, pagesSent, modelUsed };
+}
+
+export const ASK_FREE_LIMIT_MESSAGE = "The free model limit is used up for now. Try again later today.";
+
+/**
+ * The authored message and status for a failed Ask request. A provider 429
+ * means the free quota is spent; everything else uses the generation wording.
+ */
+export function publicAskError(error: unknown): { message: string; status: number } {
+  const classified = toGenerationError(error);
+  switch (classified.code) {
+    case "rate_limited":
+      return { message: ASK_FREE_LIMIT_MESSAGE, status: 429 };
+    case "timeout":
+      return { message: "The answer took too long. Try again in a moment.", status: 504 };
+    case "token_limit":
+      return { message: "This question is too long for the model with your sources. Try a shorter question.", status: 413 };
+    default:
+      return {
+        message: publicGenerationErrorMessage(classified.code, classified.message) ?? "Ask failed. Try again shortly.",
+        status: 502,
+      };
+  }
 }
 
 export { GenerationError };
