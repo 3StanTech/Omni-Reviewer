@@ -216,6 +216,31 @@ describe("groundAnswer", () => {
     expect(lines[6]).toBe(`| Bananas | Grow best in tropical climates with heavy rainfall ${UNSOURCED_TOKEN} |`);
   });
 
+  it("does not tag a colon lead-in before cited bullets", async () => {
+    const markdown = [
+      "Antimicrobials that exhibit a PAE include:",
+      "",
+      "- Aminoglycosides show a post-antibiotic effect against gram-negative bacilli. [S1 p.1]",
+      "- Fluoroquinolones show a post-antibiotic effect against gram-negative bacilli. [S1 p.1]",
+      "- Macrolides show a post-antibiotic effect against many gram-positive cocci. [S1 p.3]",
+      "- Tetracyclines show a post-antibiotic effect against many gram-positive cocci. [S1 p.3]",
+      "- Carbapenems show a post-antibiotic effect against gram-positive cocci only. [S1 p.3]",
+      "- Rifampin shows a post-antibiotic effect against mycobacteria and staphylococci. [S1 p.3]",
+      "- Vancomycin shows a post-antibiotic effect against gram-positive cocci only. [S1 p.3]",
+    ].join("\n");
+    const { markdown: out, report } = await groundAnswer(markdown, sources);
+    expect(out).toBe(markdown);
+    expect(report.unsourced).toBe(0);
+  });
+
+  it("still tags uncited bullets after a colon lead-in", async () => {
+    const markdown = "Common examples include:\n\n- Bananas grow best in tropical climates with heavy rainfall.\n- Short item here.";
+    const { markdown: out } = await groundAnswer(markdown, sources);
+    expect(out).toBe(
+      `Common examples include:\n\n- Bananas grow best in tropical climates with heavy rainfall. ${UNSOURCED_TOKEN}\n- Short item here.`,
+    );
+  });
+
   it("never calls the verifier or the document grounder", async () => {
     const groundSpy = vi.spyOn(grounding, "groundDocument");
     const result = await groundAnswer("Bananas grow best in tropical climates with heavy rainfall every year.", sources);

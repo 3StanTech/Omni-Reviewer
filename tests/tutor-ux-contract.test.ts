@@ -223,6 +223,21 @@ describe("tutor wiring", () => {
     expect(provider).toMatch(/setPending\(false\);\s*setPendingQuestion\(null\);/);
   });
 
+  it("counts saved answers in the Notes label without a request on pack load", () => {
+    const page = read("app/topics/[topicId]/reviewers/[reviewerId]/page.tsx");
+    expect(page).toContain("countSavedAnswers(reviewerId, userId)");
+    expect(page).toContain("savedAnswerCount={savedAnswerCount}");
+    expect(read("components/reviewer-workspace.tsx")).toContain("initialSavedCount={savedAnswerCount}");
+    const provider = read("components/ask-provider.tsx");
+    expect(provider).toContain('savedStatus === "ready" ? saved.length : initialSavedCount');
+    const panel = read("components/study-side-panel.tsx");
+    expect(panel).toContain("Notes ({active.length + savedAnswerCount})");
+    const queries = read("lib/tutor-queries.ts");
+    const count = queries.slice(queries.indexOf("export async function countSavedAnswers"));
+    expect(count.slice(0, count.indexOf("\n}\n"))).toContain("ownedReviewer(reviewerId, userId)");
+    expect(count.slice(0, count.indexOf("\n}\n"))).toContain("isNotNull(packChatMessages.savedAt)");
+  });
+
   it("scrolls to an existing answer when the server reuses one", () => {
     const provider = read("components/ask-provider.tsx");
     expect(provider).toContain("if (data.reused)");

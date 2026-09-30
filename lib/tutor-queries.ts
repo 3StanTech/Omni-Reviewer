@@ -188,6 +188,22 @@ export async function listSavedAnswers(reviewerId: string, userId: string): Prom
   );
 }
 
+/** How many answers are saved to Notes, for the Notes label before the thread loads. */
+export async function countSavedAnswers(reviewerId: string, userId: string): Promise<number> {
+  if (!isUuid(reviewerId)) return 0;
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(packChatMessages)
+    .where(and(
+      eq(packChatMessages.reviewerId, reviewerId),
+      eq(packChatMessages.userId, userId),
+      eq(packChatMessages.role, "assistant"),
+      isNotNull(packChatMessages.savedAt),
+      ownedReviewer(reviewerId, userId),
+    ));
+  return Number(row?.count ?? 0);
+}
+
 /** The newest uncleared answer for an Explain or Ask why key, for a free repeat. */
 export async function findReusableAnswer(
   reviewerId: string,

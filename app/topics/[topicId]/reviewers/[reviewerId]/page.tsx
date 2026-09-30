@@ -18,6 +18,7 @@ import {
   listViewMetaByReviewer,
   serializeCard,
 } from "@/lib/queries";
+import { countSavedAnswers } from "@/lib/tutor-queries";
 import type { IngestStatus, SourceKind } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -46,7 +47,7 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer || reviewer.topicId !== topicId) notFound();
 
-  const [sourceRows, viewMeta, cards, testAttemptStats, topics, topicPacks, mastery] =
+  const [sourceRows, viewMeta, cards, testAttemptStats, topics, topicPacks, mastery, savedAnswerCount] =
     await Promise.all([
       listSourcesForUi(reviewerId, userId),
       listViewMetaByReviewer(reviewerId, userId),
@@ -55,6 +56,7 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
       listTopics(userId),
       listReviewersByTopic(topicId, userId),
       getMasteryForReviewer(reviewerId, userId),
+      countSavedAnswers(reviewerId, userId),
     ]);
   const dueTodayCount = topicPacks.reduce(
     (sum, pack) => sum + pack.dueTodayCount,
@@ -131,6 +133,7 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
             : null
         }
         examDate={reviewer.examDate}
+        savedAnswerCount={savedAnswerCount}
       initialMode={initialMode}
         initialCards={cards.map(serializeCard)}
         initialTestAttemptStats={testAttemptStats.map((stats) => ({

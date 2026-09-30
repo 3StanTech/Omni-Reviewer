@@ -34,6 +34,8 @@ type AskApi = {
   ask: (request: AskRequest) => Promise<boolean>;
   saved: SavedAnswer[];
   savedStatus: SavedStatus;
+  /** Saved answers: the server's count until the thread loads, then the live list length. */
+  savedCount: number;
   /** Loads the thread and saved answers once. Nothing loads until this or open() runs. */
   ensureLoaded: () => void;
   /** Take an answer out of Notes. Rejects when the server refuses. */
@@ -98,6 +100,8 @@ type AskProviderProps = {
   reviewerId: string;
   /** The pack's section mastery, for the "Explain <weakest section>" starter chip. */
   sections?: SectionMastery[] | null;
+  /** The server's count of saved answers, used until the thread loads. */
+  initialSavedCount?: number;
   /** Called after "Make a card" creates a card, so Carded can refresh. */
   onCardCreated?: () => void;
   children: ReactNode;
@@ -108,7 +112,7 @@ export function AskProvider(props: AskProviderProps) {
   return <AskProviderInner key={props.reviewerId} {...props} />;
 }
 
-function AskProviderInner({ reviewerId, sections = null, onCardCreated, children }: AskProviderProps) {
+function AskProviderInner({ reviewerId, sections = null, initialSavedCount = 0, onCardCreated, children }: AskProviderProps) {
   const askUrl = `/api/reviewers/${encodeURIComponent(reviewerId)}/ask`;
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessageDto[]>([]);
@@ -306,9 +310,11 @@ function AskProviderInner({ reviewerId, sections = null, onCardCreated, children
     return weak ? [...BASE_STARTER_CHIPS, `Explain ${weak}`] : BASE_STARTER_CHIPS;
   }, [sections]);
 
+  const savedCount = savedStatus === "ready" ? saved.length : initialSavedCount;
+
   const api = useMemo<AskApi>(
-    () => ({ reviewerId, isOpen, pending, open, close, ask, saved, savedStatus, ensureLoaded, removeSaved }),
-    [ask, close, ensureLoaded, isOpen, open, pending, removeSaved, reviewerId, saved, savedStatus],
+    () => ({ reviewerId, isOpen, pending, open, close, ask, saved, savedStatus, savedCount, ensureLoaded, removeSaved }),
+    [ask, close, ensureLoaded, isOpen, open, pending, removeSaved, reviewerId, saved, savedCount, savedStatus],
   );
 
   return (

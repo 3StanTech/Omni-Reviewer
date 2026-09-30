@@ -223,6 +223,7 @@ export function parseAskAnswer(raw: string, sourceCount: number): { refused: boo
 }
 
 const MIN_ANSWER_CLAIM_WORDS = 6;
+const LEAD_IN_END = /:\s*(?:\*\*|__|[*_"'\u201d\u2019)\]])*\s*$/;
 
 function claimWords(text: string): number {
   return stripCitations(text)
@@ -235,7 +236,8 @@ function claimWords(text: string): number {
  * A claim sentence (6 words or more, same claim units as study documents) that
  * carries a citation is trusted and never tagged. One with no citation gets
  * `[[unsourced]]` right after the sentence (there is no citation to precede, so
- * the placement matches `groundDocument`). Existing tokens are kept. Study documents keep the full
+ * the placement matches `groundDocument`). An uncited sentence ending in a colon (a list lead-in) is left alone.
+ * Existing tokens are kept. Study documents keep the full
  * lexical and verifier check in `lib/grounding.ts`; this is deliberately
  * lighter because chat answers are cited by the model against pages it read.
  * The sources argument is unused and kept so callers need not change.
@@ -262,6 +264,9 @@ export function groundAnswer(
       report.unsourced += 1;
     } else if (parseCitations(claim.text).length > 0) {
       report.cited += 1;
+    } else if (LEAD_IN_END.test(claim.text)) {
+      // A sentence ending in a colon introduces a list, table or quote; it states no fact.
+      report.lexicalSupported += 1;
     } else {
       report.unsourced += 1;
       inserts.push(claim.end);

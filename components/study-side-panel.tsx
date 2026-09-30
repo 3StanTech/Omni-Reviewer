@@ -117,6 +117,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
   const [open, setOpen] = useState<PanelKind | null>(null);
   const headings = useMemo(() => studyOutline(markdown), [markdown]);
   const sectionMastery = useContext(SectionMasteryContext);
+  const savedAnswerCount = useOptionalAsk()?.savedCount ?? 0;
   const active = annotations.filter((annotation) => !annotation.archivedAt);
   const earlier = annotations.filter((annotation) => annotation.archivedAt);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -199,7 +200,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
   return (
     <div className="study-side-panel flex flex-wrap gap-2" aria-label="Study navigation">
       <button type="button" className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" aria-expanded={open === "contents"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("contents", event)}>Contents</button>
-      <button type="button" className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" aria-expanded={open === "notes"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("notes", event)}>Notes ({active.length})</button>
+      <button type="button" className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" aria-expanded={open === "notes"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("notes", event)}>Notes ({active.length + savedAnswerCount})</button>
       {earlier.length || earlierCursor ? <button type="button" className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" aria-expanded={open === "earlier"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("earlier", event)}>Earlier version ({earlier.length})</button> : null}
       {open ? (
         <>

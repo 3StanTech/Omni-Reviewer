@@ -59,6 +59,8 @@ type ReviewerWorkspaceProps = {
   initialMode?: ViewKind;
   initialCards: SerializedCard[];
   initialTestAttemptStats: SerializedAttemptStats[];
+  /** Answers saved to Notes from Ask, counted on the server so the Notes label is right before Ask loads. */
+  savedAnswerCount?: number;
 };
 
 export type SerializedCard = {
@@ -153,6 +155,7 @@ export function ReviewerWorkspace({
   initialCards,
   initialTestAttemptStats,
   initialMode = "locked_in",
+  savedAnswerCount = 0,
 }: ReviewerWorkspaceProps) {
   const sectionMastery = useSectionMastery();
   const [sources, setSources] = useState(initialSources);
@@ -536,7 +539,7 @@ export function ReviewerWorkspace({
   );
 
   return (
-    <AskProvider reviewerId={reviewerId} sections={sectionMastery} onCardCreated={refreshCards}>
+    <AskProvider reviewerId={reviewerId} sections={sectionMastery} initialSavedCount={savedAnswerCount} onCardCreated={refreshCards}>
     <div data-draft-guarded className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
       <div className="space-y-1">
         <div className="flex flex-wrap items-start justify-between gap-3">
