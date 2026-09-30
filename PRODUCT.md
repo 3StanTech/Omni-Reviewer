@@ -31,6 +31,8 @@ Tristan and invited friends studying late at night from notes, PDFs, slides, and
 - `/` - topic tabs, create/rename/delete topic, list of reviewers in the selected topic, create/rename/delete reviewer.
 - `/topics/[topicId]/reviewers/[reviewerId]` - pack workspace: sources behind a drawer once generated, generate/regenerate, four study modes.
 
+The header has a **Search packs** button (see Search packs below). Pack pages also carry a fixed **Ask** pill in all four modes (see Ask this pack below). The desk never shows the pill.
+
 Topic tabs are primary navigation. The reviewer workspace collapses the library while studying and exposes sources through one labelled control. A reviewer is a workspace, not a metrics dashboard.
 
 ## Ingest rules (v1)
@@ -116,13 +118,14 @@ A one-line bar on the desk sums up the day: cards due, weak sections, the neares
 - Redo Locked In rebuilds Locked In, then Summary, Test Me, and Carded from current sources.
 - Redo Summary / Test Me / Carded rewrites only that mode from persisted upstream (Locked In or Summary).
 - Disabled when the required upstream is missing, or when no source is `ready` for Locked In / Generate.
+- Cards made from Ask answers are user-authored (edited), so Redo Carded keeps them under the same protection rules. The protected-cards confirmation therefore lists them too.
 - Locked In, Summary, and individual card faces can be edited. Save and Cancel are explicit. A failed save keeps the draft on screen. A saved edit increments its revision. Edited or pinned content is never silently overwritten. Redo requires an explicit confirmation and reports downstream modes as stale after a Locked In edit.
 - One untimed Test Me sitting is active at a time. The same answer saved twice is kept once. A different answer from another tab is rejected and the first answer stays. Retry missed opens only the misses from the completed sitting, and it refuses while a different sitting is still in progress. Start again replaces the active sitting on purpose.
 - Same-document Back and Forward keep a dirty Locked In or Summary draft where the browser allows that interception. Other browsers still warn on leave and on in-app links.
 - Clear error when the pack is video/audio only or has no ingested text.
 - Pipeline (server, full pack): ready sources → Locked In → Summary and Test Me together in one claimed step → Carded; each mode is saved as it finishes. If Test Me fails while Summary succeeds, Carded still runs and the job ends partial so Resume can fill Test Me.
 - Models are OpenRouter `:free` ids (defaults and optional fallbacks). Do not use `openrouter/auto` as a primary model. Defaults were probed live with `data_collection: deny` on 2026-09-27: `dots-studio/dots-3-note-preview:free`, falling back to `qwen/qwen3.8-27b:free` and `cohere/north-mini-code:free`. Requests turn model reasoning off so the output budget goes to the answer. The request budget uses the smallest verified context window among the primary and its fallbacks.
-- The free OpenRouter tier allows 50 free-model requests per day on this key. A full pack uses about six (four steps plus up to two grounding checks). Reading scanned pages and photos adds about one request per 8 image pages, from the same daily cap.
+- The free OpenRouter tier allows 50 free-model requests per day on this key. A full pack uses about six (four steps plus up to two grounding checks). Reading scanned pages and photos adds about one request per 8 image pages, from the same daily cap. Each Ask, Explain or Ask why that is not reused costs one request from the same cap, so heavy asking can delay a Generate the same day. Search makes no model calls.
 
 ## Citations and grounding
 
@@ -134,6 +137,44 @@ A one-line bar on the desk sums up the day: cards due, weak sections, the neares
 - Citation chips open the source in a modal. PDFs render the cited page in the browser from the private file stream.
 - Test Me explanations and card backs end with a citation. After a wrong answer, **Open slide N** opens the cited page. Card citations appear only after the flip.
 - Locked In and Summary download as PDF (browser print) or Markdown, with options for highlights and notes and for citations.
+
+## Ask this pack
+
+A tutor for one pack. It answers from that pack's sources and nowhere else.
+
+### Ask contract
+
+- **Sources only.** Answers use the pack's Ready sources that have meaningful text, numbered S1..Sn in upload order. Stored source text is reused; nothing is re-read by vision. Outside knowledge is never used, even when the model knows the answer.
+- **Cites.** Every factual sentence ends with a citation such as `[S1 p.14]`. Chips open the cited page in the source modal, as elsewhere. Each answer stores the source list it was written against, so chips stay correct after sources are added or removed.
+- **Refuses.** When the sources do not cover the question, the answer is labelled **Not in your slides** with fixed copy: "Your lecture does not cover this. I will not answer from outside knowledge here. Check your reference or ask your professor." It names what the lecture does cover nearby, and offers no Make a card or Save to Notes.
+- **Allowed shapes.** Mnemonics, comparisons and "what will likely be asked" are fine when every fact comes from the sources and is cited. "Likely asked" follows what the slides emphasize, never outside exam knowledge.
+- **Long packs.** If all source text fits the model's budget, all of it is sent. Otherwise the pages that best match the question (and the previous question) are sent, in page order, with no extra model call.
+- **One thread per pack.** The last 6 messages of the current thread are sent as context, each cut to 2,000 characters. Questions are limited to 2,000 characters. The thread reloads with the pack.
+- **Clear chat.** Hides the thread. Answers saved to Notes stay. Nothing is hard-deleted, and a repeat Explain after Clear asks the model again.
+- **One request per question, no verifier.** The answer is not re-checked by the claim verifier or the text-overlap check; the prompt requires a citation on every fact. The answer arrives whole (not streamed) after a "Reading your slides" pending bubble. On failure nothing is stored and the composer keeps the draft with the error. When the free limit is used up, the message is "The free model limit is used up for now. Try again later today."
+- **Tags on answers.** A cited sentence is trusted. A sentence of 6 words or more with no citation gets **Not from your uploaded sources**; shorter sentences are never tagged. Text overlap is not used on answers because it flags correct, cited explanations, especially on slides read from images. The tag is informational: chat answers are not editable, so there is no Keep or Delete.
+- **Starter chips.** "What will likely be asked?" and "Make me a mnemonic for this lecture", plus "Explain <weakest section>" when mastery has a weak section. They make no request until chosen.
+- **Keys and layout.** **A** opens the panel; it is ignored with a modifier key, while typing in a field, or while a dialog is open. **Escape** or the collapse arrow closes it and focus returns to the pill. On desktop it is a right-hand side panel; at 640 px or less it is a bottom sheet. Keys typed in the panel never reach Carded or Test Me, so Space does not flip a card.
+
+### Explain this and Ask why
+
+- **Explain this** appears after a wrong Test Me answer (also in the in-run panel of a timed run) and on a flipped Carded card. It opens Ask with a short bubble, "Explain: <question start>", and explains the item from the current sources. Stored citations are not sent, because their S numbers may not match the pack's current order.
+- **Ask why** is an action on **Not from your uploaded sources** tags, in documents and inside chat answers. It asks whether the sentence is supported by the slides and what they say about it.
+- **Reuse.** Explain and Ask why are single-turn (no history). Asking the same item or sentence again returns the earlier answer with no model call, and the panel scrolls to it. Clear chat ends reuse.
+
+### Make a card and Save to Notes
+
+- **Make a card** opens an inline form on an answer, front prefilled with the question and back with the answer (unsourced tags removed, citations kept). Both are editable and use the normal card limits. The card is **user-authored** (edited): it joins Carded as a new card due now, counts toward exam pacing like other new cards, and is kept when Carded is redone unless the confirmation to replace protected cards is accepted. A second click on the same answer says **Already a card**.
+- **Save to Notes** stores the answer under **From Ask** in Notes, with its question, working citation chips and **Remove from Notes**. It is not anchored to text in Locked In or Summary. Refused answers cannot be saved.
+
+## Search packs
+
+The header button opens a dialog that searches every pack the signed-in user owns. It makes no model calls and adds no global shortcut.
+
+- **What is indexed.** Ready source text (the first 150,000 characters of each source), Locked In and Summary (the first 150,000 characters of each), and card fronts and backs. Text past that prefix is not searchable. Archived cards and sources still being deleted are left out.
+- **Query.** Plain words with English stemming, trimmed to 2 to 200 characters. A query outside that range returns no results, not an error. The dialog waits briefly after typing (250 ms) and shows at most 30 results, grouped by pack. Arrow keys move, Enter opens, Escape closes.
+- **Links.** A slide hit opens that page in the source modal on the pack. A Locked In or Summary hit opens the mode and scrolls to the nearest section heading. A card hit opens Carded.
+- **Privacy.** Results are scoped to the owner; another user's packs never appear.
 
 ## Auth and security facts
 
@@ -181,6 +222,8 @@ A one-line bar on the desk sums up the day: cards due, weak sections, the neares
 2. Create the first invite: `npm run user:create -- you@example.com 'Name'` and enter its password at the hidden stdin prompt.
 3. Sign in; create topics only after a user exists (`topics.user_id` is required).
 4. Optional migrate path: if existing rows lack owners, add `user_id` nullable first, run `user:create` with `--bootstrap`, then tighten to not null.
+
+5. `0002_tutor` adds the pack chat table and generated search vectors on sources, views and cards. It only adds objects, so a rerun is a no-op. Apply it like any migration: rehearse on a disposable branch first, then production with the owner's go.
 
 Stay on Neon. Friends cannot see each other's packs.
 

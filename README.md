@@ -28,6 +28,10 @@ warnings after a Locked In edit.
 
 Study modes are persisted. Generate or regenerate only on an explicit action.
 
+Each pack also has **Ask this pack**, a tutor that answers only from the pack's
+own sources and cites slide pages, and a header **Search packs** for full-text
+search across every pack. See [Ask this pack and search](#ask-this-pack-and-search).
+
 Locked In and Summary share an explicit Markdown editor with Save changes and
 Cancel. Tables and ordinary Markdown use the formatted editor; documents with
 math or legacy semantic ink use a labelled source-preserving fallback. In
@@ -119,9 +123,30 @@ Schema commands (`db:baseline`, `db:migrate`, `db:backfill-fsrs`, and `db:push` 
 - **Mastery.** Per Locked In `##` section, from the latest Test Me answer for each question and the latest card grade, mapped to sections by the pages they cite. Shown once a section has 3 or more answered items, and weak under 60%. Pack rows show pack mastery and the weakest section, and Contents shows a bar per section. No model calls.
 - **Today.** A one-line bar on the desk (cards due, weak sections, nearest exam, about N minutes) opens a modal with Do first, exam pacing per topic, and Just browse.
 
+## Ask this pack and search
+
+- **Ask, Explain this, Ask why.** One thread per pack. Answers use only the pack's Ready sources, end with slide citations, and refuse ("Not in your slides") when the sources do not cover the question. The full contract is in `PRODUCT.md`.
+- **Save to Notes and Make a card.** A saved answer shows under "From Ask" in Notes. Make a card adds a user-authored card to Carded.
+- **Search packs.** A header dialog that searches slide text, Locked In, Summary and cards across the signed-in user's packs. It makes no model calls.
+
+Routes (all require a session; cross-user ids return 404):
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/reviewers/[id]/ask` | The pack's current thread and its answers saved to Notes |
+| `POST /api/reviewers/[id]/ask` | Ask a question, Explain a missed Test Me item or a card, or Ask why for an unsourced sentence. Returns one JSON response (not streamed). A repeat Explain or Ask why returns the earlier answer with `reused: true` and no model call. `maxDuration` is 120 |
+| `DELETE /api/reviewers/[id]/ask` | Clear chat. Hides the thread; answers saved to Notes stay |
+| `PATCH /api/reviewers/[id]/ask/[messageId]` | Save an answer to Notes, or remove it (`{ saved }`) |
+| `POST /api/reviewers/[id]/ask/[messageId]/card` | Make a card from an answer. Idempotent per answer |
+| `GET /api/search?q=` | Full-text search. A query outside 2 to 200 characters returns no results |
+
+**Free-request quota.** Each Ask, Explain or Ask why that is not reused costs one request from the shared daily free-model cap (50 a day on this key, the same cap Generate and slide reading use). There is no separate app-side limit, so heavy asking can delay a Generate the same day. When the provider reports the limit is used up, Ask shows "The free model limit is used up for now. Try again later today." and keeps the draft. Search, Save to Notes, Make a card, Clear chat and a reused Explain or Ask why make no model calls. Ask does not run the grounding verifier, so a question is exactly one request.
+
+Search reads generated `tsvector` columns, so no write path changed. It indexes the first 150,000 characters of each source and of each Locked In and Summary document, plus card fronts and backs. Text past that prefix is not searchable.
+
 ## Schema changes and migrations
 
-Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as it stood before migrations began, and `0001` adds the FSRS columns.
+Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as it stood before migrations began, `0001` adds the FSRS columns, and `0002_tutor` adds the pack chat table (`pack_chat_messages`) and the generated, GIN-indexed `search_tsv` columns on `sources`, `views` and `cards`.
 
 1. Change the schema in `lib/schema.ts`, then run `npm run db:generate -- --name <x>` and commit the new `drizzle/` files.
 2. Rehearse on a disposable Neon branch, with its direct URL as `DATABASE_URL`:
@@ -129,6 +154,7 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
    - `npm run db:migrate` applies the migrations after the baseline.
 3. Then production, with the owner's go, after a Neon snapshot. Run the same two commands against production's direct URL.
 4. `npm run db:backfill-fsrs` is a one-time run after `0001`. It sets FSRS state on cards that have none by replaying their reviews, and it is idempotent, so a second run changes nothing.
+5. `0002_tutor` only adds objects, so it needs no backfill and rerunning `npm run db:migrate` is a no-op. Adding the `search_tsv` columns computes the vector for existing rows, which is quick at this scale.
 
 `npm run db:push` is for local scratch databases only. Never run it against production.
 
