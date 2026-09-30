@@ -2,6 +2,7 @@ import { relations } from "drizzle-orm";
 import {
   boolean,
   check,
+  customType,
   date,
   integer,
   index,
@@ -15,6 +16,7 @@ import {
   uniqueIndex,
   unique,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -93,6 +95,25 @@ export const testSessionModeEnum = pgEnum("test_session_mode", [
   "timed",
   "untimed",
 ]);
+
+/** Speaker of one Ask message. */
+export const chatRoleEnum = pgEnum("chat_role", ["user", "assistant"]);
+
+/**
+ * Postgres full-text vector. Only used for generated search columns, which
+ * the app never writes and should not select with row reads.
+ */
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
+
+/**
+ * Characters of a text column that feed its search vector. Keeps every value
+ * far below the 1 MB tsvector limit so writes can never fail on indexing.
+ */
+export const SEARCH_INDEX_PREFIX_CHARS = 150_000;
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -181,7 +202,12 @@ export const sources = pgTable("sources", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  /** Search index over the first 150,000 characters of the stored text. */
+  searchTsv: tsvector("search_tsv").generatedAlwaysAs(
+    sql`to_tsvector('english', left(coalesce(extracted_text, ''), 150000))`,
+  ),
 }, (table) => [
+  index("sources_search_tsv_idx").using("gin", table.searchTsv),
   // A pathname is the Blob identity. A second source must never be able to
   // claim the same object, including across reviewers/tenants.
   uniqueIndex("sources_blob_pathname_unique")
@@ -249,8 +275,15 @@ export const views = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /** Search index over the first 150,000 characters; queried for Locked In and Summary. */
+    searchTsv: tsvector("search_tsv").generatedAlwaysAs(
+      sql`to_tsvector('english', left(content, 150000))`,
+    ),
   },
-  (table) => [unique("views_reviewer_id_kind_unique").on(table.reviewerId, table.kind)],
+  (table) => [
+    unique("views_reviewer_id_kind_unique").on(table.reviewerId, table.kind),
+    index("views_search_tsv_idx").using("gin", table.searchTsv),
+  ],
 );
 
 export const annotationColorEnum = pgEnum("annotation_color", [
@@ -386,6 +419,10 @@ export const cards = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /** Search index over both sides of the card. */
+    searchTsv: tsvector("search_tsv").generatedAlwaysAs(
+      sql`to_tsvector('english', front || ' ' || back)`,
+    ),
   },
   (table) => [
     unique("cards_reviewer_id_source_key_unique").on(
@@ -393,6 +430,7 @@ export const cards = pgTable(
       table.sourceKey,
     ),
     index("cards_reviewer_due_idx").on(table.reviewerId, table.dueAt),
+    index("cards_search_tsv_idx").using("gin", table.searchTsv),
   ],
 );
 
@@ -490,6 +528,47 @@ export const cardReviews = pgTable("card_reviews", {
     .where(sql`${table.clientRequestId} IS NOT NULL`),
 ]);
 
+/**
+ * One per-pack Ask thread. A question and its answer are written together in
+ * one statement after the model succeeds. Clear chat hides rows with
+ * `cleared_at`; saved answers stay in Notes. Rows are never hard-deleted by
+ * the app.
+ */
+export const packChatMessages = pgTable("pack_chat_messages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  reviewerId: uuid("reviewer_id")
+    .notNull()
+    .references(() => reviewers.id, { onDelete: "cascade" }),
+  role: chatRoleEnum("role").notNull(),
+  /** Sanitized Markdown source. */
+  content: text("content").notNull(),
+  /** `{ citationSources, refused, origin: { kind, key? }, pagesSent? }`. */
+  contentJson: jsonb("content_json"),
+  modelId: text("model_id"),
+  replyToId: uuid("reply_to_id").references((): AnyPgColumn => packChatMessages.id, {
+    onDelete: "set null",
+  }),
+  /** Explain / Ask why reuse key, for example `test:<itemId>` or `card:<cardId>`. */
+  originKey: text("origin_key"),
+  savedAt: timestamp("saved_at", { withTimezone: true }),
+  clearedAt: timestamp("cleared_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+}, (table) => [
+  index("pack_chat_messages_reviewer_created_idx").on(table.reviewerId, table.createdAt),
+  index("pack_chat_messages_reviewer_origin_idx")
+    .on(table.reviewerId, table.originKey)
+    .where(sql`${table.originKey} IS NOT NULL`),
+  index("pack_chat_messages_reviewer_saved_idx")
+    .on(table.reviewerId, table.savedAt)
+    .where(sql`${table.savedAt} IS NOT NULL`),
+  check("pack_chat_messages_content_length", sql`char_length(${table.content}) <= 20000`),
+]);
+
 export const usersRelations = relations(users, ({ many }) => ({
   topics: many(topics),
   generationJobs: many(generationJobs),
@@ -497,6 +576,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   testAttempts: many(testAttempts),
   cardReviews: many(cardReviews),
   annotations: many(annotations),
+  chatMessages: many(packChatMessages),
 }));
 
 export const topicsRelations = relations(topics, ({ one, many }) => ({
@@ -520,6 +600,7 @@ export const reviewersRelations = relations(reviewers, ({ one, many }) => ({
   cards: many(cards),
   testAttempts: many(testAttempts),
   cardReviews: many(cardReviews),
+  chatMessages: many(packChatMessages),
 }));
 
 export const sourcesRelations = relations(sources, ({ one }) => ({
@@ -613,6 +694,17 @@ export const generationJobsRelations = relations(generationJobs, ({ one }) => ({
   }),
 }));
 
+export const packChatMessagesRelations = relations(packChatMessages, ({ one }) => ({
+  user: one(users, {
+    fields: [packChatMessages.userId],
+    references: [users.id],
+  }),
+  reviewer: one(reviewers, {
+    fields: [packChatMessages.reviewerId],
+    references: [reviewers.id],
+  }),
+}));
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type LoginThrottle = typeof loginThrottles.$inferSelect;
@@ -623,16 +715,17 @@ export type Topic = typeof topics.$inferSelect;
 export type NewTopic = typeof topics.$inferInsert;
 export type Reviewer = typeof reviewers.$inferSelect;
 export type NewReviewer = typeof reviewers.$inferInsert;
-export type Source = typeof sources.$inferSelect;
+/** Row types omit generated search vectors, which reads should not carry. */
+export type Source = Omit<typeof sources.$inferSelect, "searchTsv">;
 export type NewSource = typeof sources.$inferInsert;
 export type BlobReservation = typeof blobReservations.$inferSelect;
-export type StudyView = typeof views.$inferSelect;
+export type StudyView = Omit<typeof views.$inferSelect, "searchTsv">;
 export type NewStudyView = typeof views.$inferInsert;
 export type StudyAnnotation = typeof annotations.$inferSelect;
 export type NewStudyAnnotation = typeof annotations.$inferInsert;
 export type GenerationJob = typeof generationJobs.$inferSelect;
 export type NewGenerationJob = typeof generationJobs.$inferInsert;
-export type Card = typeof cards.$inferSelect;
+export type Card = Omit<typeof cards.$inferSelect, "searchTsv">;
 export type NewCard = typeof cards.$inferInsert;
 export type TestAttempt = typeof testAttempts.$inferSelect;
 export type NewTestAttempt = typeof testAttempts.$inferInsert;
@@ -640,3 +733,5 @@ export type TestSession = typeof testSessions.$inferSelect;
 export type NewTestSession = typeof testSessions.$inferInsert;
 export type CardReview = typeof cardReviews.$inferSelect;
 export type NewCardReview = typeof cardReviews.$inferInsert;
+export type PackChatMessage = typeof packChatMessages.$inferSelect;
+export type NewPackChatMessage = typeof packChatMessages.$inferInsert;

@@ -29,15 +29,76 @@ describe("committed migrations", () => {
     expect(journal.entries[0]?.idx).toBe(0);
   });
 
-  it("baseline SQL creates every pgTable in lib/schema.ts", () => {
+  it("some committed migration creates every pgTable in lib/schema.ts", () => {
     const tables = [...schemaSource.matchAll(/pgTable\(\s*"([^"]+)"/g)].map(
       (m) => m[1],
     );
     expect(tables.length).toBeGreaterThan(0);
-    const baseline = readMigrationSql("0000_baseline");
+    const all = journal.entries.map((entry) => readMigrationSql(entry.tag)).join("\n");
     for (const table of tables) {
-      expect(baseline).toContain(`CREATE TABLE "${table}"`);
+      expect(all).toContain(`CREATE TABLE "${table}"`);
     }
+    expect(readMigrationSql("0000_baseline")).toContain('CREATE TABLE "users"');
+  });
+
+  it("lists 0002_tutor after 0001_fsrs", () => {
+    expect(journal.entries.map((entry) => entry.tag).slice(0, 3)).toEqual([
+      "0000_baseline",
+      "0001_fsrs",
+      "0002_tutor",
+    ]);
+  });
+
+  it("0002_tutor only adds a type, a table, columns, constraints and indexes", () => {
+    const statements = readMigrationSql("0002_tutor")
+      .split("--> statement-breakpoint")
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    expect(statements.length).toBeGreaterThan(0);
+    const addOnly = [
+      /^CREATE TYPE "public"\."chat_role" AS ENUM\('user', 'assistant'\);$/,
+      /^CREATE TABLE "pack_chat_messages" \(/,
+      /^ALTER TABLE "(cards|sources|views)" ADD COLUMN "search_tsv" "tsvector" GENERATED ALWAYS AS \(.+\) STORED;$/,
+      /^ALTER TABLE "pack_chat_messages" ADD CONSTRAINT "[a-z_]+" FOREIGN KEY /,
+      /^CREATE INDEX "[a-z_]+" ON "(pack_chat_messages|cards|sources|views)" USING (btree|gin) /,
+    ];
+    for (const statement of statements) {
+      expect(
+        addOnly.some((pattern) => pattern.test(statement)),
+        statement,
+      ).toBe(true);
+      expect(statement).not.toMatch(/(?<!ON )\b(DROP|RENAME|ALTER COLUMN|TRUNCATE|DELETE|UPDATE)\b/i);
+    }
+  });
+
+  it("0002_tutor defines the chat table, the content check and bounded search vectors", () => {
+    const text = readMigrationSql("0002_tutor");
+    expect(text).toContain("CHECK (char_length(\"pack_chat_messages\".\"content\") <= 20000)");
+    expect(text).toContain(
+      "to_tsvector('english', left(coalesce(extracted_text, ''), 150000))",
+    );
+    expect(text).toContain("to_tsvector('english', left(content, 150000))");
+    expect(text).toContain("to_tsvector('english', front || ' ' || back)");
+    for (const table of ["cards", "sources", "views"]) {
+      expect(text).toContain(
+        `CREATE INDEX "${table}_search_tsv_idx" ON "${table}" USING gin ("search_tsv")`,
+      );
+    }
+    expect(text).toMatch(/"reply_to_id"\) REFERENCES "public"\."pack_chat_messages"\("id"\) ON DELETE set null/);
+    expect(text).toContain('WHERE "pack_chat_messages"."origin_key" IS NOT NULL');
+    expect(text).toContain('WHERE "pack_chat_messages"."saved_at" IS NOT NULL');
+  });
+
+  it("the latest snapshot records the generated search columns", () => {
+    const latest = readSnapshot("0002_tutor") as unknown as {
+      tables: Record<string, { columns: Record<string, { type: string; generated?: { type: string } }> }>;
+    };
+    for (const table of ["cards", "sources", "views"]) {
+      const column = latest.tables[`public.${table}`]?.columns.search_tsv;
+      expect(column?.type, table).toBe("tsvector");
+      expect(column?.generated?.type, table).toBe("stored");
+    }
+    expect(latest.tables["public.pack_chat_messages"]).toBeDefined();
   });
 
   it("no migration drops a table or column", () => {
