@@ -48,6 +48,55 @@ describe("study document interaction contracts", () => {
     expect(guard).not.toContain(".pushState(");
   });
 
+  it("keeps a dirty document draft on this device and restores it after hydration", () => {
+    const document = read("components/study-document.tsx");
+    expect(document).toContain('from "@/lib/study-draft"');
+    expect(document).toContain("studyDraftKey(userId, reviewerId, kind)");
+    expect(document).toContain("writeStudyDraft(");
+    expect(document).toContain("clearStudyDraft(");
+    // The restore reads storage inside an effect, never in initial state.
+    expect(document).not.toMatch(/useState\([^)]*readStudyDraft/);
+    const restoreEffect = document.slice(document.indexOf("readStudyDraft(storage, draftKey)") - 400, document.indexOf("readStudyDraft(storage, draftKey)"));
+    expect(restoreEffect).toContain("useEffect(() => {");
+    expect(restoreEffect).toContain("restoreChecked === draftKey");
+    // Nothing is cleared or written until the restore check for this key ran.
+    expect(document).toContain("if (!draftKey || restoreChecked !== draftKey) return;");
+    expect(document).toContain("window.setTimeout(flushDraft, 400)");
+    expect(document).toContain('window.addEventListener("pagehide", flushDraft)');
+  });
+
+  it("clears the stored draft on Cancel edit, Discard and controller discard", () => {
+    const document = read("components/study-document.tsx");
+    expect(document).toContain("onClick={() => { if (editing) forgetDraft();");
+    expect(document).toMatch(/discard: \(\) => \{\s*forgetDraft\(\);/);
+    expect(document).toMatch(/onClick=\{\(\) => \{ forgetDraft\(\); setError\(null\); setDraft\(view\.content\); setDraftRevision\(view\.revision\); setEditing\(false\); \}\}/);
+    expect(document).toContain("if (restored && !dirty) setRestored(false);");
+  });
+
+  it("clears the stored draft in the save success path before leaving edit mode", () => {
+    const document = read("components/study-document.tsx");
+    const success = document.slice(document.indexOf("const save = useCallback"), document.indexOf("} catch (caught) {", document.indexOf("const save = useCallback")));
+    expect(success).toMatch(/forgetDraft\(\);\s*setEditing\(false\);\s*return true;/);
+    expect(document).toMatch(/const save = useCallback[\s\S]*?\[annotations, draftIsStale, earlierCursor, forgetDraft,/);
+    expect(document).toMatch(/const forgetDraft = useCallback\(\(\) => \{\s*pendingDraft\.current = null;/);
+  });
+
+  it("announces a restored edit with plain copy", () => {
+    const document = read("components/study-document.tsx");
+    const start = document.indexOf("{restored && editing ? (");
+    expect(start).toBeGreaterThan(-1);
+    const bar = document.slice(start, document.indexOf("<StudyEditor", start));
+    expect(bar).toContain('role="status"');
+    expect(bar).toContain("Restored your unsaved edit.");
+    expect(bar).toContain("This document changed since this edit. Copy what you need, then Discard.");
+    // The stale notice follows the live revision, not a snapshot from restore time.
+    expect(bar).toContain("{draftIsStale ? <span");
+    expect(bar).not.toContain("restored.stale");
+    expect(bar).toContain("Discard");
+    expect(bar).toContain("ArrowCounterClockwise");
+    expect(bar).not.toContain("—");
+  });
+
   it("mounts citations, the source viewer, Download, and print utilities", () => {
     const document = read("components/study-document.tsx");
     const tabs = read("components/view-tabs.tsx");

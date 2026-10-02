@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { Presentation, SealCheck } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Presentation, SealCheck } from "@phosphor-icons/react";
 
 import { AnnotationMenu } from "@/components/annotation-menu";
 import { StudyEditor } from "@/components/study-editor";
@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { StudySidePanel } from "@/components/study-side-panel";
 import { readReadingPosition, readingPositionKey, writeReadingPosition } from "@/lib/reading-position";
 import { getLocalStorage } from "@/lib/safe-storage";
+import { clearStudyDraft, readStudyDraft, studyDraftKey, writeStudyDraft, type StudyDraft } from "@/lib/study-draft";
 
 type StudyDocumentProps = {
   userId?: string;
@@ -118,6 +119,25 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     setDraft(view.content);
     setDraftRevision(view.revision);
   }
+  // A dirty edit is kept on this device so it survives Back/Forward, reload and
+  // iOS tab eviction, where the history guard cannot intercept navigation.
+  const draftKey = userId ? studyDraftKey(userId, reviewerId, kind) : null;
+  // State, not a ref: the first clean render (and its StrictMode re-run) must
+  // never erase a stored draft before the restore effect has read it.
+  const [restoreChecked, setRestoreChecked] = useState<string | null>(null);
+  const [restored, setRestored] = useState(false);
+  if (restored && !dirty) setRestored(false);
+  const pendingDraft = useRef<{ key: string; draft: StudyDraft } | null>(null);
+  const flushDraft = useCallback(() => {
+    const pending = pendingDraft.current;
+    if (!pending) return;
+    pendingDraft.current = null;
+    writeStudyDraft(getLocalStorage(), pending.key, pending.draft);
+  }, []);
+  const forgetDraft = useCallback(() => {
+    pendingDraft.current = null;
+    if (draftKey) clearStudyDraft(getLocalStorage(), draftKey);
+  }, [draftKey]);
   const closeSelectionMenu = useCallback(() => {
     setSelection(null);
     setSelectionAnchor(null);
@@ -128,6 +148,39 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     selectionOpenRef.current = selection !== null;
   }, [selection]);
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (!draftKey || restoreChecked !== draftKey) return;
+    if (!dirty) {
+      forgetDraft();
+      return;
+    }
+    pendingDraft.current = { key: draftKey, draft: { content: draft, baseRevision: draftRevision, savedAt: Date.now() } };
+    const timer = window.setTimeout(flushDraft, 400);
+    return () => window.clearTimeout(timer);
+  }, [dirty, draft, draftKey, draftRevision, flushDraft, forgetDraft, restoreChecked]);
+  useEffect(() => {
+    if (!draftKey || restoreChecked === draftKey) return;
+    // Restore after hydration so the server and first client render match.
+    const frame = window.requestAnimationFrame(() => {
+      const storage = getLocalStorage();
+      const stored = readStudyDraft(storage, draftKey);
+      if (stored && stored.content !== view.content) {
+        setDraft(stored.content);
+        setDraftRevision(stored.baseRevision);
+        setEditing(true);
+        setRestored(true);
+      } else if (stored) {
+        clearStudyDraft(storage, draftKey);
+      }
+      setRestoreChecked(draftKey);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [draftKey, restoreChecked, view.content]);
+  useEffect(() => {
+    // Write the last keystrokes when the page is hidden or the document unmounts.
+    window.addEventListener("pagehide", flushDraft);
+    return () => { window.removeEventListener("pagehide", flushDraft); flushDraft(); };
+  }, [flushDraft]);
   useEffect(() => {
     if (!userId || !articleRef.current) return;
     const key = readingPositionKey(userId, reviewerId, kind, view.contentRevision);
@@ -194,6 +247,9 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
         staleKinds: data.staleKinds,
       });
       if (typeof data.view.revision === "number") setDraftRevision(data.view.revision);
+      // Clear now: a save-and-continue can unmount this document before the
+      // not-dirty effect runs, and the unmount flush must have nothing to write.
+      forgetDraft();
       setEditing(false);
       return true;
     } catch (caught) {
@@ -202,13 +258,14 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     } finally {
       setBusy(false);
     }
-  }, [annotations, draftIsStale, earlierCursor, kind, onSaved, reviewerId, view.revision]);
+  }, [annotations, draftIsStale, earlierCursor, forgetDraft, kind, onSaved, reviewerId, view.revision]);
 
   useEffect(() => {
     if (!controllerRef) return;
     controllerRef.current = {
       save: () => save(draft),
       discard: () => {
+        forgetDraft();
         setDraft(view.content);
         setDraftRevision(view.revision);
         setEditing(false);
@@ -218,7 +275,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
       },
     };
     return () => { controllerRef.current = null; };
-  }, [controllerRef, draft, save, view.annotations, view.annotationsNextCursor, view.content, view.revision]);
+  }, [controllerRef, draft, forgetDraft, save, view.annotations, view.annotationsNextCursor, view.content, view.revision]);
 
   const resolveUnsourced = useCallback(async (occurrence: number, action: UnsourcedResolution): Promise<boolean> => {
     if (editing || busy) return false;
@@ -505,7 +562,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
         />
       ) : null}
       <div className="print-hide flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => { setError(null); setDraft(view.content); setDraftRevision(view.revision); setSelection(null); setSelectionAnchor(null); setEditing((current) => !current); }} disabled={busy}>
+        <Button type="button" variant="outline" size="sm" onClick={() => { if (editing) forgetDraft(); setError(null); setDraft(view.content); setDraftRevision(view.revision); setSelection(null); setSelectionAnchor(null); setEditing((current) => !current); }} disabled={busy}>
           {editing ? "Cancel edit" : `Edit ${kind === "summary" ? "Summary" : "Locked In"}`}
         </Button>
         {kind === "locked_in" && !editing ? <Button type="button" variant="outline" size="sm" onClick={() => void togglePinned()} disabled={busy}>{view.isPinned ? "Unpin" : "Pin"}</Button> : null}
@@ -533,6 +590,24 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
         {kind === "locked_in" && view.isPinned ? <span className="text-xs text-warning">Pinned and protected from silent overwrite</span> : null}
         {!editing ? <span className="text-xs text-muted-foreground">Select text to highlight or add a note.</span> : null}
       </div>
+      {restored && editing ? (
+        <div role="status" className="print-hide flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+          <ArrowCounterClockwise weight="bold" className="size-3.5 text-primary" aria-hidden />
+          <p className="min-w-0 flex-1 text-xs text-foreground">
+            Restored your unsaved edit.
+            {draftIsStale ? <span className="text-muted-foreground"> This document changed since this edit. Copy what you need, then Discard.</span> : null}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => { forgetDraft(); setError(null); setDraft(view.content); setDraftRevision(view.revision); setEditing(false); }}
+          >
+            Discard
+          </Button>
+        </div>
+      ) : null}
       {editing ? (
         <StudyEditor value={draft} onChange={setDraft} ariaLabel={`Edit ${kind === "summary" ? "Summary" : "Locked In"} Markdown`} />
       ) : (

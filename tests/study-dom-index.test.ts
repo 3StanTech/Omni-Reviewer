@@ -1,9 +1,13 @@
 import { parseFragment } from "parse5";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { annotationRangeCanRender, renderedStudyText } from "@/lib/annotations";
+import { MarkdownBody } from "@/components/study-markdown";
+import { annotationRangeCanRender, renderedStudyText, type AnnotationRecord } from "@/lib/annotations";
 import {
   buildStudyDomTextIndex,
+  rangeOffsetsForStudyDom,
   type StudyIndexableNode,
 } from "@/lib/study-dom-text";
 
@@ -59,6 +63,41 @@ function articleFromHtml(inner: string): StudyIndexableNode {
 function indexed(inner: string): string {
   return buildStudyDomTextIndex(articleFromHtml(inner)).text;
 }
+
+/** Render the real study Markdown component, as Locked In and Summary do. */
+function renderedArticle(source: string, annotations?: AnnotationRecord[]): StudyIndexableNode {
+  const html = renderToStaticMarkup(createElement("article", null, createElement(MarkdownBody, { source, annotations })));
+  const fragment = parseFragment(html) as Parse5Node;
+  const article = fragment.childNodes?.[0];
+  if (!article || article.nodeName !== "article") throw new Error("expected article root");
+  return wrapParse5(article);
+}
+
+function findTextNode(node: StudyIndexableNode, needle: string): StudyIndexableNode | null {
+  if (node.nodeType === 3) return (node.nodeValue ?? "").includes(needle) ? node : null;
+  for (const child of Array.from(node.childNodes)) {
+    const found = findTextNode(child, needle);
+    if (found) return found;
+  }
+  return null;
+}
+
+const RENDERED_SAMPLES: Array<[string, string]> = [
+  ["headings then paragraphs", "# Title\n\n## I. Intro\n\nFirst para.\n\nSecond para."],
+  ["paragraph then tight list", "Lead in.\n\n- one\n- two\n- three"],
+  ["loose list", "- one\n\n- two\n\n- three"],
+  ["nested list under a tight item", "- Parent\n  - child one\n  - child two\n- Sibling"],
+  ["GFM table", "| Name | Value |\n| --- | --- |\n| Café | **two** |\n| Tea | three |"],
+  ["blockquote with two paragraphs", "Before.\n\n> Quoted one.\n>\n> Quoted two.\n\nAfter."],
+  ["thematic break between paragraphs", "Above the rule.\n\n---\n\nBelow the rule."],
+  ["citations", "Cells divide. [S1 p.1] The nucleus stores DNA.\n\nNext block [S1 p.2]."],
+  ["inline and display math", "Use $x^2$ here.\n\n$$\ny = mx + b\n$$\n\nAfter math."],
+  ["fenced code block", "Before code.\n\n```ts\nconst a = 1;\nconst b = 2;\n```\n\nAfter code."],
+  ["bold and link", "A **bold** word and a [link](https://example.com) here."],
+  ["hard line break", "Before.  \nAfter."],
+  ["task list", "- [ ] Task one\n- [x] Task two\n\nAfter."],
+  ["hard break in a list item and a task list", "- First line  \n  second line\n- Plain\n\n- [ ] Task one\n- [x] Task two\n\nPara one.\n\nPara two."],
+];
 
 describe("study DOM text index", () => {
   it("keeps canonical separators through the MarkdownBody wrapper DIV", () => {
@@ -122,5 +161,73 @@ describe("study DOM text index", () => {
     ].join("");
     expect(indexed(html)).toBe(renderedStudyText(source));
     expect(indexed(html)).toBe(renderedStudyText(plain));
+  });
+
+  describe("real MarkdownBody output", () => {
+    it.each(RENDERED_SAMPLES)("matches canonical text for %s", (_label, source) => {
+      expect(buildStudyDomTextIndex(renderedArticle(source)).text).toBe(renderedStudyText(source));
+    });
+
+    it("keeps the same text when a highlight is rendered", () => {
+      const source = "# Title\n\nFirst para has a phrase.\n\n- one\n- two";
+      const canonical = renderedStudyText(source);
+      const startOffset = canonical.indexOf("phrase");
+      const highlight: AnnotationRecord = {
+        id: "ann-1",
+        reviewerId: "rev-1",
+        viewId: "view-1",
+        kind: "locked_in",
+        contentRevision: 1,
+        startOffset,
+        endOffset: startOffset + "phrase".length,
+        quote: "phrase",
+        prefix: "",
+        suffix: "",
+        color: "sun",
+        note: null,
+        archivedAt: null,
+        archiveReason: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      };
+      const plain = renderToStaticMarkup(createElement(MarkdownBody, { source }));
+      const highlighted = renderToStaticMarkup(createElement(MarkdownBody, { source, annotations: [highlight] }));
+      expect(highlighted).not.toBe(plain);
+      expect(buildStudyDomTextIndex(renderedArticle(source, [highlight])).text).toBe(canonical);
+    });
+
+    it.each([
+      ["a later block", "# Title\n\n## I. Intro\n\nThe mitochondria makes energy.", "mitochondria"],
+      ["text after a hard line break", "Before.  \nAfter.", "After."],
+      ["a paragraph after a task list", "- [ ] Task one\n- [x] Task two\n\nAfter.", "After."],
+      ["a task item", "- [ ] Task one\n- [x] Task two\n\nAfter.", "Task two"],
+    ])("maps a selection in %s to canonical offsets", (_label, source, word) => {
+      const root = renderedArticle(source);
+      const index = buildStudyDomTextIndex(root);
+      const node = findTextNode(root, word);
+      if (!node) throw new Error("expected text node");
+      const startOffset = (node.nodeValue ?? "").indexOf(word);
+      const offsets = rangeOffsetsForStudyDom(
+        root,
+        { startContainer: node, startOffset, endContainer: node, endOffset: startOffset + word.length },
+        index,
+      );
+      expect(offsets).not.toBeNull();
+      expect(renderedStudyText(source).slice(offsets?.startOffset, offsets?.endOffset)).toBe(word);
+    });
+
+    it("maps a point inside a dropped prefix to the start of the text", () => {
+      const source = "Before.  \nAfter.";
+      const root = renderedArticle(source);
+      const index = buildStudyDomTextIndex(root);
+      const node = findTextNode(root, "After.");
+      if (!node) throw new Error("expected text node");
+      const offsets = rangeOffsetsForStudyDom(
+        root,
+        { startContainer: node, startOffset: 0, endContainer: node, endOffset: (node.nodeValue ?? "").length },
+        index,
+      );
+      expect(renderedStudyText(source).slice(offsets?.startOffset, offsets?.endOffset)).toBe("After.");
+    });
   });
 });

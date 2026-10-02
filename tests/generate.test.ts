@@ -41,11 +41,14 @@ vi.mock("@openrouter/ai-sdk-provider", () => ({
   },
 }));
 
+import { NoObjectGeneratedError } from "ai";
+
 import {
   citationSourcesFor,
   generateCarded,
   generateStudyPack,
   generateStudyPackStep,
+  generateTestMe,
   generateTextFromPrompt,
   getModelId,
   visionReadImages,
@@ -80,6 +83,60 @@ function isVerifyPrompt(prompt: string | undefined): boolean {
 
 function verifyCalls() {
   return generateText.mock.calls.filter((call) => isVerifyPrompt((call[0] as { prompt?: string }).prompt));
+}
+
+/** A study document citing pages 1..18 of S1, one cited bullet per page. */
+const EIGHTEEN_PAGE_DOC = [
+  "## Antimicrobials",
+  "",
+  ...Array.from({ length: 18 }, (_, i) => `- Fact ${i + 1}. [S1 p.${i + 1}]`),
+].join("\n");
+
+/** Test Me items as the SDK returns them after the wire schema transform. */
+function quizObjects(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `q${i + 1}`,
+    question: `Question ${i + 1}?`,
+    choices: [`Alpha ${i + 1}`, `Beta ${i + 1}`],
+    answer: `Alpha ${i + 1}`,
+    explanation: `Alpha ${i + 1} is right. [S1 p.1]`,
+  }));
+}
+
+/** Test Me items in the raw wire shape the model writes. */
+function quizWire(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `q${i + 1}`,
+    s1_question: `Question ${i + 1}?`,
+    s2_choices: [`Alpha ${i + 1}`, `Beta ${i + 1}`],
+    s3_explanation: `Alpha ${i + 1} is right. [S1 p.1]`,
+    s4_answer: `Alpha ${i + 1}`,
+  }));
+}
+
+function cardObjects(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `c${i + 1}`,
+    front: `Front ${i + 1}`,
+    back: `Back ${i + 1} [S1 p.1]`,
+  }));
+}
+
+function objectCall(index = 0) {
+  return generateObject.mock.calls[index]![0] as { prompt: string; maxOutputTokens: number };
+}
+
+/** The mocked "ai" module's NoObjectGeneratedError takes only a message. */
+const MockNoObjectGeneratedError = NoObjectGeneratedError as unknown as new (message: string) => Error & {
+  text?: string;
+  response?: { modelId?: string };
+};
+
+function malformedObject(items: unknown[]) {
+  const err = new MockNoObjectGeneratedError("could not parse the response");
+  err.text = `\`\`\`json\n${JSON.stringify(items)}\n\`\`\``;
+  err.response = { modelId: "provider/model" };
+  return err;
 }
 
 const PHARM_SOURCE = joinPages([
@@ -295,6 +352,47 @@ describe("generate", () => {
     expect(cards.length).toBeLessThanOrEqual(100);
     expect(cards[0]?.id).toBe("c0");
     expect(generateObject).toHaveBeenCalledTimes(1);
+  });
+
+  describe("page-scaled item targets", () => {
+    it("keeps 18 Test Me items and 36 cards through the resumable step for an 18-page pack", async () => {
+      generateObject.mockResolvedValueOnce({ object: quizObjects(50), response: { modelId: "provider/model" } });
+      const testMe = await generateStudyPackStep({ step: "test_me", lockedIn: EIGHTEEN_PAGE_DOC });
+      expect(testMe.payload.content).toHaveLength(18);
+      expect(objectCall(0).prompt).toContain("Return about 18 items (never more than 18)");
+      expect(objectCall(0).maxOutputTokens).toBe(18 * 350);
+
+      generateObject.mockResolvedValueOnce({ object: cardObjects(50), response: { modelId: "provider/model" } });
+      const carded = await generateStudyPackStep({ step: "carded", summary: EIGHTEEN_PAGE_DOC });
+      expect(carded.payload.content).toHaveLength(36);
+      expect(objectCall(1).prompt).toContain("Return about 36 cards (never more than 36)");
+      expect(objectCall(1).maxOutputTokens).toBe(36 * 200);
+      expect(generateObject).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps 18 Test Me items and 36 cards through generateTestMe and generateCarded", async () => {
+      generateObject.mockResolvedValueOnce({ object: quizObjects(50), response: { modelId: "provider/model" } });
+      expect(await generateTestMe(EIGHTEEN_PAGE_DOC)).toHaveLength(18);
+      expect(objectCall(0).prompt).toContain("Return about 18 items");
+
+      generateObject.mockResolvedValueOnce({ object: cardObjects(50), response: { modelId: "provider/model" } });
+      expect(await generateCarded(EIGHTEEN_PAGE_DOC)).toHaveLength(36);
+      expect(objectCall(1).prompt).toContain("Return about 36 cards");
+    });
+
+    it("caps local JSON recovery of a malformed object result at 18 and 36", async () => {
+      generateObject.mockRejectedValueOnce(malformedObject(quizWire(50)));
+      const testMe = await generateStudyPackStep({ step: "test_me", lockedIn: EIGHTEEN_PAGE_DOC });
+      expect(testMe.payload.content).toHaveLength(18);
+      expect(testMe.modelUsed).toBe("provider/model");
+
+      generateObject.mockRejectedValueOnce(malformedObject(cardObjects(50)));
+      expect(await generateCarded(EIGHTEEN_PAGE_DOC)).toHaveLength(36);
+
+      generateObject.mockRejectedValueOnce(malformedObject(quizWire(50)));
+      expect(await generateTestMe(EIGHTEEN_PAGE_DOC)).toHaveLength(18);
+      expect(generateObject).toHaveBeenCalledTimes(3);
+    });
   });
 
   it("generates one resumable step and preserves the provider model id", async () => {

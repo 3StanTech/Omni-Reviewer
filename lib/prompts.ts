@@ -1,7 +1,7 @@
 /** Plain prompt strings for the study-pack generation pipeline. No secrets. */
 
 import { MAX_GENERATED_JSON_CHARS } from "@/lib/learning-limits";
-import { classifySourceLength, estimateTokensFromText } from "@/lib/ai-budgets";
+import { studyItemTarget } from "@/lib/ai-budgets";
 import { hasPageMarkers, pageCount } from "@/lib/source-markers";
 
 export const PROMPT_LIMITS = {
@@ -118,6 +118,14 @@ const NO_AUTOMATIC_HIGHLIGHTING =
 export const PHARMACY_GUIDANCE =
   "When the sources cover drugs or pharmacology, give each drug class a GFM table with the columns Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications. Fill every cell only from the sources, cite each row, and write \"Not in sources\" in any cell the sources do not cover.";
 
+const SECTION_COVERAGE =
+  "Cover every ## section in proportion to its length; every section with factual content gets at least one item. Do not cluster items in the opening sections.";
+
+/** Summary length target: about 40% of Locked In, never below 1,500 characters. */
+export function summaryTargetChars(lockedInMarkdown: string): number {
+  return Math.max(1500, Math.round((lockedInMarkdown.length * 0.4) / 100) * 100);
+}
+
 const PAGE_MARKER_NOTE =
   "A line of the form <<<page N>>> marks the start of page or slide N of that source." +
   " Text after a <<<slide image>>> line was read from that page's picture (figures, graphs, equations, handwriting); cite it with that page like any other text.";
@@ -164,12 +172,14 @@ ${sourcesBlock}`
 }
 
 export function summaryPrompt(lockedInMarkdown: string): string {
+  const target = summaryTargetChars(lockedInMarkdown).toLocaleString("en-US");
   return assertPromptWithinLimit(`You are writing a detailed "Summary" study document for last-minute review.
 
 Requirements:
 - Derive the summary **only** from the Locked In document below, not from external knowledge or other sources.
-- Keep it detailed enough to review the full material, but denser and shorter than Locked In.
+- Keep it detailed enough to review the full material. Aim for about ${target} characters, about 40% of Locked In's length.
 - Use clear Markdown with headings that mirror Locked In structure when helpful.
+- Do not number tables or figures from the slides (write 'Table: Sources of antimicrobials', not 'Table 2: Sources of antimicrobials'). Put no citations in headings; cite the bullets and table rows under them.
 - Prefer bullets and tight paragraphs for scannability; preserve critical definitions, numbers, and distinctions.
 - Keep Locked In's citations verbatim: end every factual sentence, bullet, and table row with the exact citation (for example [S1 p.14], [S1 pp.14-15], or [S2]) that the supporting Locked In claim carries. Never create a new citation. Do not copy [[unsourced]] markers; leave those claims uncited.
 - ${PHARMACY_GUIDANCE}
@@ -186,9 +196,7 @@ ${lockedInMarkdown}`
 
 export function testMePrompt(
   lockedInMarkdown: string,
-  maxItems = ({ short: 5, medium: 10, long: 20 } as const)[
-    classifySourceLength(estimateTokensFromText(lockedInMarkdown))
-  ],
+  maxItems = studyItemTarget("test_me", lockedInMarkdown),
 ): string {
   return assertPromptWithinLimit(`You are creating a "Test Me" quiz from the Locked In study document below.
 
@@ -207,8 +215,9 @@ Requirements:
 - When the material is clinical (patients, drugs, diseases), write about a third of the items as short case vignettes (a brief patient scenario followed by the question). Never prefix a question with a label such as "Clinical Case:".
 - State facts directly in questions and explanations. Never refer to the source material itself: no "The document states", "The text states", "The lecture says", "According to Locked In", or similar.
 - End every s3_explanation with the exact citation of the supporting Locked In claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from Locked In; never create new ones.
-- Return no more than ${maxItems} items and no more than 8 choices per item. Keep each question, answer, and explanation concise enough to fit the output budget.
-- Aim for enough items to meaningfully assess the material while staying within that limit; return fewer when the source has fewer distinct facts.
+- Return about ${maxItems} items (never more than ${maxItems}); return fewer only when the material has fewer distinct facts.
+- ${SECTION_COVERAGE}
+- Use no more than 8 choices per item. Keep each question, answer, and explanation concise enough to fit the output budget.
 - ${NO_INVENT_CITATIONS}
 - Output raw JSON only: a single array starting with [ and ending with ].
 
@@ -220,9 +229,7 @@ ${lockedInMarkdown}`
 
 export function cardedPrompt(
   summaryMarkdown: string,
-  maxItems = ({ short: 10, medium: 20, long: 30 } as const)[
-    classifySourceLength(estimateTokensFromText(summaryMarkdown))
-  ],
+  maxItems = studyItemTarget("carded", summaryMarkdown),
 ): string {
   return assertPromptWithinLimit(`You are creating "Carded" flashcards from the Summary document below.
 
@@ -238,8 +245,10 @@ Requirements:
 - For a fill-in-the-blank card, the front may use one or more balanced {{answer}} placeholders. Keep each placeholder short and put the explanation in back.
 - Prefer cloze {{...}} cards for short lists worth memorizing, such as an adverse-effect triad or the drugs in a class.
 - End every back with the exact citation of the supporting Summary claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from the Summary; never create new ones.
-- Return no more than ${maxItems} cards. Keep each front and back below 20,000 characters.
-- Aim for enough cards to cover the Summary while staying within that limit; return fewer when the Summary has fewer distinct facts.
+- Return about ${maxItems} cards (never more than ${maxItems}); return fewer only when the material has fewer distinct facts.
+- ${SECTION_COVERAGE}
+- Skip quotations, epigraphs, mottos and motivational lines. Every card tests a definition, mechanism, drug, dose, number, classification or distinction.
+- Keep each front and back below 20,000 characters.
 - ${NO_INVENT_CITATIONS}
 - Output raw JSON only: a single array starting with [ and ending with ].
 

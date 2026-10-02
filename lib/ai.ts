@@ -8,6 +8,7 @@ import {
   assertGenerationBudget,
   estimateTokensFromText,
   generationBudget,
+  studyItemTarget,
 } from "@/lib/ai-budgets";
 import {
   buildAskPrompt,
@@ -575,6 +576,8 @@ async function generateJsonArray<T extends { id: string }>(args: {
   kind: "test_me" | "carded";
   prompt: string;
   elementSchema: z.ZodType<T>;
+  /** Page-scaled item target from studyItemTarget; also scales the output budget. */
+  maxItems?: number;
 }): Promise<{ items: T[]; modelUsed: string; raw: string }> {
   assertPromptWithinLimit(args.prompt);
   const modelId = modelIdForPurpose("json");
@@ -587,6 +590,7 @@ async function generateJsonArray<T extends { id: string }>(args: {
       attempts: MAX_GENERATION_ATTEMPTS,
       deadlineMs: GENERATION_STEP_DEADLINE_MS,
       safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
+      ...(args.maxItems === undefined ? {} : { maxItems: args.maxItems }),
     },
   );
   assertGenerationBudget(args.prompt, budget);
@@ -887,10 +891,12 @@ export async function generateStudyPackStep(input: {
 
 async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; modelUsed: string }> {
   try {
+    const maxItems = studyItemTarget("test_me", lockedIn);
     const result = await generateJsonArray({
       kind: "test_me",
-      prompt: testMePrompt(lockedIn),
+      prompt: testMePrompt(lockedIn, maxItems),
       elementSchema: testMeWireItemSchema,
+      maxItems,
     });
     // Valid items can still carry "A. ..." labels; the UI numbers choices.
     return { ...result, items: result.items.map((item) => repairQuizAnswer(item) as TestMeItem) };
@@ -910,10 +916,12 @@ async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; model
 
 async function runCarded(summary: string): Promise<{ items: CardedItem[]; modelUsed: string }> {
   try {
+    const maxItems = studyItemTarget("carded", summary);
     return await generateJsonArray({
       kind: "carded",
-      prompt: cardedPrompt(summary),
+      prompt: cardedPrompt(summary, maxItems),
       elementSchema: cardedItemSchema,
+      maxItems,
     });
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
@@ -1008,10 +1016,12 @@ export async function generateSummary(lockedInMarkdown: string): Promise<string>
 export async function generateTestMe(
   lockedInMarkdown: string,
 ): Promise<TestMeItem[]> {
+  const maxItems = studyItemTarget("test_me", lockedInMarkdown);
   const result = await generateJsonArray({
     kind: "test_me",
-    prompt: testMePrompt(lockedInMarkdown),
+    prompt: testMePrompt(lockedInMarkdown, maxItems),
     elementSchema: testMeWireItemSchema,
+    maxItems,
   });
   return result.items;
 }
@@ -1019,10 +1029,12 @@ export async function generateTestMe(
 export async function generateCarded(
   summaryMarkdown: string,
 ): Promise<CardedItem[]> {
+  const maxItems = studyItemTarget("carded", summaryMarkdown);
   const result = await generateJsonArray({
     kind: "carded",
-    prompt: cardedPrompt(summaryMarkdown),
+    prompt: cardedPrompt(summaryMarkdown, maxItems),
     elementSchema: cardedItemSchema,
+    maxItems,
   });
   return result.items;
 }

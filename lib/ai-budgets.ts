@@ -4,6 +4,7 @@ import {
   MAX_GENERATION_PROMPT_TOKENS,
   MAX_GROUNDING_VERIFY_OUTPUT_TOKENS,
 } from "@/lib/learning-limits";
+import { parseCitations } from "@/lib/citations";
 
 export type BudgetPurpose = "locked_in" | "summary" | "test_me" | "carded" | "json" | "vision" | "verify" | "ask";
 
@@ -40,6 +41,8 @@ export type GenerationBudgetLimits = {
   safetyMarginTokens: number;
   attempts: number;
   deadlineMs: number;
+  /** Item target for Test Me or Carded; scales the output budget with it. */
+  maxItems: number;
 };
 
 /** Conservative lower-bound assumptions until a live catalogue is reviewed. */
@@ -91,6 +94,44 @@ function itemTarget(purpose: BudgetPurpose, band: SourceLengthBand): number | un
   return undefined;
 }
 
+/** Output tokens reserved per Test Me question or Carded card when items are page-scaled. */
+const TOKENS_PER_ITEM = { test_me: 350, carded: 200 } as const;
+
+/** Pages counted from one cited range, so a malformed huge range cannot inflate the target. */
+const MAX_PAGES_PER_CITED_RANGE = 50;
+
+/** Distinct (source, page) pairs cited in the Markdown. Whole-source citations such as [S2] are ignored. */
+export function citedPageCount(markdown: string): number {
+  const pages = new Set<string>();
+  for (const citation of parseCitations(markdown)) {
+    if (citation.pageStart === null || !Number.isFinite(citation.pageStart)) continue;
+    const end = Math.min(
+      citation.pageEnd ?? citation.pageStart,
+      citation.pageStart + MAX_PAGES_PER_CITED_RANGE - 1,
+    );
+    for (let page = citation.pageStart; page <= end; page++) {
+      pages.add(`${citation.source}:${page}`);
+    }
+  }
+  return pages.size;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * About one Test Me question and two Carded cards per cited page. Material
+ * without page citations falls back to the source-length bands.
+ */
+export function studyItemTarget(kind: "test_me" | "carded", markdown: string): number {
+  const pages = citedPageCount(markdown);
+  if (pages > 0) {
+    return kind === "test_me" ? clamp(pages, 5, 30) : clamp(pages * 2, 10, 60);
+  }
+  return itemTarget(kind, classifySourceLength(estimateTokensFromText(markdown)))!;
+}
+
 export function generationBudget(
   purpose: BudgetPurpose,
   sourceTokens: number,
@@ -106,12 +147,17 @@ export function generationBudget(
     : purpose === "locked_in" || purpose === "summary"
       ? MAX_GENERATION_TEXT_OUTPUT_TOKENS
       : MAX_GENERATION_JSON_OUTPUT_TOKENS;
+  const bandTarget = outputTarget(purpose, band);
+  const scaled = (purpose === "test_me" || purpose === "carded") && limits.maxItems !== undefined
+    ? { items: limits.maxItems, tokens: limits.maxItems * TOKENS_PER_ITEM[purpose] }
+    : undefined;
+  const maxOutputTokens = Math.min(hardMax, scaled ? Math.max(bandTarget, scaled.tokens) : bandTarget);
   return {
     purpose,
     sourceTokens,
     band,
-    maxOutputTokens: Math.min(outputTarget(purpose, band), hardMax),
-    maxItems: itemTarget(purpose, band),
+    maxOutputTokens,
+    maxItems: scaled?.items ?? itemTarget(purpose, band),
     attempts: merged.attempts,
     deadlineMs: merged.deadlineMs,
     contextWindowTokens: merged.contextWindowTokens,

@@ -17,7 +17,8 @@ export type StudyDomTextIndex = {
   text: string;
   starts: Map<StudyIndexableNode, number>;
   ends: Map<StudyIndexableNode, number>;
-  segments: Map<StudyIndexableNode, { start: number; raw: string }>;
+  /** `skip` counts leading raw characters that render no study text. */
+  segments: Map<StudyIndexableNode, { start: number; raw: string; skip: number }>;
 };
 
 const BLOCK_TAGS = /^(H[1-6]|P|UL|OL|LI|BLOCKQUOTE|PRE|TABLE|THEAD|TBODY|TFOOT|TR|TH|TD|HR|SECTION|DIV|ARTICLE)$/;
@@ -83,6 +84,44 @@ function domSeparator(
   return "";
 }
 
+/** KaTeX display math sits between blocks as a span wrapping <math display="block">. */
+function isDisplayMath(node: StudyIndexableNode): boolean {
+  const tagName = tagNameOf(node);
+  if (!tagName) return false;
+  const math = tagName === "MATH" ? node : node.classList?.contains("katex") ? firstDescendant(node, "math") : null;
+  return Boolean(math && attr(math, "display") === "block");
+}
+
+/**
+ * Whitespace-only text whose existing siblings are all blocks (or display
+ * math) is formatting, not study text. A tight list item keeps its "\n"
+ * because the neighbour before the nested list is phrasing text.
+ */
+function isInterBlockWhitespace(children: StudyIndexableNode[], position: number): boolean {
+  const node = children[position];
+  if (node.nodeType !== TEXT_NODE || (node.nodeValue ?? "").trim() !== "") return false;
+  const neighbours = [children[position - 1], children[position + 1]].filter(
+    (sibling): sibling is StudyIndexableNode => sibling !== undefined,
+  );
+  return neighbours.length > 0 && neighbours.every((sibling) => isBlockElement(sibling) || isDisplayMath(sibling));
+}
+
+/**
+ * Markup adds a character the canonical text lacks at the start of the text
+ * after a hard break ("\n", the BR already counts it) and after a task-list
+ * checkbox (" ").
+ */
+function leadingSkip(children: StudyIndexableNode[], position: number): number {
+  const node = children[position];
+  const previous = children[position - 1];
+  if (node.nodeType !== TEXT_NODE || !previous) return 0;
+  const raw = node.nodeValue ?? "";
+  const previousTag = tagNameOf(previous);
+  if (previousTag === "BR" && raw.startsWith("\n")) return 1;
+  if (previousTag === "INPUT" && raw.startsWith(" ")) return 1;
+  return 0;
+}
+
 /**
  * Walk a rendered study DOM with the same block/table separators as
  * `renderedStudyTextModel`. Wrapper DIVs from the Markdown body are flow
@@ -96,9 +135,9 @@ function indexStudyDom(root: StudyIndexableNode): StudyDomTextIndex {
   let text = "";
   const starts = new Map<StudyIndexableNode, number>();
   const ends = new Map<StudyIndexableNode, number>();
-  const segments = new Map<StudyIndexableNode, { start: number; raw: string }>();
+  const segments = new Map<StudyIndexableNode, { start: number; raw: string; skip: number }>();
 
-  function visit(node: StudyIndexableNode) {
+  function visit(node: StudyIndexableNode, skip = 0) {
     starts.set(node, text.length);
     if (node.nodeType === ELEMENT_NODE) {
       const tagName = tagNameOf(node) ?? "";
@@ -119,24 +158,31 @@ function indexStudyDom(root: StudyIndexableNode): StudyDomTextIndex {
         ends.set(node, text.length);
         return;
       }
-      if (tagName === "ANNOTATION" || attr(node, "aria-hidden") === "true" || isSkippedFootnoteSurface(node) || isSkippedStudySurface(node)) {
+      if (tagName === "ANNOTATION" || tagName === "INPUT" || attr(node, "aria-hidden") === "true" || isSkippedFootnoteSurface(node) || isSkippedStudySurface(node)) {
         ends.set(node, text.length);
         return;
       }
     }
     if (node.nodeType === TEXT_NODE) {
       const raw = node.nodeValue ?? "";
-      segments.set(node, { start: text.length, raw });
-      text += normalizeDocumentText(raw);
+      segments.set(node, { start: text.length, raw, skip });
+      text += normalizeDocumentText(raw.slice(skip));
       ends.set(node, text.length);
       return;
     }
     const parentTag = tagNameOf(node);
     const children = childrenOf(node);
     let previous: StudyIndexableNode | undefined;
-    for (const child of children) {
+    for (const [position, child] of children.entries()) {
+      if (isInterBlockWhitespace(children, position)) {
+        // React Markdown emits "\n" text between block elements. Skip it so
+        // the block separator is computed between the real blocks.
+        starts.set(child, text.length);
+        ends.set(child, text.length);
+        continue;
+      }
       text += domSeparator(parentTag, previous, child);
-      visit(child);
+      visit(child, leadingSkip(children, position));
       previous = child;
     }
     ends.set(node, text.length);
@@ -161,8 +207,8 @@ export function canonicalOffsetForPoint(
 ): number | null {
   const segment = index.segments.get(container);
   if (segment) {
-    const bounded = Math.max(0, Math.min(offset, segment.raw.length));
-    return segment.start + normalizeDocumentText(segment.raw.slice(0, bounded)).length;
+    const bounded = Math.max(segment.skip, Math.min(offset, segment.raw.length));
+    return segment.start + normalizeDocumentText(segment.raw.slice(segment.skip, bounded)).length;
   }
   const children = childrenOf(container);
   if (offset < children.length) return index.starts.get(children[offset]) ?? null;
