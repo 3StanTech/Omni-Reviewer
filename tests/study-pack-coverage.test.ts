@@ -1,10 +1,39 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { citedPageCount, generationBudget, studyItemTarget } from "@/lib/ai-budgets";
-import { MAX_GENERATION_JSON_OUTPUT_TOKENS } from "@/lib/learning-limits";
-import { cardedPrompt, groundingVerifyPrompt, summaryPrompt, summaryTargetChars, testMePrompt } from "@/lib/prompts";
-import { splitSections } from "@/lib/study-sections";
+import { GENERATION_STEP_DEADLINE_MS, MAX_GENERATION_JSON_OUTPUT_TOKENS } from "@/lib/learning-limits";
+import { NO_INVENT_CITATIONS, cardedPrompt, groundingVerifyPrompt, summaryPrompt, summaryHalfPrompt, summaryTargetChars, testMePrompt } from "@/lib/prompts";
+import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
 import { readStudyDocumentMeta } from "@/lib/citations";
+
+vi.mock("server-only", () => ({}));
+
+const generateText = vi.hoisted(() => vi.fn());
+const generateObject = vi.hoisted(() => vi.fn());
+const uncoveredSections = vi.hoisted(() => vi.fn<
+  (markdown: string, items: readonly unknown[], textOf: (item: unknown) => string) =>
+    Array<{ heading: string; markdown: string }>
+>());
+
+vi.mock("ai", () => ({
+  generateText: (...args: unknown[]) => generateText(...args),
+  generateObject: (...args: unknown[]) => generateObject(...args),
+  NoObjectGeneratedError: class NoObjectGeneratedError extends Error {
+    static isInstance(): boolean { return false; }
+  },
+}));
+vi.mock("@openrouter/ai-sdk-provider", () => ({
+  createOpenRouter: () => (modelId: string) => ({ modelId }),
+}));
+// Section coverage itself has its own squad and tests; this suite controls its verdict.
+vi.mock("@/lib/study-coverage", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/study-coverage")>(),
+  uncoveredSections,
+}));
+
+import { generateStudyPackStep, getModelId } from "@/lib/ai";
+import { GenerationError } from "@/lib/generation-errors";
+import type { CardedItem, TestMeItem } from "@/lib/types";
 
 /** One cited bullet per page, pages 1..n of source 1. */
 function citedPages(n: number): string {
@@ -212,5 +241,308 @@ describe("study pack prompts", () => {
   it("Summary target has a 1,500-character floor", () => {
     expect(summaryTargetChars("x".repeat(100))).toBe(1_500);
     expect(summaryTargetChars("x".repeat(19_673))).toBe(7_900);
+  });
+});
+
+describe("Summary half prompt contract", () => {
+  const half = "## Foundations\n\nFact. [S1 p.1]\n\n## Mechanisms\n\nSecond fact. [S1 p.2]";
+  const options = {
+    part: 1 as const, parts: 2 as const,
+    bulletLimits: [{ heading: "Foundations", bullets: 2 }, { heading: "Mechanisms", bullets: 7 }],
+    targetChars: 2_400,
+  };
+  const strictSentence = "Your previous answer was too long or cut off. Use at most half the bullets.";
+
+  it("lists each heading with its own bullet limit and forbids verbatim copying", () => {
+    const prompt = summaryHalfPrompt(half, options);
+    expect(prompt).toContain(half);
+    for (const { heading, bullets } of options.bulletLimits) {
+      const lines = prompt.split("\n").filter((line) => line.includes(heading) && /bullets?/i.test(line));
+      expect(lines.some((line) => new RegExp(`\\b${bullets}\\b`).test(line))).toBe(true);
+    }
+    expect(prompt).toMatch(/(?:never|do not)[^\n]*copy[^\n]*verbatim/i);
+    expect(prompt).toMatch(/(?:under|fewer than|less than) 30 words/i);
+    expect(prompt).toMatch(/(?:at most|no more than|maximum(?: of)?) 6 rows/i);
+    expect(prompt).not.toContain(strictSentence);
+  });
+
+  it("adds the exact strict sentence only for the strict retry", () => {
+    expect(summaryHalfPrompt(half, { ...options, strict: true })).toContain(strictSentence);
+    expect(summaryHalfPrompt(half, { ...options, strict: false })).not.toContain(strictSentence);
+  });
+
+  it("retains pharmacy, highlighting, citation, heading and document-framing rules", () => {
+    const prompt = summaryHalfPrompt(half, { ...options, part: 2 });
+    expect(prompt).toContain("Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications");
+    expect(prompt).toContain("Do not add HTML spans, semantic ink classes, or automatic highlighting");
+    expect(prompt).toContain(NO_INVENT_CITATIONS);
+    expect(prompt).toContain("Do not describe the document itself");
+    expect(prompt).toContain("Put no citations in headings");
+    expect(prompt).toContain("Do not number tables or figures from the slides");
+    expect(prompt).toContain("Keep Locked In's citations verbatim");
+    expect(prompt).not.toContain("—");
+  });
+});
+
+describe.each(["test_me", "carded"] as const)("%s coverage top-up wiring", (kind) => {
+  const markdown = ["Foundations", "Mechanisms", "Applications", "Safety", "Later material"]
+    .map((heading, i) => `## ${heading}\n\n- Distinct supported section fact ${i + 1}. [S1 p.${i + 1}]`)
+    .join("\n\n");
+  const sections = splitSections(markdown).sections;
+  const halves = balancedHalves(markdown);
+  const target = studyItemTarget(kind, markdown);
+  const counts = allocateItems(target, halves);
+  const promptFor = kind === "test_me" ? testMePrompt : cardedPrompt;
+  const freeModel = "z-ai/glm-5.2:free";
+  type Item = TestMeItem | CardedItem;
+  type SdkCall = { prompt: string; model: { modelId: string }; maxRetries: number };
+
+  function item(label: string, page = 1): Item {
+    return kind === "test_me"
+      ? { id: `model-${label}`, question: `${label}?`, choices: ["Alpha", "Beta"], answer: "Alpha", explanation: `Supported ${label}. [S1 p.${page}]` }
+      : { id: `model-${label}`, front: label, back: `Supported ${label}. [S1 p.${page}]` };
+  }
+  function promptText(value: Item): string {
+    return "question" in value ? value.question : value.front;
+  }
+  function sdkCall(index: number): SdkCall {
+    return generateObject.mock.calls[index]![0] as SdkCall;
+  }
+  function baseItems(): Item[] {
+    return counts.flatMap((count, half) => Array.from({ length: count }, (_, i) => item(`Base ${half + 1} item ${i + 1}`)));
+  }
+  function mockBase(extra: Item[] = []) {
+    generateObject.mockResolvedValueOnce({ object: baseItems().slice(0, counts[0]), response: { modelId: freeModel } })
+      .mockResolvedValueOnce({ object: baseItems().slice(counts[0]), response: { modelId: freeModel } });
+    if (extra.length) generateObject.mockResolvedValueOnce({ object: extra, response: { modelId: freeModel } });
+  }
+  async function run(): Promise<Item[]> {
+    const result = await generateStudyPackStep({
+      step: kind,
+      // Carded's selected input must remain the Summary; it cannot top up from Locked In.
+      lockedIn: kind === "test_me" ? markdown : "LOCKED_IN_SHOULD_NOT_BE_USED",
+      summary: kind === "carded" ? markdown : "SUMMARY_SHOULD_NOT_BE_USED",
+      citationSources: [{ index: 1, sourceId: "src-1", filename: "notes.pdf", hasPages: true }],
+    });
+    expect(result.modelUsed).toBe(freeModel);
+    return result.payload.content as Item[];
+  }
+
+  beforeEach(() => {
+    generateText.mockReset();
+    generateObject.mockReset();
+    uncoveredSections.mockReset().mockReturnValue([]);
+    process.env.AUTH_SECRET = "test-auth-secret-0123456789abcdefgh";
+    process.env.AUTH_TRUST_HOST = "true";
+    process.env.DATABASE_URL = "postgresql://user:password@example.test/db";
+    process.env.BLOB_READ_WRITE_TOKEN = "test-blob-token";
+    process.env.AUTH_URL = "http://localhost:3000";
+    process.env.OPENROUTER_API_KEY = "test-key-not-real";
+    process.env.AI_MODEL_LOCKED_IN = freeModel;
+    process.env.AI_MODEL_SUMMARY = freeModel;
+    process.env.AI_MODEL_JSON = freeModel;
+    process.env.AI_MODEL_FALLBACKS = "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,openrouter/free";
+  });
+
+  it("checks the merged base items and makes no top-up when every section is covered", async () => {
+    mockBase();
+    const items = await run();
+    expect(generateObject).toHaveBeenCalledTimes(2);
+    expect(uncoveredSections).toHaveBeenCalledTimes(1);
+    const [input, merged, textOf] = uncoveredSections.mock.calls[0];
+    expect(input).toBe(markdown);
+    expect(merged).toHaveLength(target);
+    const sample = item("Specific fact", 5);
+    expect(textOf(sample)).toContain(promptText(sample));
+    expect(textOf(sample)).toContain("[S1 p.5]");
+    expect(items.map(promptText)).toEqual(baseItems().map(promptText));
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it("tops up only uncovered sections in their original order, one item per section through the same free model", async () => {
+    const missing = [sections[2], sections[4]];
+    const extra = [item("Coverage for Applications", 3), item("Coverage for Later material", 5)];
+    uncoveredSections.mockReturnValue(missing);
+    mockBase(extra);
+    const items = await run();
+    expect(generateObject).toHaveBeenCalledTimes(3);
+    const topUp = sdkCall(2);
+    expect(topUp.prompt).toBe(promptFor(missing.map((section) => section.markdown).join("\n\n"), missing.length));
+    for (const covered of [sections[0], sections[1], sections[3]]) {
+      expect(topUp.prompt).not.toContain(covered.markdown);
+    }
+    expect(topUp.prompt).toContain(`Return about ${missing.length} ${kind === "test_me" ? "items" : "cards"} (never more than ${missing.length})`);
+    const models = generateObject.mock.calls.map((_call, i) => sdkCall(i).model.modelId);
+    expect(models).toEqual([getModelId("json"), getModelId("json"), getModelId("json")]);
+    expect(models.every((model) => model === freeModel && model.endsWith(":free"))).toBe(true);
+    expect(generateObject.mock.calls.every((_call, i) => sdkCall(i).maxRetries === 0)).toBe(true);
+    for (const extraItem of extra) expect(items.map(promptText)).toContain(promptText(extraItem));
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it("requests and accepts exactly one top-up item for one uncovered section", async () => {
+    uncoveredSections.mockReturnValue([sections[4]]);
+    mockBase([item("Last section fact", 5), item("Unrequested extra fact", 5)]);
+    const items = await run();
+    expect(sdkCall(2).prompt).toBe(promptFor(sections[4].markdown, 1));
+    expect(items.map(promptText)).toContain(promptText(item("Last section fact", 5)));
+    expect(items.map(promptText)).not.toContain(promptText(item("Unrequested extra fact", 5)));
+    expect(items).toHaveLength(target + 1);
+  });
+
+  it("keeps the base items when the top-up rejects", async () => {
+    uncoveredSections.mockReturnValue([sections[4]]);
+    mockBase();
+    generateObject.mockRejectedValueOnce(new GenerationError("unknown", "Top-up rejected.", false));
+    const items = await run();
+    expect(items.map(promptText)).toEqual(baseItems().map(promptText));
+    expect(items).toHaveLength(target);
+    expect(generateObject).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([[215_000, true], [215_001, false]] as const)(
+    "with base halves finishing at %i ms, top-up eligibility is %s", async (elapsed, shouldTopUp) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      let completeBase!: (value: { object: Item[]; response: { modelId: string } }) => void;
+      const slow = new Promise<{ object: Item[]; response: { modelId: string } }>((resolve) => { completeBase = resolve; });
+      const missing = [sections[4]];
+      const extra = item("Late coverage fact", 5);
+      uncoveredSections.mockReturnValue(missing);
+      generateObject.mockReturnValueOnce(slow)
+        .mockResolvedValueOnce({ object: baseItems().slice(counts[0]), response: { modelId: freeModel } })
+        .mockResolvedValue({ object: [extra], response: { modelId: freeModel } });
+      const pending = run();
+      try {
+        await vi.advanceTimersByTimeAsync(elapsed);
+        completeBase({ object: baseItems().slice(0, counts[0]), response: { modelId: freeModel } });
+        const items = await pending;
+        expect(uncoveredSections).toHaveBeenCalledTimes(1);
+        expect(generateObject).toHaveBeenCalledTimes(shouldTopUp ? 3 : 2);
+        if (shouldTopUp) {
+          expect(items.map(promptText)).toContain(promptText(extra));
+        } else {
+          expect(items.map(promptText)).toEqual(baseItems().map(promptText));
+          expect(items).toHaveLength(target);
+        }
+      } finally {
+        completeBase({ object: baseItems().slice(0, counts[0]), response: { modelId: freeModel } });
+        await pending;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("caps a top-up's abort deadline to the remaining item-step time and keeps base items on timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let completeBase!: (value: { object: Item[]; response: { modelId: string } }) => void;
+    let completeTopUp: ((value: { object: Item[]; response: { modelId: string } }) => void) | undefined;
+    let topUpSignal: AbortSignal | undefined;
+    const slow = new Promise<{ object: Item[]; response: { modelId: string } }>((resolve) => { completeBase = resolve; });
+    uncoveredSections.mockReturnValue([sections[4]]);
+    generateObject.mockReturnValueOnce(slow)
+      .mockResolvedValueOnce({ object: baseItems().slice(counts[0]), response: { modelId: freeModel } })
+      .mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+        topUpSignal = abortSignal;
+        return new Promise((resolve, reject) => {
+          completeTopUp = resolve;
+          abortSignal.addEventListener("abort", () => reject(abortSignal.reason), { once: true });
+        });
+      });
+    const pending = run();
+    try {
+      await vi.advanceTimersByTimeAsync(200_000);
+      completeBase({ object: baseItems().slice(0, counts[0]), response: { modelId: freeModel } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(generateObject).toHaveBeenCalledTimes(3);
+      const remaining = GENERATION_STEP_DEADLINE_MS - 10_000 - Date.now();
+      expect(remaining).toBe(60_000);
+      expect(topUpSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(remaining - 1);
+      expect(topUpSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(topUpSignal?.aborted).toBe(true);
+      expect((await pending).map(promptText)).toEqual(baseItems().map(promptText));
+      expect(generateObject).toHaveBeenCalledTimes(3);
+    } finally {
+      completeBase({ object: baseItems().slice(0, counts[0]), response: { modelId: freeModel } });
+      completeTopUp?.({ object: [item("Coverage fact", 5)], response: { modelId: freeModel } });
+      await pending;
+      vi.useRealTimers();
+    }
+  });
+
+  if (kind === "test_me") {
+    it("preserves the only page-5 citation when trimming eight base items plus three top-ups to ten", async () => {
+      const input = Array.from({ length: 8 }, (_, i) => `## Section ${i + 1}\n\nFact. [S1 p.${i + 1}]`).join("\n\n");
+      const inputSections = splitSections(input).sections;
+      const inputHalves = balancedHalves(input);
+      const total = studyItemTarget("test_me", input);
+      const inputCounts = allocateItems(total, inputHalves);
+      expect(total).toBe(8);
+      expect(Math.ceil(total * 1.2)).toBe(10);
+      // Distinct prompts with repeated page coverage, rather than identical items deduped by ID.
+      const base = [1, 2, 3, 4, 1, 2, 3, 5].map((page, i) => item(`Base coverage ${i + 1}`, page));
+      const extra = [6, 7, 8].map((page) => item(`Top-up page ${page}`, page));
+      uncoveredSections.mockReturnValue(inputSections.slice(5));
+      generateObject.mockResolvedValueOnce({ object: base.slice(0, inputCounts[0]), response: { modelId: freeModel } })
+        .mockResolvedValueOnce({ object: base.slice(inputCounts[0]), response: { modelId: freeModel } })
+        .mockResolvedValueOnce({ object: extra, response: { modelId: freeModel } });
+      const result = await generateStudyPackStep({
+        step: "test_me", lockedIn: input,
+        citationSources: [{ index: 1, sourceId: "src-1", filename: "notes.pdf", hasPages: true }],
+      });
+      const items = result.payload.content as TestMeItem[];
+      expect(generateObject).toHaveBeenCalledTimes(3);
+      expect(items).toHaveLength(10);
+      for (let page = 1; page <= 8; page++) {
+        expect(items.some((value) => value.explanation.includes(`[S1 p.${page}]`))).toBe(true);
+      }
+      expect(items.map(promptText)).toContain(promptText(base[7]));
+      for (const value of extra) expect(items.map(promptText)).toContain(promptText(value));
+      const dropped = base.filter((value) => !items.some((kept) => promptText(kept) === promptText(value)));
+      expect(dropped).toHaveLength(1);
+      expect(dropped.every((value) => /\[S1 p\.[123]\]/.test((value as TestMeItem).explanation))).toBe(true);
+    });
+  }
+
+  it("caps the final merge at ceil(target * 1.2) while retaining every top-up item", async () => {
+    const missing = kind === "test_me" ? sections.slice(3) : sections.slice(2);
+    const extra = missing.map((section, i) => item(`Top-up ${section.heading}`, i + 3));
+    expect(target + extra.length).toBeGreaterThan(Math.ceil(target * 1.2));
+    uncoveredSections.mockReturnValue(missing);
+    mockBase(extra);
+    const items = await run();
+    expect(items).toHaveLength(Math.ceil(target * 1.2));
+    for (const extraItem of extra) expect(items.map(promptText)).toContain(promptText(extraItem));
+    expect(new Set(items.map((value) => value.id)).size).toBe(items.length);
+  });
+
+  it("deduplicates base and top-up prompts and preserves content IDs across provider item IDs and citation changes", async () => {
+    uncoveredSections.mockReturnValue([sections[4]]);
+    mockBase([item("Shared coverage fact", 5)]);
+    const first = await run();
+    const expected = first.find((value) => promptText(value) === promptText(item("Shared coverage fact", 5)))!;
+    expect(expected).toBeDefined();
+    generateObject.mockReset();
+    mockBase([{
+      ...item("Shared coverage fact", 4), id: "different-provider-id",
+      ...(kind === "test_me" ? { question: "  Shared  coverage fact? [S1 p.4]" } : { front: "  Shared  coverage fact [S1 p.4]" }),
+    } as Item]);
+    const second = await run();
+    const same = second.find((value) => value.id === expected.id);
+    expect(same).toBeDefined();
+    const pattern = kind === "test_me" ? /^q-[0-9a-f]{8}$/ : /^c-[0-9a-f]{8}$/;
+    for (const value of [...first, ...second]) expect(value.id).toMatch(pattern);
+
+    generateObject.mockReset();
+    // The top-up repeats a base prompt with another citation; it must not create a second item.
+    mockBase([{ ...baseItems()[0], id: "top-up-duplicate" }]);
+    const deduplicated = await run();
+    expect(deduplicated).toHaveLength(target);
+    expect(new Set(deduplicated.map((value) => value.id)).size).toBe(target);
+    const originalBase = first.find((value) => promptText(value) === promptText(baseItems()[0]))!;
+    expect(deduplicated.find((value) => value.id === originalBase.id)).toBeDefined();
   });
 });

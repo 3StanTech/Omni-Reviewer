@@ -506,6 +506,8 @@ export type StudyDocumentMeta = {
     unchecked?: number;
     /** Keys of untagged claims left unchecked, so Check again can reach them. */
     uncheckedKeys?: string[];
+    /** Supported claims tagged by the term guard; included in unsourced. */
+    termFlagged?: number;
   };
 };
 
@@ -533,9 +535,10 @@ export function readStudyDocumentMeta(contentJson: unknown): StudyDocumentMeta |
   );
   const raw = (contentJson as { grounding?: unknown }).grounding;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { citationSources };
-  // A malformed key list is dropped; the rest of the report is kept.
-  const { uncheckedKeys, ...rest } = raw as NonNullable<StudyDocumentMeta["grounding"]>;
-  const grounding = isUncheckedKeyList(uncheckedKeys) ? { ...rest, uncheckedKeys } : rest;
+  // A malformed key list or term-guard count is dropped; the rest of the report is kept.
+  const { uncheckedKeys, termFlagged, ...rest } = raw as NonNullable<StudyDocumentMeta["grounding"]>;
+  const grounding: NonNullable<StudyDocumentMeta["grounding"]> = isUncheckedKeyList(uncheckedKeys) ? { ...rest, uncheckedKeys } : rest;
+  if (Number.isSafeInteger(termFlagged) && (termFlagged as number) >= 0) grounding.termFlagged = termFlagged;
   return { citationSources, grounding };
 }
 

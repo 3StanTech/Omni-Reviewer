@@ -190,6 +190,7 @@ function summarySectionBudgets(lockedInMarkdown: string): string {
   return `\nSection budgets (about 40% of each Locked In section):\n${lines.join("\n")}`;
 }
 
+/** Single-request Summary prompt; the Summary step now uses summaryHalfPrompt. */
 export function summaryPrompt(lockedInMarkdown: string): string {
   const target = summaryTargetChars(lockedInMarkdown).toLocaleString("en-US");
   const sectionBudgets = summarySectionBudgets(lockedInMarkdown);
@@ -211,6 +212,57 @@ Requirements:
 # Locked In document
 
 ${lockedInMarkdown}`
+  );
+}
+
+export type SummaryHalfOptions = {
+  part: 1 | 2;
+  parts: 1 | 2;
+  /** Code-set bullet ceilings for each "##" section of this part. */
+  bulletLimits: Array<{ heading: string; bullets: number }>;
+  targetChars: number;
+  /** The retry after a cut-off or over-long answer: half the bullets. */
+  strict?: boolean;
+};
+
+/**
+ * Summary for one part of Locked In. Bullet ceilings per section replace a
+ * character budget: free models ignored character targets and copied Locked In
+ * until the output cap cut them off, but they keep to a bullet count.
+ */
+export function summaryHalfPrompt(half: string, options: SummaryHalfOptions): string {
+  const target = Math.max(0, Math.round(options.targetChars)).toLocaleString("en-US");
+  const limits = options.bulletLimits.length > 0
+    ? `\n- Bullet limits per section:\n${options.bulletLimits
+      .map((limit) => `  - ${limit.heading}: at most ${limit.bullets} bullets`)
+      .join("\n")}`
+    : "";
+  const partNote = options.parts === 2
+    ? `\n- This is part ${options.part} of 2 of the Summary; summarize only the Locked In part below.${
+      options.part === 2 ? " Do not repeat the document title; start with this part's first section heading." : ""}`
+    : "";
+  const strict = options.strict
+    ? "\n- Your previous answer was too long or cut off. Use at most half the bullets."
+    : "";
+  return assertPromptWithinLimit(`You are writing a concise "Summary" study document for last-minute review.
+
+Requirements:
+- Derive the summary **only** from the Locked In part below, not from external knowledge or other sources.${partNote}
+- Keep every ## section of this part, in order, with its heading.${limits}
+- Write each bullet in under 30 words. Aim for about ${target} characters in total.
+- Never copy a Locked In sentence verbatim; compress each point to its key fact, number or distinction.
+- Keep a table only when it compresses the material, with at most 6 rows.
+- Do not number tables or figures from the slides (write 'Table: Sources of antimicrobials', not 'Table 2: Sources of antimicrobials'). Put no citations in headings; cite the bullets and table rows under them.
+- Keep Locked In's citations verbatim: end every factual bullet and table row with the exact citation (for example [S1 p.14], [S1 pp.14-15], or [S2]) that the supporting Locked In claim carries. Never create a new citation. Do not copy [[unsourced]] markers; leave those claims uncited.${strict}
+- ${PHARMACY_GUIDANCE}
+- ${NO_AUTOMATIC_HIGHLIGHTING}
+- ${NO_INVENT_CITATIONS}
+- ${NO_META_TEXT}
+- Output Markdown only. No preamble or closing remarks.
+
+# Locked In ${options.parts === 2 ? `part ${options.part} of 2` : "document"}
+
+${half}`
   );
 }
 

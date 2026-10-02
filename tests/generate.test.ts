@@ -14,6 +14,13 @@ vi.mock("server-only", () => ({}));
 
 const generateText = vi.hoisted(() => vi.fn());
 const generateObject = vi.hoisted(() => vi.fn());
+const uncoveredSections = vi.hoisted(() => vi.fn(() => []));
+
+// These tests isolate generation from the independently owned coverage helper.
+vi.mock("@/lib/study-coverage", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/study-coverage")>(),
+  uncoveredSections,
+}));
 
 vi.mock("ai", () => ({
   generateText: (...args: unknown[]) => generateText(...args),
@@ -60,8 +67,9 @@ import {
   MAX_VISION_OUTPUT_TOKENS,
   MAX_VISION_TEXT_CHARS,
   GENERATION_STEP_DEADLINE_MS,
+  GROUNDED_STEP_TOTAL_MS,
 } from "@/lib/learning-limits";
-import { classifyGenerationError } from "@/lib/generation-errors";
+import { GenerationError, classifyGenerationError } from "@/lib/generation-errors";
 import { stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import {
   CITE_EVERY_CLAIM,
@@ -79,6 +87,9 @@ import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sectio
 import * as grounding from "@/lib/grounding";
 
 const root = path.resolve(__dirname, "..");
+
+const STRICT_SUMMARY_RETRY =
+  "Your previous answer was too long or cut off. Use at most half the bullets.";
 
 const VERIFY_PROMPT_HEAD = "You are checking whether sentences from a study document are supported";
 
@@ -165,6 +176,7 @@ describe("generate", () => {
   beforeEach(() => {
     generateText.mockReset();
     generateObject.mockReset();
+    uncoveredSections.mockReset().mockReturnValue([]);
     process.env.AUTH_SECRET = "test-auth-secret-0123456789abcdefgh";
     process.env.AUTH_TRUST_HOST = "true";
     process.env.DATABASE_URL = "postgresql://user:password@example.test/db";
@@ -307,7 +319,8 @@ describe("generate", () => {
     );
 
     expect(textPrompts[0]).toBe(lockedInPrompt(extractedTexts));
-    expect(textPrompts[1]).toBe(summaryPrompt(pack.lockedIn));
+    expect(textPrompts[1]).toContain(pack.lockedIn);
+    expect(textPrompts[1]).not.toContain(STRICT_SUMMARY_RETRY);
     expect(objectPrompts[0]).toBe(testMePrompt(pack.lockedIn));
     expect(objectPrompts[1]).toBe(cardedPrompt(pack.summary));
 
@@ -795,12 +808,391 @@ describe("generate", () => {
     expect(jobRoute).not.toMatch(/generateTextFromPrompt|generateStudyPack/);
     expect(jobRoute).toMatch(/export async function GET/);
   });
+  describe("Summary halves and cut-off guards", () => {
+    const lockedIn = ["Foundations", "Mechanisms", "Applications", "Contraindications"]
+      .map((heading, i) => `## ${heading}\n\n${`Supported fact ${i + 1}. `.repeat(45)}[S1 p.${i + 1}]`)
+      .join("\n\n");
+    const halves = balancedHalves(lockedIn);
+    const outputs = ["## Foundations\n\n- Core fact. [S1 p.1]", "## Applications\n\n- Later fact. [S1 p.3]"];
+
+    function textCall(index: number) {
+      return generateText.mock.calls[index]![0] as { prompt: string; model: { modelId: string } };
+    }
+
+    function reply(text: string, finishReason = "stop", modelId = "provider/first-half") {
+      return { text, finishReason, response: { modelId } };
+    }
+
+    it.each(["stop", "length"])("returns SDK finishReason %s with text and the provider model", async (finishReason) => {
+      generateText.mockResolvedValue(reply("  Generated content.  ", finishReason));
+      await expect(generateTextFromPrompt("Source content", { purpose: "summary" })).resolves.toEqual({
+        text: "Generated content.", modelUsed: "provider/first-half", finishReason,
+      });
+      expect(generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects cut-off Locked In without returning content, retrying or grounding it", async () => {
+      generateText.mockResolvedValue(reply("Partial Locked In sentence", "length"));
+      const ground = vi.spyOn(grounding, "groundDocument");
+      const error = await generateStudyPackStep({
+        step: "locked_in", extractedTexts: [{ filename: "notes.txt", text: "Source fact." }],
+      }).then(() => null, (error: unknown) => error);
+
+      expect(error).toBeInstanceOf(GenerationError);
+      expect(error).toMatchObject({ code: "token_limit", retryable: false, message: "Locked In was cut off. Try again." });
+      expect(generateText).toHaveBeenCalledTimes(1);
+      expect(generateObject).not.toHaveBeenCalled();
+      expect(ground).not.toHaveBeenCalled();
+    });
+
+    it("starts both balanced Summary halves before either finishes and joins in input order", async () => {
+      let finishFirst!: (value: ReturnType<typeof reply>) => void;
+      let finishSecond!: (value: ReturnType<typeof reply>) => void;
+      const first = new Promise<ReturnType<typeof reply>>((resolve) => { finishFirst = resolve; });
+      const second = new Promise<ReturnType<typeof reply>>((resolve) => { finishSecond = resolve; });
+      generateText.mockReturnValueOnce(first).mockReturnValueOnce(second);
+      const pending = generateStudyPackStep({ step: "summary", lockedIn });
+      try {
+        expect(generateText).toHaveBeenCalledTimes(2);
+        expect(textCall(0).prompt).toContain(halves[0]);
+        expect(textCall(0).prompt).not.toContain("## Applications");
+        expect(textCall(1).prompt).toContain(halves[1]);
+        expect(textCall(1).prompt).not.toContain("## Foundations");
+        expect(textCall(0).model.modelId).toBe(getModelId("summary"));
+        expect(textCall(1).model.modelId).toBe(getModelId("summary"));
+        // Complete the later half first; output and model metadata still follow input order.
+        finishSecond(reply(outputs[1], "stop", "provider/second-half"));
+        await Promise.resolve();
+      } finally {
+        finishFirst(reply(outputs[0]));
+        finishSecond(reply(outputs[1], "stop", "provider/second-half"));
+      }
+      const result = await pending;
+      expect(result.payload).toEqual({ kind: "summary", content: outputs.join("\n\n") });
+      expect(result.modelUsed).toBe("provider/first-half");
+      expect(generateText).toHaveBeenCalledTimes(2);
+      expect(generateObject).not.toHaveBeenCalled();
+    });
+
+    it.each(["No section headings. ".repeat(80), "## Only section\n\n" + "Source fact. ".repeat(80)])(
+      "uses one Summary request when Locked In has fewer than two sections (%#)", async (input) => {
+        generateText.mockResolvedValue(reply("- A concise fact."));
+        const result = await generateStudyPackStep({ step: "summary", lockedIn: input });
+        expect(generateText).toHaveBeenCalledTimes(1);
+        expect(textCall(0).prompt).toContain(input.trim());
+        expect(result.payload.content).toBe("- A concise fact.");
+      },
+    );
+
+    it("computes clamped bullet limits per section in the Summary request", async () => {
+      const input = [
+        "## Tiny\n\nFact.",
+        "## Medium\n\n" + "m".repeat(2_000),
+        "## Huge\n\n" + "h".repeat(20_000),
+      ].join("\n\n");
+      generateText.mockResolvedValue(reply("- Concise fact."));
+      await generateStudyPackStep({ step: "summary", lockedIn: input });
+      const prompts = generateText.mock.calls.map((call) => (call[0] as { prompt: string }).prompt);
+      expect(prompts).toHaveLength(2);
+      const expectedBullets = [2, 3, 14];
+      for (const [index, section] of splitSections(input).sections.entries()) {
+        const bullets = Math.min(14, Math.max(2, Math.round(section.markdown.length * 0.4 / 260)));
+        expect(bullets).toBe(expectedBullets[index]);
+        const prompt = prompts.find((value) => value.includes(section.markdown))!;
+        const budgetLines = prompt.split("\n").filter((line) => line.includes(section.heading) && /bullets?/i.test(line));
+        expect(budgetLines.some((line) => new RegExp(`\\b${bullets}\\b`).test(line))).toBe(true);
+      }
+    });
+
+    it("retries a cut-off first half once with the strict prompt", async () => {
+      generateText.mockResolvedValueOnce(reply("Cut-off fact", "length"))
+        .mockResolvedValueOnce(reply(outputs[1], "stop", "provider/second-half"))
+        .mockResolvedValueOnce(reply(outputs[0]));
+
+      const result = await generateStudyPackStep({ step: "summary", lockedIn });
+      expect(generateText).toHaveBeenCalledTimes(3);
+      expect(textCall(0).prompt).not.toContain(STRICT_SUMMARY_RETRY);
+      expect(textCall(1).prompt).not.toContain(STRICT_SUMMARY_RETRY);
+      expect(textCall(2).prompt).toContain(STRICT_SUMMARY_RETRY);
+      expect(textCall(2).prompt).toContain(halves[0]);
+      expect(textCall(2).prompt).not.toContain("## Applications");
+      expect(result.payload.content).toBe(outputs.join("\n\n"));
+    });
+
+    it("retries a cut-off second half without rerunning the complete first half", async () => {
+      generateText.mockResolvedValueOnce(reply(outputs[0]))
+        .mockResolvedValueOnce(reply("Cut-off later fact", "length"))
+        .mockResolvedValueOnce(reply(outputs[1]));
+      const result = await generateStudyPackStep({ step: "summary", lockedIn });
+      expect(generateText).toHaveBeenCalledTimes(3);
+      expect(textCall(2).prompt).toContain(halves[1]);
+      expect(textCall(2).prompt).not.toContain("## Foundations");
+      expect(textCall(2).prompt).toContain(STRICT_SUMMARY_RETRY);
+      expect(result.payload.content).toBe(outputs.join("\n\n"));
+    });
+
+    it("gives each Summary half its own single retry", async () => {
+      generateText.mockResolvedValueOnce(reply("First partial fact", "length"))
+        .mockResolvedValueOnce(reply("Second partial fact", "length"));
+      generateText.mockImplementation(async ({ prompt }: { prompt: string }) => {
+        expect(prompt).toContain(STRICT_SUMMARY_RETRY);
+        const half = halves.findIndex((input) => prompt.includes(input));
+        expect(half).toBeGreaterThanOrEqual(0);
+        return reply(outputs[half]);
+      });
+      const result = await generateStudyPackStep({ step: "summary", lockedIn });
+      expect(result.payload.content).toBe(outputs.join("\n\n"));
+      expect(generateText).toHaveBeenCalledTimes(4);
+      const retries = [textCall(2).prompt, textCall(3).prompt];
+      for (const half of halves) expect(retries.filter((prompt) => prompt.includes(half))).toHaveLength(1);
+    });
+
+    function overLongSummary(half: string) {
+      const blocks = splitSections(half).sections.map((section) => {
+        const bullets = Array.from({ length: 8 }, (_, i) => `- ${section.heading} point ${i + 1}: ${"Supported detail ".repeat(8)}[S1 p.1]`);
+        const tableStart = ["| Entry | Detail |", "| --- | --- |"];
+        const rows = Array.from({ length: 10 }, (_, i) => `| Entry ${i + 1} | ${section.heading} row fact. [S1 p.1] |`);
+        const limit = Math.min(14, Math.max(2, Math.round(section.markdown.length * 0.4 / 260)));
+        return {
+          raw: [`## ${section.heading}`, "", ...bullets, "", ...tableStart, ...rows].join("\n"),
+          expected: [`## ${section.heading}`, "", ...bullets.slice(0, limit), "", ...tableStart, ...rows.slice(0, 6)].join("\n"),
+        };
+      });
+      return {
+        raw: blocks.map((block) => block.raw).join("\n\n"),
+        expected: blocks.map((block) => block.expected).join("\n\n"),
+      };
+    }
+
+    function conciseSummary(half: string) {
+      return splitSections(half).sections.map((section) => `## ${section.heading}\n\n- A concise supported fact. [S1 p.1]`).join("\n\n");
+    }
+
+    it.each([false, true])("caps an over-long first half without retrying (second half over-long: %s)", async (secondIsLong) => {
+      const first = overLongSummary(halves[0]);
+      const second = secondIsLong ? overLongSummary(halves[1]) : {
+        raw: conciseSummary(halves[1]), expected: conciseSummary(halves[1]),
+      };
+      expect(first.raw.length).toBeGreaterThan(halves[0].length * 0.55);
+      if (secondIsLong) expect(second.raw.length).toBeGreaterThan(halves[1].length * 0.55);
+      generateText.mockResolvedValueOnce(reply(first.raw))
+        .mockResolvedValueOnce(reply(second.raw, "stop", "provider/second-half"));
+      const result = await generateStudyPackStep({ step: "summary", lockedIn });
+      const content = result.payload.content as string;
+      expect(generateText).toHaveBeenCalledTimes(2);
+      expect(textCall(0).prompt).not.toContain(STRICT_SUMMARY_RETRY);
+      expect(textCall(1).prompt).not.toContain(STRICT_SUMMARY_RETRY);
+      expect(content).toBe(`${first.expected}\n\n${second.expected}`);
+      expect(splitSections(content).sections.map((section) => section.heading))
+        .toEqual(splitSections(lockedIn).sections.map((section) => section.heading));
+      for (const section of splitSections(content).sections) {
+        const original = splitSections(lockedIn).sections.find((value) => value.heading === section.heading)!;
+        const limit = Math.min(14, Math.max(2, Math.round(original.markdown.length * 0.4 / 260)));
+        expect(section.markdown.match(/^- /gm)?.length ?? 0).toBeLessThanOrEqual(limit);
+        expect(section.markdown.match(/^\| Entry \d+ \|/gm)?.length ?? 0).toBeLessThanOrEqual(6);
+      }
+    });
+
+    it("caps an over-long cut-off retry immediately without making another request", async () => {
+      const complete = overLongSummary(halves[0]);
+      const second = conciseSummary(halves[1]);
+      expect(complete.raw.length).toBeGreaterThan(halves[0].length * 0.55);
+      generateText.mockResolvedValueOnce(reply("Cut-off first answer", "length"))
+        .mockResolvedValueOnce(reply(second))
+        .mockResolvedValueOnce(reply(complete.raw));
+      const result = await generateStudyPackStep({ step: "summary", lockedIn });
+      expect(result.payload.content).toBe(`${complete.expected}\n\n${second}`);
+      expect(generateText).toHaveBeenCalledTimes(3);
+      expect(textCall(2).prompt).toContain(STRICT_SUMMARY_RETRY);
+      expect(splitSections(result.payload.content as string).sections.map((section) => section.heading))
+        .toEqual(splitSections(lockedIn).sections.map((section) => section.heading));
+    });
+
+    it("rejects a still-cut-off half after retry without returning or grounding partial text", async () => {
+      generateText.mockResolvedValueOnce(reply("Partial fact", "length"))
+        .mockResolvedValueOnce(reply(outputs[1]))
+        .mockResolvedValueOnce(reply("Still partial", "length"));
+      const ground = vi.spyOn(grounding, "groundDocument");
+      const error = await generateStudyPackStep({
+        step: "summary", lockedIn, groundingSources: [{ index: 1, text: "Source fact." }],
+      }).then(() => null, (error: unknown) => error);
+      expect(error).toBeInstanceOf(GenerationError);
+      expect(error).toMatchObject({ code: "token_limit", retryable: false });
+      expect(generateText).toHaveBeenCalledTimes(3);
+      expect(ground).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [185_000, "stop", false],
+      [185_000, "length", true],
+      [185_001, "stop", false],
+      [185_001, "length", false],
+    ] as const)("with %i ms elapsed and finishReason %s, retry is %s", async (elapsed, finishReason, shouldRetry) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      let complete!: (value: ReturnType<typeof reply>) => void;
+      const slow = new Promise<ReturnType<typeof reply>>((resolve) => { complete = resolve; });
+      const long = "x".repeat(Math.ceil(halves[0].length * 0.6));
+      generateText.mockReturnValueOnce(slow)
+        .mockResolvedValueOnce(reply(outputs[1]))
+        .mockResolvedValueOnce(reply(outputs[0]));
+      const pending = generateStudyPackStep({ step: "summary", lockedIn });
+      const settled = pending.then((result) => ({ result }), (error: unknown) => ({ error }));
+      try {
+        // Advance wall-clock time only; do not fire the per-request timeout.
+        vi.setSystemTime(elapsed);
+        complete(reply(long, finishReason));
+        const outcome = await settled;
+        if (finishReason === "length" && !shouldRetry) {
+          expect(outcome).toMatchObject({ error: { code: "token_limit", retryable: false } });
+        } else {
+          expect(outcome).toMatchObject({ result: { payload: {
+            content: `${shouldRetry ? outputs[0] : long}\n\n${outputs[1]}`,
+          } } });
+        }
+        expect(generateText).toHaveBeenCalledTimes(shouldRetry ? 3 : 2);
+      } finally {
+        complete(reply(long, finishReason));
+        vi.useRealTimers();
+      }
+    });
+
+    it("caps both initial Summary requests before the step's 60-second grounding reserve", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      const deadline = Math.min(GENERATION_STEP_DEADLINE_MS, GROUNDED_STEP_TOTAL_MS - 60_000);
+      const signals: AbortSignal[] = [];
+      generateText.mockImplementation(({ abortSignal }: { abortSignal: AbortSignal }) => {
+        signals.push(abortSignal);
+        return new Promise((_resolve, reject) => {
+          abortSignal.addEventListener("abort", () => reject(abortSignal.reason), { once: true });
+        });
+      });
+      const pending = generateStudyPackStep({ step: "summary", lockedIn });
+      const settled = pending.then(() => null, (error: unknown) => error);
+      try {
+        expect(signals).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(deadline - 1);
+        expect(signals.every((signal) => !signal.aborted)).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(signals.every((signal) => signal.aborted)).toBe(true);
+        await expect(settled).resolves.toMatchObject({ code: "timeout", retryable: true });
+        expect(generateText).toHaveBeenCalledTimes(2);
+      } finally {
+        // Also settle requests if an implementation still uses the old, longer deadline.
+        await vi.advanceTimersByTimeAsync(GENERATION_STEP_DEADLINE_MS);
+        await settled;
+        vi.useRealTimers();
+      }
+    });
+
+    it("caps a retry after a cut-off answer at 180 seconds to the remaining Summary request time", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      let completeFirst!: (value: ReturnType<typeof reply>) => void;
+      let completeRetry: ((value: ReturnType<typeof reply>) => void) | undefined;
+      let retrySignal: AbortSignal | undefined;
+      const first = new Promise<ReturnType<typeof reply>>((resolve) => { completeFirst = resolve; });
+      generateText.mockReturnValueOnce(first)
+        .mockResolvedValueOnce(reply(outputs[1]))
+        .mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+          retrySignal = abortSignal;
+          return new Promise<ReturnType<typeof reply>>((resolve, reject) => {
+            completeRetry = resolve;
+            abortSignal.addEventListener("abort", () => reject(abortSignal.reason), { once: true });
+          });
+        });
+      const pending = generateStudyPackStep({ step: "summary", lockedIn });
+      const settled = pending.then((result) => ({ result }), (error: unknown) => ({ error }));
+      try {
+        await vi.advanceTimersByTimeAsync(180_000);
+        completeFirst(reply("Cut-off first half", "length"));
+        await vi.advanceTimersByTimeAsync(0);
+        if (generateText.mock.calls.length === 2) {
+          await expect(settled).resolves.toMatchObject({ error: { code: "token_limit" } });
+        } else {
+          expect(generateText).toHaveBeenCalledTimes(3);
+          expect(textCall(2).prompt).toContain(STRICT_SUMMARY_RETRY);
+          const remaining = Math.min(GENERATION_STEP_DEADLINE_MS, GROUNDED_STEP_TOTAL_MS - 60_000 - Date.now());
+          expect(remaining).toBe(45_000);
+          expect(retrySignal?.aborted).toBe(false);
+          await vi.advanceTimersByTimeAsync(remaining - 1);
+          expect(retrySignal?.aborted).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(retrySignal?.aborted).toBe(true);
+          await expect(settled).resolves.toMatchObject({ error: { code: "timeout" } });
+        }
+      } finally {
+        completeFirst(reply("Cut-off first half", "length"));
+        completeRetry?.(reply(outputs[0]));
+        await settled;
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["locked_in", "summary"] as const)("rejects %s when framing cleanup leaves no study content, before grounding", async (step) => {
+      generateText.mockResolvedValue(reply("This guide systematically explains the uploaded material."));
+      const ground = vi.spyOn(grounding, "groundDocument");
+      const error = await generateStudyPackStep({
+        step, lockedIn,
+        extractedTexts: [{ filename: "notes.txt", text: "Source fact." }],
+        groundingSources: [{ index: 1, text: "Source fact." }],
+      }).then(() => null, (error: unknown) => error);
+      expect(error).toBeInstanceOf(GenerationError);
+      expect(error).toMatchObject({ code: "unavailable" });
+      expect(generateText).toHaveBeenCalledTimes(step === "summary" ? 2 : 1);
+      expect(ground).not.toHaveBeenCalled();
+      expect(generateObject).not.toHaveBeenCalled();
+    });
+
+    it("does not retry a complete half exactly at 55% of its input", async () => {
+      const input = "Source fact. ".repeat(100).padEnd(2_000, "x");
+      generateText.mockResolvedValue(reply("x".repeat(1_100)));
+      const result = await generateStudyPackStep({ step: "summary", lockedIn: input });
+      expect(result.payload.content).toBe("x".repeat(1_100));
+      expect(generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it("strips Locked In framing before grounding", async () => {
+      const kept = "Propranolol blocks beta adrenergic receptors. [S1 p.1]";
+      generateText.mockResolvedValue(reply(`${kept} This guide describes the study document.`));
+      const ground = vi.spyOn(grounding, "groundDocument").mockImplementation(async (args) => ({
+        markdown: args.markdown,
+        report: { total: 0, cited: 0, lexicalSupported: 0, verifiedSupported: 0, unsourced: 0, truncated: false, verifierFailed: false },
+      }));
+      const result = await generateStudyPackStep({
+        step: "locked_in", extractedTexts: [{ filename: "pharm.txt", text: "Source evidence." }],
+      });
+      expect(ground).toHaveBeenCalledWith(expect.objectContaining({ markdown: kept }));
+      expect(result.payload.content).toBe(kept);
+    });
+
+    it("joins halves, strips framing and sanitizes headings before grounding", async () => {
+      const first = "### Table 2: Core [S1 p.1]\n\nThis summary reviews the material. Core fact. [S1 p.1]";
+      const second = "## Figure 3.1: Later [S1 p.3]\n\nLater fact. [S1 p.3] This guide describes its sources.";
+      const expected = "### Table: Core\n\nCore fact. [S1 p.1]\n\n## Figure: Later\n\nLater fact. [S1 p.3]";
+      generateText.mockResolvedValueOnce(reply(first)).mockResolvedValueOnce(reply(second));
+      const ground = vi.spyOn(grounding, "groundDocument").mockImplementation(async (args) => ({
+        markdown: args.markdown,
+        report: { total: 0, cited: 0, lexicalSupported: 0, verifiedSupported: 0, unsourced: 0, truncated: false, verifierFailed: false },
+      }));
+      const result = await generateStudyPackStep({
+        step: "summary", lockedIn, groundingSources: [{ index: 1, text: "Source evidence." }],
+      });
+      expect(generateText).toHaveBeenCalledTimes(2);
+      expect(ground).toHaveBeenCalledTimes(1);
+      expect(ground).toHaveBeenCalledWith(expect.objectContaining({ markdown: expected }));
+      expect(result.payload.content).toBe(expected);
+    });
+  });
+
 });
 
 describe("grounded generation", () => {
   beforeEach(() => {
     generateText.mockReset();
     generateObject.mockReset();
+    uncoveredSections.mockReset().mockReturnValue([]);
     process.env.AUTH_SECRET = "test-auth-secret-0123456789abcdefgh";
     process.env.AUTH_TRUST_HOST = "true";
     process.env.DATABASE_URL = "postgresql://user:password@example.test/db";
@@ -921,7 +1313,7 @@ describe("grounded generation", () => {
     const citationSources = [{ index: 1, sourceId: "src-1", filename: "pharm.pdf", hasPages: true }];
     const result = await generateStudyPackStep({
       step: "summary",
-      lockedIn: "# Locked In [S1 p.1]",
+      lockedIn: "# Locked In\n\n" + "Source facts. [S1 p.1] ".repeat(30),
       citationSources,
       groundingSources: [{ index: 1, text: PHARM_SOURCE }],
     });
@@ -945,7 +1337,7 @@ describe("grounded generation", () => {
 
     const result = await generateStudyPackStep({
       step: "summary",
-      lockedIn: "## Drugs\n\nPropranolol causes bronchospasm. [S1 p.2]",
+      lockedIn: "## Drugs\n\n" + "Propranolol causes bronchospasm. [S1 p.2] ".repeat(20),
       citationSources,
       groundingSources: [{ index: 1, text: PHARM_SOURCE }],
     });
@@ -965,7 +1357,7 @@ describe("grounded generation", () => {
       response: { modelId: "provider/model" },
     });
 
-    expect(await generateSummary("Locked In body")).toBe(`### Table: X\n\n${body}`);
+    expect(await generateSummary("Locked In body. ".repeat(30))).toBe(`### Table: X\n\n${body}`);
     expect(generateText).toHaveBeenCalledTimes(1);
   });
 

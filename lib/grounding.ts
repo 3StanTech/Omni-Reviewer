@@ -6,8 +6,9 @@
  * its table's citation). Lexical misses go to one batched `verify` call with
  * the most relevant passages of their best pages; anything still unsupported
  * gets `[[unsourced]]` inserted after it. Misses beyond the batch stay
- * untagged and count as unchecked. Apart from those insertions the Markdown
- * is unchanged.
+ * untagged and count as unchecked. A claim judged supported is still tagged
+ * when the term guard finds a specific term absent from every source. Apart
+ * from those insertions the Markdown is unchanged.
  */
 
 import {
@@ -20,6 +21,7 @@ import {
 } from "@/lib/citations";
 import { GROUNDING_PASSAGE_CHARS } from "@/lib/learning-limits";
 import { splitPages } from "@/lib/source-markers";
+import { absentTerms, buildSourceVocabulary } from "@/lib/term-guard";
 
 export const LEXICAL_SUPPORT_THRESHOLD = 0.55;
 
@@ -54,6 +56,8 @@ export type GroundingReport = {
   unchecked?: number;
   /** claimKey of each of those unchecked claims, so Check again can find them. */
   uncheckedKeys?: string[];
+  /** Claims judged supported but tagged because a specific term is absent from the sources; included in unsourced. */
+  termFlagged?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -523,6 +527,9 @@ export async function groundDocument({
   const claims = extractClaims(lines);
   const bySource = buildPages(sources);
   const allPages = [...bySource.values()].flat();
+  const vocabulary = buildSourceVocabulary(sources.map((source) => source.text));
+  /** A supported claim naming a term the sources never mention is treated as unsourced. */
+  const termGuarded = (claim: Claim): boolean => absentTerms(claim.sentence, vocabulary).length > 0;
 
   // Claims whose end carried a token before stripping (re-check only).
   const tokenClaims = new Map<Insertion, Claim>();
@@ -545,6 +552,7 @@ export async function groundDocument({
 
   let lexicalSupported = 0;
   let verifiedSupported = 0;
+  let termFlagged = 0;
   let truncated = false;
   let verifierFailed = false;
   const outcomes = new Map<Claim, Outcome>();
@@ -561,8 +569,13 @@ export async function groundDocument({
     const lexicalMiss = !(scored.length > 0 && scored[0].score >= LEXICAL_SUPPORT_THRESHOLD);
     if (!considered(claim, lexicalMiss)) continue;
     if (!lexicalMiss) {
-      lexicalSupported++;
-      outcomes.set(claim, "pass");
+      if (termGuarded(claim)) {
+        termFlagged++;
+        outcomes.set(claim, "reject");
+      } else {
+        lexicalSupported++;
+        outcomes.set(claim, "pass");
+      }
     } else {
       const best = scored.slice(0, 2).filter((entry, rank) => rank === 0 || entry.score > 0);
       misses.push({ claim, terms, best: best.map((entry) => entry.page) });
@@ -597,7 +610,11 @@ export async function groundDocument({
     }
     if (supported === null) verifierFailed = true;
     verifiable.forEach((miss, id) => {
-      const outcome: Outcome = supported === null ? "unchecked" : supported.has(id) ? "pass" : "reject";
+      let outcome: Outcome = supported === null ? "unchecked" : supported.has(id) ? "pass" : "reject";
+      if (outcome === "pass" && termGuarded(miss.claim)) {
+        termFlagged++;
+        outcome = "reject";
+      }
       if (outcome === "pass") verifiedSupported++;
       outcomes.set(miss.claim, outcome);
     });
@@ -639,6 +656,7 @@ export async function groundDocument({
     report.unchecked = uncheckedKeys.length;
     report.uncheckedKeys = uncheckedKeys;
   }
+  if (termFlagged > 0) report.termFlagged = termFlagged;
 
   return { markdown: output, report };
 }

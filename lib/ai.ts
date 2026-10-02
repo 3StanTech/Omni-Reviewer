@@ -1,6 +1,6 @@
 import "server-only";
 
-import { generateObject, generateText, NoObjectGeneratedError } from "ai";
+import { generateObject, generateText, NoObjectGeneratedError, type FinishReason } from "ai";
 import { z } from "zod";
 
 import {
@@ -70,12 +70,15 @@ import {
   cardedPrompt,
   groundingVerifyPrompt,
   lockedInPrompt,
-  summaryPrompt,
+  summaryHalfPrompt,
   testMePrompt,
 } from "@/lib/prompts";
 import { hasPageMarkers } from "@/lib/source-markers";
+import { itemPages, uncoveredSections } from "@/lib/study-coverage";
+import { stripDocumentFraming } from "@/lib/study-framing";
 import { sanitizeStudyHeadings } from "@/lib/study-headings";
-import { allocateItems, balancedHalves } from "@/lib/study-sections";
+import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
+import { capSummarySections } from "@/lib/summary-cap";
 import type { CardedItem, TestMeItem } from "@/lib/types";
 
 export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision" | "ask";
@@ -275,7 +278,7 @@ export async function generateTextFromPrompt(
     /** Overall deadline across attempts; defaults to the generation step deadline. */
     deadlineMs?: number;
   } = { purpose: "locked_in" },
-): Promise<{ text: string; modelUsed: string }> {
+): Promise<{ text: string; modelUsed: string; finishReason: FinishReason }> {
   assertPromptWithinLimit(prompt);
   const modelId = modelIdForPurpose(options.purpose);
   const healJson = options.purpose === "json";
@@ -292,7 +295,7 @@ export async function generateTextFromPrompt(
   assertGenerationBudget(prompt, budget);
 
   return withRetry(async (signal) => {
-    const { text, response, providerMetadata } = await generateText({
+    const { text, response, providerMetadata, finishReason } = await generateText({
       model: getOpenRouterModel(modelId, { healJson }),
       prompt,
       maxRetries: 0,
@@ -319,6 +322,8 @@ export async function generateTextFromPrompt(
     return {
       text: normalizedText,
       modelUsed: extractModelUsed({ response, providerMetadata }, modelId),
+      // "length" means the output cap cut the text off.
+      finishReason,
     };
   }, {
     signal: options.signal,
@@ -581,6 +586,8 @@ async function generateJsonArray<T extends { id: string }>(args: {
   elementSchema: z.ZodType<T>;
   /** Page-scaled item target from studyItemTarget; also scales the output budget. */
   maxItems?: number;
+  /** Overall deadline across attempts; defaults to the generation step deadline. */
+  deadlineMs?: number;
 }): Promise<{ items: T[]; modelUsed: string; raw: string }> {
   assertPromptWithinLimit(args.prompt);
   const modelId = modelIdForPurpose("json");
@@ -591,7 +598,7 @@ async function generateJsonArray<T extends { id: string }>(args: {
     {
       contextWindowTokens: contextWindowForRequest(modelId),
       attempts: MAX_GENERATION_ATTEMPTS,
-      deadlineMs: GENERATION_STEP_DEADLINE_MS,
+      deadlineMs: args.deadlineMs ?? GENERATION_STEP_DEADLINE_MS,
       safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
       ...(args.maxItems === undefined ? {} : { maxItems: args.maxItems }),
     },
@@ -800,6 +807,8 @@ export async function regroundStudyDocument(
   const carried: Partial<GroundingReport> = { ...previous };
   delete carried.unchecked;
   delete carried.uncheckedKeys;
+  // Term guard tags are re-evaluated with every tagged claim, like unsourced.
+  delete carried.termFlagged;
   const report: GroundingReport = {
     ...carried,
     total: pass.total,
@@ -809,6 +818,7 @@ export async function regroundStudyDocument(
     verifierFailed: pass.verifierFailed,
     lexicalSupported: (previous?.lexicalSupported ?? 0) + pass.lexicalSupported,
     verifiedSupported: (previous?.verifiedSupported ?? 0) + pass.verifiedSupported,
+    ...(pass.termFlagged ? { termFlagged: pass.termFlagged } : {}),
     ...(pass.unchecked ? { unchecked: pass.unchecked } : {}),
     ...(pass.uncheckedKeys?.length ? { uncheckedKeys: pass.uncheckedKeys } : {}),
   };
@@ -844,6 +854,96 @@ export type GeneratedStudyPackStep = {
 
 export type StudyPackSourceText = { filename: string; text: string; sourceId?: string };
 
+/** Framing removal left nothing: a failed attempt, never an empty saved document. */
+function emptyStudyContentError(): GenerationError {
+  return new GenerationError("unavailable", "The model returned no study content. Try again.", true);
+}
+
+/** Time kept at the end of the Summary step for grounding's verifier call. */
+const SUMMARY_GROUNDING_RESERVE_MS = GROUNDING_VERIFY_DEADLINE_MS;
+/**
+ * A Summary half's one retry needs this much request time left: 100 s of the
+ * 285 s step minus the grounding reserve.
+ */
+const SUMMARY_RETRY_MIN_MS = 40_000;
+/** A Summary half longer than this share of its Locked In half is capped in code. */
+const SUMMARY_HALF_MAX_RATIO = 0.55;
+/** Summary length aimed for: about 40% of Locked In. */
+const SUMMARY_RATIO = 0.4;
+/** Characters one Summary bullet stands for when setting bullet limits. */
+const SUMMARY_CHARS_PER_BULLET = 260;
+
+/** Per "##" section bullet ceilings: about 40% of the section at 260 characters a bullet, 2 to 14. */
+function summaryBulletLimits(half: string): Array<{ heading: string; bullets: number }> {
+  return splitSections(half).sections.map((section) => ({
+    heading: section.heading,
+    bullets: Math.min(14, Math.max(2, Math.round((section.markdown.length * SUMMARY_RATIO) / SUMMARY_CHARS_PER_BULLET))),
+  }));
+}
+
+/**
+ * One Summary part. A cut-off answer is retried once with the strict prompt
+ * when at least 100 s of the step remain; a part still cut off fails the step
+ * so it is never saved. A complete part longer than 55% of its input is capped
+ * in code (capSummarySections) with no extra request: the free model ignored
+ * the strict retry and copied Locked In again. Every request ends before the
+ * time kept for grounding.
+ */
+async function summarizeHalf(
+  half: string,
+  options: { part: 1 | 2; parts: 1 | 2; stepStartedAt: number },
+): Promise<{ text: string; modelUsed: string }> {
+  const requestTimeLeft = () => Math.min(
+    GENERATION_STEP_DEADLINE_MS,
+    options.stepStartedAt + GROUNDED_STEP_TOTAL_MS - SUMMARY_GROUNDING_RESERVE_MS - Date.now(),
+  );
+  const request = (strict: boolean, deadlineMs: number) => {
+    const prompt = summaryHalfPrompt(half, {
+      part: options.part,
+      parts: options.parts,
+      bulletLimits: summaryBulletLimits(half),
+      targetChars: Math.round(half.length * SUMMARY_RATIO),
+      ...(strict ? { strict } : {}),
+    });
+    return generateTextFromPrompt(prompt, {
+      purpose: "summary",
+      sourceTokens: estimateTokensFromText(prompt),
+      deadlineMs,
+    });
+  };
+  let result = await request(false, requestTimeLeft());
+  if (result.finishReason === "length") {
+    const timeLeft = requestTimeLeft();
+    if (timeLeft >= SUMMARY_RETRY_MIN_MS) result = await request(true, timeLeft);
+  }
+  if (result.finishReason === "length") {
+    throw new GenerationError("token_limit", "Summary was cut off. Try again.", false);
+  }
+  const text = result.text.length > SUMMARY_HALF_MAX_RATIO * half.length
+    ? capSummarySections(result.text, summaryBulletLimits(half))
+    : result.text;
+  return { text, modelUsed: result.modelUsed };
+}
+
+/**
+ * The Summary from Locked In: one request per balanced half, in parallel,
+ * joined in order. Framing sentences and heading numbering or citations are
+ * removed in code, since the free model writes them despite the prompt rules.
+ */
+async function summarizeLockedIn(
+  lockedIn: string,
+  stepStartedAt: number,
+): Promise<{ text: string; modelUsed: string }> {
+  const halves = balancedHalves(lockedIn);
+  const parts = halves.length === 2 ? 2 : 1;
+  const results = await Promise.all(halves.map((half, index) =>
+    summarizeHalf(half, { part: index === 0 ? 1 : 2, parts, stepStartedAt })));
+  const joined = results.map((result) => result.text).join("\n\n");
+  const text = sanitizeStudyHeadings(stripDocumentFraming(joined));
+  if (!text.trim()) throw emptyStudyContentError();
+  return { text, modelUsed: results[0].modelUsed };
+}
+
 /**
  * Generate one pipeline step. Keeping this operation step-sized is important
  * for route handlers: a request can claim one lease and make one logical
@@ -870,8 +970,15 @@ export async function generateStudyPackStep(input: {
         lockedInPrompt(input.extractedTexts),
         { purpose: "locked_in" },
       );
+      // A truncated Locked In would feed every other mode, so it is never saved.
+      if (result.finishReason === "length") {
+        throw new GenerationError("token_limit", "Locked In was cut off. Try again.", false);
+      }
+      // Framing is removed in code: the free model writes "This guide..." despite the prompt rule.
+      const lockedIn = stripDocumentFraming(result.text);
+      if (!lockedIn.trim()) throw emptyStudyContentError();
       const grounded = await groundGeneratedDocument({
-        markdown: result.text,
+        markdown: lockedIn,
         sources: input.extractedTexts.map((source, i) => ({ index: i + 1, text: source.text })),
         citationSources: input.citationSources ?? citationSourcesFor(input.extractedTexts),
         stepStartedAt,
@@ -886,13 +993,9 @@ export async function generateStudyPackStep(input: {
     case "summary": {
       const lockedIn = input.lockedIn?.trim();
       if (!lockedIn) throw new Error("summary generation requires Locked In");
-      const result = await generateTextFromPrompt(summaryPrompt(lockedIn), {
-        purpose: "summary",
-      });
-      // Headings are cleaned in code: the free model keeps slide numbering
-      // ("Table 1.1:") and citations in headings despite the prompt rule.
+      const result = await summarizeLockedIn(lockedIn, stepStartedAt);
       const grounded = await groundGeneratedDocument({
-        markdown: sanitizeStudyHeadings(result.text),
+        markdown: result.text,
         sources: input.groundingSources ?? [],
         citationSources: input.citationSources ?? [],
         stepStartedAt,
@@ -957,6 +1060,12 @@ function stableItemId(prefix: "q" | "c", text: string): string {
  * Items are merged in half order, given content ids (stableItemId), with a
  * repeated id dropped, then capped at the total. A half that fails after its retries fails the whole step. A document
  * with one "##" section is a single request with the whole target.
+ *
+ * Sections that no item cites (uncoveredSections) then get one top-up request
+ * for one item each, through the same model chain, when enough of the 270 s
+ * step is left. Top-up items are kept when the result is capped at 120% of the
+ * target, and the base items dropped first are those whose pages other kept
+ * items still cite. A failed top-up keeps the base items.
  */
 async function generateItemsByHalves<T extends { id: string }>(args: {
   kind: "test_me" | "carded";
@@ -965,7 +1074,10 @@ async function generateItemsByHalves<T extends { id: string }>(args: {
   elementSchema: z.ZodType<T>;
   /** The item's prompt text: the Test Me question or the Carded front. */
   promptText: (item: T) => string;
+  /** All of the item's text, citations included, for section coverage. */
+  textOf: (item: T) => string;
 }): Promise<{ items: T[]; modelUsed: string }> {
+  const startedAt = Date.now();
   const total = studyItemTarget(args.kind, args.markdown);
   const halves = balancedHalves(args.markdown);
   const counts = allocateItems(total, halves);
@@ -978,15 +1090,83 @@ async function generateItemsByHalves<T extends { id: string }>(args: {
     maxItems: count,
   })));
   const prefix = args.kind === "test_me" ? "q" : "c";
-  const seen = new Set<string>();
-  const items: T[] = [];
-  for (const item of results.flatMap((result) => result.items)) {
+  /** Items with content ids, dropping any id already in `seen` or repeated. */
+  const withIds = (generated: T[], seen: Set<string>): T[] => generated.flatMap((item) => {
     const id = stableItemId(prefix, args.promptText(item));
-    if (seen.has(id)) continue;
+    if (seen.has(id)) return [];
     seen.add(id);
-    items.push({ ...item, id });
+    return [{ ...item, id }];
+  });
+  const items = withIds(results.flatMap((result) => result.items), new Set()).slice(0, total);
+  const modelUsed = results[0].modelUsed;
+
+  const uncovered = uncoveredSections(args.markdown, items, args.textOf);
+  if (uncovered.length === 0) return { items, modelUsed };
+  const timeLeft = startedAt + GENERATION_STEP_DEADLINE_MS - TOP_UP_SAFETY_MS - Date.now();
+  if (timeLeft < TOP_UP_MIN_MS) return { items, modelUsed };
+  const count = uncovered.length;
+  let topUp: T[];
+  try {
+    const result = await generateJsonArray({
+      kind: args.kind,
+      prompt: args.prompt(uncovered.map((section) => section.markdown).join("\n\n"), count),
+      elementSchema: args.elementSchema,
+      maxItems: count,
+      deadlineMs: timeLeft,
+    });
+    topUp = withIds(result.items, new Set(items.map((item) => item.id)));
+  } catch {
+    // Coverage is a bonus on top of a usable set; the base items still stand.
+    return { items, modelUsed };
   }
-  return { items: items.slice(0, total), modelUsed: results[0].modelUsed };
+  const cap = Math.ceil(total * 1.2);
+  const keptTopUp = topUp.slice(0, cap);
+  const keptBase = trimKeepingCoverage(items, cap - keptTopUp.length, keptTopUp, args.textOf);
+  return { items: [...keptBase, ...keptTopUp], modelUsed };
+}
+
+/** The top-up runs only with this much of the item step left, after the safety margin. */
+const TOP_UP_MIN_MS = 45_000;
+/** Kept between the top-up's deadline and the end of the item step. */
+const TOP_UP_SAFETY_MS = 10_000;
+
+/**
+ * Base items cut down to `keep`, dropping from the end first those whose cited
+ * pages are all still cited by another kept item (base or top-up), so the trim
+ * does not uncover a section. When that is not enough, the last remaining
+ * items go.
+ */
+function trimKeepingCoverage<T>(
+  base: readonly T[],
+  keep: number,
+  others: readonly T[],
+  textOf: (item: T) => string,
+): T[] {
+  const kept = [...base];
+  if (kept.length <= keep) return kept;
+  const pages = kept.map((item) => itemPages(textOf(item)));
+  const pageCounts = new Map<number, number>();
+  for (const set of [...pages, ...others.map((item) => itemPages(textOf(item)))]) {
+    for (const page of set) pageCounts.set(page, (pageCounts.get(page) ?? 0) + 1);
+  }
+  for (let index = kept.length - 1; index >= 0 && kept.length > keep; index--) {
+    if ([...pages[index]].every((page) => (pageCounts.get(page) ?? 0) > 1)) {
+      for (const page of pages[index]) pageCounts.set(page, pageCounts.get(page)! - 1);
+      kept.splice(index, 1);
+      pages.splice(index, 1);
+    }
+  }
+  return kept.slice(0, keep);
+}
+
+/** A question's full text for coverage, citations included. */
+function testMeText(item: TestMeItem): string {
+  return [item.question, item.explanation, item.answer].join("\n");
+}
+
+/** A card's full text for coverage, citations included. */
+function cardedText(item: CardedItem): string {
+  return [item.front, item.back].join("\n");
 }
 
 async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; modelUsed: string }> {
@@ -997,6 +1177,7 @@ async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; model
       prompt: testMePrompt,
       elementSchema: testMeWireItemSchema,
       promptText: (item) => item.question,
+      textOf: testMeText,
     });
     // Valid items can still carry "A. ..." labels; the UI numbers choices.
     return { ...result, items: result.items.map((item) => repairQuizAnswer(item) as TestMeItem) };
@@ -1022,6 +1203,7 @@ async function runCarded(summary: string): Promise<{ items: CardedItem[]; modelU
       prompt: cardedPrompt,
       elementSchema: cardedItemSchema,
       promptText: (item) => item.front,
+      textOf: cardedText,
     });
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
@@ -1107,10 +1289,8 @@ export async function generateLockedIn(
 }
 
 export async function generateSummary(lockedInMarkdown: string): Promise<string> {
-  const result = await generateTextFromPrompt(summaryPrompt(lockedInMarkdown), {
-    purpose: "summary",
-  });
-  return sanitizeStudyHeadings(result.text);
+  const result = await summarizeLockedIn(lockedInMarkdown.trim(), Date.now());
+  return result.text;
 }
 
 export async function generateTestMe(
@@ -1122,6 +1302,7 @@ export async function generateTestMe(
     prompt: testMePrompt,
     elementSchema: testMeWireItemSchema,
     promptText: (item) => item.question,
+    textOf: testMeText,
   });
   return result.items;
 }
@@ -1135,6 +1316,7 @@ export async function generateCarded(
     prompt: cardedPrompt,
     elementSchema: cardedItemSchema,
     promptText: (item) => item.front,
+    textOf: cardedText,
   });
   return result.items;
 }
