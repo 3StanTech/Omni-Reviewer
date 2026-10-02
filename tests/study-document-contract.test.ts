@@ -27,6 +27,32 @@ describe("study document interaction contracts", () => {
     expect(index).toContain("isSkippedFootnoteSurface");
   });
 
+  it("opens the highlight menu only after a drag is released or the selection settles", () => {
+    const document = read("components/study-document.tsx");
+    const start = document.indexOf("const onSelectionChange = () => {");
+    expect(start).toBeGreaterThan(-1);
+    const effect = document.slice(start, document.indexOf("}, [captureSelection, captureSelectionNow, editing]);", start));
+    // selectionchange is suppressed while a mouse or pen button is down.
+    expect(effect).toContain("if (pointerSelectingRef.current) return;");
+    // and debounced on a settle timer, not the next animation frame.
+    expect(effect).toContain("window.setTimeout(");
+    expect(effect).toContain("SELECTION_SETTLE_MS");
+    expect(effect).not.toContain("requestAnimationFrame");
+    expect(document).toContain("const SELECTION_SETTLE_MS = 350;");
+    // Releasing the pointer anywhere captures the final selection once.
+    expect(effect).toContain('document.addEventListener("pointerup", onPointerRelease);');
+    expect(effect).toContain('document.addEventListener("pointercancel", onPointerRelease);');
+    expect(effect).toMatch(/const onPointerRelease = \(\) => \{\s*if \(!pointerSelectingRef\.current\) return;\s*pointerSelectingRef\.current = false;\s*captureSelectionNow\(\);/);
+    // A mouse or pen press in the article marks the drag; touch uses the settle timer.
+    const article = document.slice(document.indexOf("<article"), document.indexOf("</article>"));
+    expect(article).toContain("onPointerDown={(event) => {");
+    expect(article).toContain('if (event.pointerType === "touch") return;');
+    expect(article).toContain("pointerSelectingRef.current = true;");
+    expect(article).not.toContain("onMouseUp");
+    expect(article).toContain("onKeyUp={captureSelectionNow}");
+    expect(article).toContain("onTouchEnd={captureSelectionNow}");
+  });
+
   it("guards mobile panel focus and Escape return", () => {
     const panel = read("components/study-side-panel.tsx");
     expect(panel).toContain('role="dialog"');

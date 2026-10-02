@@ -53,6 +53,9 @@ export const StudyPackContext = createContext<{ reviewerName: string }>({ review
 const UNSOURCED_MISMATCH_MESSAGE =
   "Could not match this tag to the saved document. Use Edit to change the sentence.";
 
+/** Selection-driven capture waits until the selection has stopped changing (touch handles, shift+arrows). */
+const SELECTION_SETTLE_MS = 350;
+
 const UNSUPPORTED_RANGE_MESSAGE =
   "That selection includes math, a code block, or a footnote that cannot be highlighted. Select ordinary study text, or a whole inline code/math span.";
 
@@ -82,6 +85,9 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const [selectionAnchor, setSelectionAnchor] = useState<{ top: number; left: number } | null>(null);
   const articleRef = useRef<HTMLElement>(null);
   const selectionOpenRef = useRef(false);
+  // A mouse or pen drag that started in the article; selectionchange waits for its release.
+  const pointerSelectingRef = useRef(false);
+  const selectionSettleTimer = useRef<number | undefined>(undefined);
   const { reviewerName } = useContext(StudyPackContext);
   const { openSource, available: sourcesAvailable } = useSourceViewer();
   const modeLabel = kind === "summary" ? "Summary" : "Locked In";
@@ -367,22 +373,42 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     setSelection({ quote, startOffset, endOffset, ...context });
   }, [annotations, closeSelectionMenu, editing, view.content]);
 
+  /** Capture once now, dropping any pending settle-timer capture. */
+  const captureSelectionNow = useCallback(() => {
+    window.clearTimeout(selectionSettleTimer.current);
+    selectionSettleTimer.current = undefined;
+    captureSelection();
+  }, [captureSelection]);
+
   useEffect(() => {
     if (editing) return;
-    let frame: number | undefined;
     const onSelectionChange = () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        frame = undefined;
+      window.clearTimeout(selectionSettleTimer.current);
+      selectionSettleTimer.current = undefined;
+      // Mid-drag selections are partial; the release captures the final one.
+      if (pointerSelectingRef.current) return;
+      selectionSettleTimer.current = window.setTimeout(() => {
+        selectionSettleTimer.current = undefined;
         captureSelection();
-      });
+      }, SELECTION_SETTLE_MS);
+    };
+    const onPointerRelease = () => {
+      if (!pointerSelectingRef.current) return;
+      pointerSelectingRef.current = false;
+      captureSelectionNow();
     };
     document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("pointerup", onPointerRelease);
+    document.addEventListener("pointercancel", onPointerRelease);
     return () => {
       document.removeEventListener("selectionchange", onSelectionChange);
-      if (frame) window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerup", onPointerRelease);
+      document.removeEventListener("pointercancel", onPointerRelease);
+      window.clearTimeout(selectionSettleTimer.current);
+      selectionSettleTimer.current = undefined;
+      pointerSelectingRef.current = false;
     };
-  }, [captureSelection, editing]);
+  }, [captureSelection, captureSelectionNow, editing]);
 
   useEffect(() => {
     if (!selection) return;
@@ -615,9 +641,15 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
           <article
             ref={articleRef}
             tabIndex={-1}
-            onMouseUp={captureSelection}
-            onKeyUp={captureSelection}
-            onTouchEnd={captureSelection}
+            onPointerDown={(event) => {
+              // Touch selection uses native handles and the settle timer instead.
+              if (event.pointerType === "touch") return;
+              pointerSelectingRef.current = true;
+              window.clearTimeout(selectionSettleTimer.current);
+              selectionSettleTimer.current = undefined;
+            }}
+            onKeyUp={captureSelectionNow}
+            onTouchEnd={captureSelectionNow}
             className="print-document reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8"
           >
             <UnsourcedActionsProvider value={unsourcedActions}>
