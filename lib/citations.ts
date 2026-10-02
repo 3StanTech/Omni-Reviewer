@@ -504,8 +504,19 @@ export type StudyDocumentMeta = {
     truncated: boolean;
     verifierFailed: boolean;
     unchecked?: number;
+    /** Keys of untagged claims left unchecked, so Check again can reach them. */
+    uncheckedKeys?: string[];
   };
 };
+
+const MAX_UNCHECKED_KEYS = 500;
+const MAX_UNCHECKED_KEY_CHARS = 16;
+
+function isUncheckedKeyList(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length <= MAX_UNCHECKED_KEYS
+    && value.every((key) => typeof key === "string" && key.length <= MAX_UNCHECKED_KEY_CHARS);
+}
 
 export function readStudyDocumentMeta(contentJson: unknown): StudyDocumentMeta | null {
   if (!contentJson || typeof contentJson !== "object" || Array.isArray(contentJson)) return null;
@@ -520,8 +531,12 @@ export function readStudyDocumentMeta(contentJson: unknown): StudyDocumentMeta |
       typeof (ref as CitationSourceRef).filename === "string" &&
       typeof (ref as CitationSourceRef).hasPages === "boolean",
   );
-  const grounding = (contentJson as { grounding?: StudyDocumentMeta["grounding"] }).grounding;
-  return { citationSources, ...(grounding && typeof grounding === "object" ? { grounding } : {}) };
+  const raw = (contentJson as { grounding?: unknown }).grounding;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { citationSources };
+  // A malformed key list is dropped; the rest of the report is kept.
+  const { uncheckedKeys, ...rest } = raw as NonNullable<StudyDocumentMeta["grounding"]>;
+  const grounding = isUncheckedKeyList(uncheckedKeys) ? { ...rest, uncheckedKeys } : rest;
+  return { citationSources, grounding };
 }
 
 

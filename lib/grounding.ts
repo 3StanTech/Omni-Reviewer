@@ -2,9 +2,12 @@
  * Hybrid grounding check for generated study Markdown.
  *
  * Every claim sentence is scored lexically against the source pages it cites
- * (or every page when it cites nothing usable). Lexical misses go to one
- * batched `verify` call; anything still unsupported gets `[[unsourced]]`
- * inserted after it. Apart from those insertions the Markdown is unchanged.
+ * (or every page when it cites nothing usable; an uncited table row borrows
+ * its table's citation). Lexical misses go to one batched `verify` call with
+ * the most relevant passages of their best pages; anything still unsupported
+ * gets `[[unsourced]]` inserted after it. Misses beyond the batch stay
+ * untagged and count as unchecked. Apart from those insertions the Markdown
+ * is unchanged.
  */
 
 import {
@@ -15,9 +18,16 @@ import {
   UNSOURCED_TOKEN,
   type Citation,
 } from "@/lib/citations";
+import { GROUNDING_PASSAGE_CHARS } from "@/lib/learning-limits";
 import { splitPages } from "@/lib/source-markers";
 
 export const LEXICAL_SUPPORT_THRESHOLD = 0.55;
+
+/** Overlap between neighbouring evidence windows, so a sentence is never cut in every window. */
+const PASSAGE_OVERLAP_CHARS = 150;
+const PASSAGE_SEPARATOR = "\n...\n";
+/** Non-blank lines above a table searched for a caption or lead-in citation. */
+const TABLE_CAPTION_LOOKBACK = 3;
 
 const MIN_CLAIM_WORDS = 6;
 
@@ -40,8 +50,10 @@ export type GroundingReport = {
   unsourced: number;
   truncated: boolean;
   verifierFailed: boolean;
-  /** Claims left untagged because the verifier failed twice; checkable later. */
+  /** Untagged claims left unchecked because the verifier failed twice or the batch was full. */
   unchecked?: number;
+  /** claimKey of each of those unchecked claims, so Check again can find them. */
+  uncheckedKeys?: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -69,6 +81,16 @@ export function normalizeForMatch(text: string): string {
     .split(" ")
     .filter((token) => token && !STOPWORDS.has(token))
     .join(" ");
+}
+
+/** Stable 8-hex id of a claim: FNV-1a (32-bit) over the UTF-8 of its normalized text. */
+export function claimKey(sentence: string): string {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(normalizeForMatch(sentence))) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
 }
 
 function stem(token: string): string {
@@ -141,9 +163,13 @@ type Claim = {
   line: number;
   /** Offset within the line where the token would be inserted. */
   insertAt: number;
+  /** End of the claim's span in the line, including trailing citations. */
+  end: number;
   /** Claim text without citations, for scoring and verification. */
   sentence: string;
   citations: Citation[];
+  /** A table's caption or header citations, for an uncited row's evidence pages only. */
+  inheritedCitations: Citation[];
   alreadyUnsourced: boolean;
 };
 
@@ -211,8 +237,10 @@ function makeClaim(line: string, lineIndex: number, start: number, end: number, 
   return {
     line: lineIndex,
     insertAt,
+    end,
     sentence: stripCitations(sentenceText).replace(/\s+/g, " ").trim(),
     citations: parseCitations(segment),
+    inheritedCitations: [],
     alreadyUnsourced: segment.includes(UNSOURCED_TOKEN),
   };
 }
@@ -244,12 +272,33 @@ function tableRowClaim(line: string, lineIndex: number): Claim | null {
   return makeClaim(line, lineIndex, 0, line.length, insertAt, sentence);
 }
 
+/**
+ * Citations an uncited row borrows from its table: the nearest cited line in
+ * the few non-blank lines above the table (a heading, caption or lead-in),
+ * else the header row. Never written into the Markdown.
+ */
+function tableCitations(lines: string[], tableStart: number): Citation[] {
+  let seen = 0;
+  for (let i = tableStart - 1; i >= 0 && seen < TABLE_CAPTION_LOOKBACK; i--) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("|")) break;
+    seen++;
+    const citations = parseCitations(lines[i]);
+    if (citations.length > 0) return citations;
+  }
+  const next = lines[tableStart + 1];
+  const hasHeader = next !== undefined && next.trim().startsWith("|") && TABLE_SEPARATOR.test(next);
+  return hasHeader ? parseCitations(lines[tableStart]) : [];
+}
+
 function extractClaims(lines: string[]): Claim[] {
   const claims: Claim[] = [];
   let fence: string | null = null;
   let inMathBlock = false;
   let inFootnote = false;
   let previousBlank = false;
+  let tableStart = 0;
 
   lines.forEach((line, lineIndex) => {
     const trimmed = line.trim();
@@ -286,11 +335,15 @@ function extractClaims(lines: string[]): Claim[] {
     if (/^(?: {4,}|\t)/.test(line) && !LIST_ITEM.test(line)) return;
 
     if (trimmed.startsWith("|")) {
+      if (lineIndex === 0 || !lines[lineIndex - 1].trim().startsWith("|")) tableStart = lineIndex;
       if (TABLE_SEPARATOR.test(line)) return;
       const next = lines[lineIndex + 1];
       if (next !== undefined && next.trim().startsWith("|") && TABLE_SEPARATOR.test(next)) return;
       const claim = tableRowClaim(line, lineIndex);
-      if (claim) claims.push(claim);
+      if (claim) {
+        if (claim.citations.length === 0) claim.inheritedCitations = tableCitations(lines, tableStart);
+        claims.push(claim);
+      }
       return;
     }
 
@@ -309,23 +362,30 @@ function extractClaims(lines: string[]): Claim[] {
 // ---------------------------------------------------------------------------
 // Evidence
 
-type EvidencePage = { key: string; page: number; text: string; index: IndexedText };
+type EvidencePage = { key: string; source: number; page: number; text: string; index: IndexedText };
 
 function buildPages(sources: GroundingSource[]): Map<number, EvidencePage[]> {
   const bySource = new Map<number, EvidencePage[]>();
   for (const source of sources) {
     const pages = splitPages(source.text)
       .filter((page) => page.text)
-      .map((page) => ({ key: `${source.index}:${page.page}`, text: page.text, index: indexText(page.text), page: page.page }));
+      .map((page) => ({
+        key: `${source.index}:${page.page}`,
+        source: source.index,
+        page: page.page,
+        text: page.text,
+        index: indexText(page.text),
+      }));
     bySource.set(source.index, pages);
   }
   return bySource;
 }
 
 function evidencePagesFor(claim: Claim, bySource: Map<number, EvidencePage[]>, allPages: EvidencePage[]): EvidencePage[] {
-  if (claim.citations.length === 0) return allPages;
+  const citations = claim.citations.length > 0 ? claim.citations : claim.inheritedCitations;
+  if (citations.length === 0) return allPages;
   const chosen = new Map<string, EvidencePage>();
-  for (const citation of claim.citations) {
+  for (const citation of citations) {
     const pages = bySource.get(citation.source);
     if (!pages || pages.length === 0) return allPages;
     const { pageStart, pageEnd } = citation;
@@ -335,6 +395,49 @@ function evidencePagesFor(claim: Claim, bySource: Map<number, EvidencePage[]>, a
     for (const page of matched) chosen.set(page.key, page);
   }
   return [...chosen.values()];
+}
+
+/** Overlapping windows of `size` characters; the last one ends at the page end. */
+function pageWindows(text: string, size: number): Array<{ start: number; text: string }> {
+  if (text.length <= size) return [{ start: 0, text }];
+  const step = Math.max(1, size - Math.min(PASSAGE_OVERLAP_CHARS, Math.floor(size / 2)));
+  const windows: Array<{ start: number; text: string }> = [];
+  for (let start = 0; start + size < text.length; start += step) {
+    windows.push({ start, text: text.slice(start, start + size) });
+  }
+  const last = text.length - size;
+  windows.push({ start: last, text: text.slice(last) });
+  return windows;
+}
+
+/**
+ * The claim's most relevant passages from its best pages, highest score first
+ * until the budget is full, then printed in page and position order. A dense
+ * page no longer loses its supporting text to a fixed prefix cut.
+ */
+function passageEvidence(terms: SentenceTerms, pages: EvidencePage[], maxChars: number, passageChars: number): string {
+  const size = Math.max(1, Math.min(passageChars, maxChars));
+  const windows = pages.flatMap((page, rank) =>
+    pageWindows(page.text, size).map((window) => ({
+      page,
+      rank,
+      start: window.start,
+      text: window.text,
+      score: scoreTerms(terms, indexText(window.text)),
+    })),
+  );
+  windows.sort((a, b) => b.score - a.score || a.rank - b.rank || a.start - b.start);
+
+  const picked: typeof windows = [];
+  let length = 0;
+  for (const window of windows) {
+    const added = (picked.length > 0 ? PASSAGE_SEPARATOR.length : 0) + window.text.length;
+    if (length + added > maxChars) break;
+    picked.push(window);
+    length += added;
+  }
+  picked.sort((a, b) => a.page.source - b.page.source || a.page.page - b.page.page || a.start - b.start);
+  return picked.map((window) => window.text).join(PASSAGE_SEPARATOR);
 }
 
 function isVerifyResult(value: unknown): value is Array<{ id: number; supported: boolean }> {
@@ -351,7 +454,47 @@ function isVerifyResult(value: unknown): value is Array<{ id: number; supported:
 }
 
 // ---------------------------------------------------------------------------
+// Tokens
+
+type Insertion = { line: number; at: number; text: string };
+
+const TOKEN_WITH_SPACE = / ?\[\[unsourced\]\]/g;
+
+/** Remove every unsourced token, remembering where each sat in the stripped line. */
+function stripTokens(lines: string[]): { lines: string[]; tokens: Insertion[] } {
+  const tokens: Insertion[] = [];
+  const stripped = lines.map((line, lineIndex) => {
+    let out = "";
+    let last = 0;
+    for (const match of line.matchAll(TOKEN_WITH_SPACE)) {
+      out += line.slice(last, match.index);
+      tokens.push({ line: lineIndex, at: out.length, text: match[0] });
+      last = match.index + match[0].length;
+    }
+    return out + line.slice(last);
+  });
+  return { lines: stripped, tokens };
+}
+
+/** Insert texts at offsets of their lines; equal offsets keep their given order. */
+function applyInsertions(lines: string[], insertions: Insertion[]): void {
+  const ordered = [...insertions].sort((a, b) => a.line - b.line || a.at - b.at).reverse();
+  for (const { line, at, text } of ordered) {
+    lines[line] = `${lines[line].slice(0, at)}${text}${lines[line].slice(at)}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
+
+type Outcome = "pass" | "reject" | "unchecked";
+
+export type RecheckOptions = {
+  /** claimKey of each untagged claim an earlier run could not check. */
+  uncheckedKeys?: readonly string[];
+  /** Graded before keys were recorded: every untagged lexical miss may be checked. */
+  legacyUnchecked?: boolean;
+};
 
 export async function groundDocument({
   markdown,
@@ -359,59 +502,84 @@ export async function groundDocument({
   verify,
   maxVerifyItems = 60,
   maxEvidenceChars = 4000,
+  passageChars = GROUNDING_PASSAGE_CHARS,
+  recheck,
 }: {
   markdown: string;
   sources: GroundingSource[];
   verify: VerifyFn;
   maxVerifyItems?: number;
   maxEvidenceChars?: number;
+  /** Evidence window size; the best windows of each claim's pages reach the verifier. */
+  passageChars?: number;
+  /**
+   * Check again: re-check tagged claims and the untagged claims recorded as
+   * unchecked. No other claim is evaluated, so a kept claim is never re-tagged.
+   */
+  recheck?: RecheckOptions;
 }): Promise<{ markdown: string; report: GroundingReport }> {
-  const lines = markdown.split("\n");
+  const stripped = recheck ? stripTokens(markdown.split("\n")) : null;
+  const lines = stripped?.lines ?? markdown.split("\n");
   const claims = extractClaims(lines);
   const bySource = buildPages(sources);
   const allPages = [...bySource.values()].flat();
 
-  const report: GroundingReport = {
-    total: claims.length,
-    cited: claims.filter((claim) => claim.citations.length > 0).length,
-    lexicalSupported: 0,
-    verifiedSupported: 0,
-    unsourced: 0,
-    truncated: false,
-    verifierFailed: false,
+  // Claims whose end carried a token before stripping (re-check only).
+  const tokenClaims = new Map<Insertion, Claim>();
+  if (stripped) {
+    for (const token of stripped.tokens) {
+      const claim = claims.find((entry) => entry.line === token.line && entry.insertAt <= token.at && token.at <= entry.end);
+      if (claim) tokenClaims.set(token, claim);
+    }
+  }
+  const tagged = new Set(tokenClaims.values());
+  const pendingKeys = new Set(recheck?.uncheckedKeys ?? []);
+  const legacy = Boolean(recheck?.legacyUnchecked);
+
+  /** Whether this pass evaluates the claim at all, given whether it missed lexically. */
+  const considered = (claim: Claim, lexicalMiss: boolean): boolean => {
+    if (!recheck) return !claim.alreadyUnsourced;
+    if (tagged.has(claim)) return true;
+    return legacy ? lexicalMiss : pendingKeys.has(claimKey(claim.sentence));
   };
 
-  const toMark: Claim[] = [];
-  const misses: Array<{ claim: Claim; best: Array<{ page: EvidencePage; score: number }> }> = [];
+  let lexicalSupported = 0;
+  let verifiedSupported = 0;
+  let truncated = false;
+  let verifierFailed = false;
+  const outcomes = new Map<Claim, Outcome>();
+  const misses: Array<{ claim: Claim; terms: SentenceTerms; best: EvidencePage[] }> = [];
 
   for (const claim of claims) {
-    if (claim.alreadyUnsourced) {
-      report.unsourced++;
-      continue;
-    }
+    // Normal and keyed passes know up front which claims they evaluate; a
+    // legacy re-check must score untagged claims first to find the misses.
+    if (!legacy && !considered(claim, true)) continue;
     const terms = sentenceTerms(claim.sentence);
     const scored = evidencePagesFor(claim, bySource, allPages)
       .map((page) => ({ page, score: scoreTerms(terms, page.index) }))
       .sort((a, b) => b.score - a.score);
-    if (scored.length > 0 && scored[0].score >= LEXICAL_SUPPORT_THRESHOLD) {
-      report.lexicalSupported++;
+    const lexicalMiss = !(scored.length > 0 && scored[0].score >= LEXICAL_SUPPORT_THRESHOLD);
+    if (!considered(claim, lexicalMiss)) continue;
+    if (!lexicalMiss) {
+      lexicalSupported++;
+      outcomes.set(claim, "pass");
     } else {
-      misses.push({ claim, best: scored.slice(0, 2).filter((entry, rank) => rank === 0 || entry.score > 0) });
+      const best = scored.slice(0, 2).filter((entry, rank) => rank === 0 || entry.score > 0);
+      misses.push({ claim, terms, best: best.map((entry) => entry.page) });
     }
   }
 
+  // Misses beyond the batch are left unchecked, not tagged: an unchecked claim
+  // is not evidence that it is missing from the sources, and Check again can reach it.
   const verifiable = misses.slice(0, Math.max(0, maxVerifyItems));
-  const overflow = misses.slice(verifiable.length);
-  if (overflow.length > 0) {
-    report.truncated = true;
-    toMark.push(...overflow.map((miss) => miss.claim));
-  }
+  for (const miss of misses.slice(verifiable.length)) outcomes.set(miss.claim, "unchecked");
+  if (misses.length > verifiable.length) truncated = true;
 
   if (verifiable.length > 0) {
     const items: VerifyItem[] = verifiable.map((miss, id) => ({
       id,
       sentence: miss.claim.sentence,
-      evidence: miss.best.map((entry) => entry.page.text).join("\n\n").slice(0, maxEvidenceChars),
+      evidence: passageEvidence(miss.terms, miss.best, maxEvidenceChars, passageChars),
     }));
     // One retry: a free verifier often fails transiently. If it still fails,
     // leave these claims untagged and count them as unchecked, because a
@@ -427,33 +595,50 @@ export async function groundDocument({
         supported = null;
       }
     }
-    if (supported === null) {
-      report.verifierFailed = true;
-      report.unchecked = verifiable.length;
-    } else {
-      const verified = supported;
-      verifiable.forEach((miss, id) => {
-        if (verified.has(id)) report.verifiedSupported++;
-        else toMark.push(miss.claim);
-      });
-    }
+    if (supported === null) verifierFailed = true;
+    verifiable.forEach((miss, id) => {
+      const outcome: Outcome = supported === null ? "unchecked" : supported.has(id) ? "pass" : "reject";
+      if (outcome === "pass") verifiedSupported++;
+      outcomes.set(miss.claim, outcome);
+    });
   }
 
-  report.unsourced += toMark.length;
+  // Only untagged claims can be unchecked; a tagged claim that could not be
+  // re-checked keeps its tag.
+  const uncheckedKeys = claims
+    .filter((claim) => outcomes.get(claim) === "unchecked" && !tagged.has(claim))
+    .map((claim) => claimKey(claim.sentence));
+  const newTags = claims
+    .filter((claim) => outcomes.get(claim) === "reject" && !tagged.has(claim))
+    .map((claim) => ({ line: claim.line, at: claim.insertAt, text: ` ${UNSOURCED_TOKEN}` }));
 
-  const insertions = new Map<number, number[]>();
-  for (const claim of toMark) {
-    const offsets = insertions.get(claim.line) ?? [];
-    offsets.push(claim.insertAt);
-    insertions.set(claim.line, offsets);
-  }
-  for (const [lineIndex, offsets] of insertions) {
-    let line = lines[lineIndex];
-    for (const offset of [...offsets].sort((a, b) => b - a)) {
-      line = `${line.slice(0, offset)} ${UNSOURCED_TOKEN}${line.slice(offset)}`;
-    }
-    lines[lineIndex] = line;
+  // Passing tagged claims lose their token; every other token (failing or
+  // unchecked tagged claims, tokens on lines that are not claims) goes back
+  // exactly where it was.
+  const keptTokens = stripped
+    ? stripped.tokens.filter((token) => {
+        const claim = tokenClaims.get(token);
+        return !claim || outcomes.get(claim) !== "pass";
+      })
+    : [];
+  applyInsertions(lines, [...keptTokens, ...newTags]);
+  const output = lines.join("\n");
+
+  const report: GroundingReport = {
+    total: claims.length,
+    cited: claims.filter((claim) => claim.citations.length > 0).length,
+    lexicalSupported,
+    verifiedSupported,
+    unsourced: recheck
+      ? output.split(UNSOURCED_TOKEN).length - 1
+      : claims.filter((claim) => claim.alreadyUnsourced).length + newTags.length,
+    truncated,
+    verifierFailed,
+  };
+  if (uncheckedKeys.length > 0) {
+    report.unchecked = uncheckedKeys.length;
+    report.uncheckedKeys = uncheckedKeys;
   }
 
-  return { markdown: lines.join("\n"), report };
+  return { markdown: output, report };
 }

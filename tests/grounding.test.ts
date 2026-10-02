@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  claimKey,
   groundDocument,
   keyTerms,
   LEXICAL_SUPPORT_THRESHOLD,
@@ -45,6 +46,15 @@ function rejectAll(): VerifyFn {
 }
 
 describe("lexical helpers", () => {
+  it("gives claims stable 8-hex FNV-1a keys without citation or unsourced-token noise", () => {
+    expect(claimKey("hello world")).toBe("d58b3fa7");
+    const key = claimKey("Café Gentamicin binds the ribosomal subunit.");
+    expect(key).toMatch(/^[0-9a-f]{8}$/);
+    expect(claimKey("CAFÉ Gentamicin binds the ribosomal subunit. [[unsourced]] [S1 p.14]")).toBe(key);
+    expect(claimKey("Café Gentamicin binds the ribosomal subunit. [S2 p.3, p.4]")).toBe(key);
+    expect(claimKey("Café Gentamicin dissolves the nuclear membrane.")).not.toBe(key);
+  });
+
   it("normalizes case, diacritics, citations, and stopwords", () => {
     expect(normalizeForMatch("The **Café** binds [S1 p.2] the RNA. [[unsourced]]")).toBe("cafe binds rna");
   });
@@ -140,7 +150,7 @@ describe("groundDocument", () => {
     expect(result.report.lexicalSupported).toBe(1);
   });
 
-  it("caps verification and marks the overflow as truncated", async () => {
+  it("caps verification and leaves the overflow untagged as unchecked", async () => {
     const claims = [
       "Vancomycin cures every viral infection within three hours.",
       "Penicillin turns bacterial colonies bright purple after sunset.",
@@ -149,8 +159,278 @@ describe("groundDocument", () => {
     const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
     const result = await groundDocument({ markdown: claims.join("\n"), sources: [PHARM_SOURCE], verify, maxVerifyItems: 2 });
     expect(verify.mock.calls[0][0]).toHaveLength(2);
-    expect(result.markdown.split("\n")).toEqual([claims[0], claims[1], `${claims[2]} [[unsourced]]`]);
-    expect(result.report).toMatchObject({ verifiedSupported: 2, unsourced: 1, truncated: true, verifierFailed: false });
+    expect(result.markdown.split("\n")).toEqual(claims);
+    expect(result.report).toMatchObject({ verifiedSupported: 2, unsourced: 0, unchecked: 1, truncated: true, verifierFailed: false });
+    expect(result.report.uncheckedKeys).toEqual([claimKey(claims[2])]);
+  });
+
+  it("sends a relevant passage near character 3,000 instead of the start of a long page", async () => {
+    const supporting = "Gentamicin attaches to the 30S ribosomal subunit.";
+    const filler = "Weather records describe cloudy skies and quiet coastal harbors. ";
+    const before = `${filler.repeat(60).slice(0, 2999)} `;
+    const page = `${before}${supporting}${filler.repeat(30).slice(0, 4500 - before.length - supporting.length)}`;
+    const markdown = "Gentamicin disrupts translation through irreversible attachment, producing lethal miscoding and defective bacterial polypeptides. [S1 p.3]";
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
+    expect(page).toHaveLength(4500);
+    expect(page.indexOf(supporting)).toBe(3000);
+    expect(lexicalSupport(markdown, page)).toBeLessThan(LEXICAL_SUPPORT_THRESHOLD);
+
+    await groundDocument({
+      markdown,
+      sources: [{ index: 1, text: `<<<page 3>>>\n${page}` }],
+      verify,
+      maxEvidenceChars: 2400,
+      passageChars: 600,
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    const [items] = verify.mock.calls[0];
+    expect(items).toHaveLength(1);
+    expect(items[0].evidence).toContain(supporting);
+    expect(items[0].evidence.length).toBeLessThanOrEqual(2400);
+  });
+
+  it.each([1205, 1805, 2400])("bounds evidence across pages and restores window position order at a %i-character cap", async (maxEvidenceChars) => {
+    const filler = "Cloudy skies surround quiet coastal harbors. ";
+    let page1 = filler.repeat(40).slice(0, 1500);
+    const passages = [
+      { at: 50, text: "FIRST_WINDOW Gentamicin " },
+      { at: 650, text: "SECOND_WINDOW Gentamicin irreversible " },
+      { at: 1250, text: "THIRD_WINDOW Gentamicin irreversible attachment " },
+    ];
+    for (const passage of passages) {
+      page1 = `${page1.slice(0, passage.at)}${passage.text}${page1.slice(passage.at + passage.text.length)}`;
+    }
+    const page2 = `OTHER_PAGE Gentamicin ${filler}`;
+    const page3 = `EXCLUDED_PAGE Gentamicin ${filler}`;
+    const markdown = "Gentamicin irreversible attachment causes lethal miscoding defective polypeptides prolonged nephrotoxicity mysterious crystallization.";
+    const verify = vi.fn<VerifyFn>(async () => []);
+    for (const page of [page1, page2, page3]) {
+      expect(lexicalSupport(markdown, page)).toBeLessThan(LEXICAL_SUPPORT_THRESHOLD);
+    }
+
+    await groundDocument({
+      markdown,
+      sources: [{ index: 1, text: `<<<page 1>>>\n${page1}\n<<<page 2>>>\n${page2}\n<<<page 3>>>\n${page3}` }],
+      verify,
+      maxEvidenceChars,
+      passageChars: 600,
+    });
+
+    const [items] = verify.mock.calls[0];
+    expect(items).toHaveLength(1);
+    const evidence = items[0].evidence;
+    expect(evidence.length).toBeLessThanOrEqual(maxEvidenceChars);
+    expect(evidence).toContain("SECOND_WINDOW");
+    expect(evidence).toContain("THIRD_WINDOW");
+    expect(evidence.indexOf("SECOND_WINDOW")).toBeLessThan(evidence.indexOf("THIRD_WINDOW"));
+    expect(evidence).toContain("\n...\n");
+    expect(evidence).not.toContain("EXCLUDED_PAGE");
+    if (maxEvidenceChars === 2400) {
+      expect(evidence).toContain("FIRST_WINDOW");
+      expect(evidence).toContain("OTHER_PAGE");
+      expect(evidence.indexOf("FIRST_WINDOW")).toBeLessThan(evidence.indexOf("SECOND_WINDOW"));
+      expect(evidence.indexOf("THIRD_WINDOW")).toBeLessThan(evidence.indexOf("OTHER_PAGE"));
+    }
+  });
+
+  it.each([
+    { name: "heading before the table", caption: "## Drug mechanisms [S1 p.3]", header: "| Drug | Mechanism [S1 p.2] |", pages: [3] },
+    { name: "caption before the table", caption: "Table: Drug mechanisms [S1 p.3]", header: "| Drug | Mechanism |", pages: [3] },
+    { name: "header when the caption has no citation", caption: "## Drug mechanisms", header: "| Drug | Mechanism [S1 p.2] |", pages: [2] },
+    { name: "all pages when the table has no citation", caption: "## Drug mechanisms", header: "| Drug | Mechanism |", pages: [2, 3] },
+  ])("selects evidence for an uncited table row from the $name", async ({ caption, header, pages }) => {
+    const sources = [{ index: 1, text: "<<<page 2>>>\nSECOND_PAGE Gentamicin weather records.\n<<<page 3>>>\nTHIRD_PAGE Gentamicin harbor records." }];
+    const row = "| Gentamicin | Dissolves the nuclear membrane of human neurons |";
+    const markdown = [caption, "", header, "| --- | --- |", row].join("\n");
+    const verify = vi.fn<VerifyFn>(async () => []);
+    const result = await groundDocument({ markdown, sources, verify, maxEvidenceChars: 2400, passageChars: 600 });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    const [items] = verify.mock.calls[0];
+    expect(items).toHaveLength(1);
+    for (const [page, marker] of [[2, "SECOND_PAGE"], [3, "THIRD_PAGE"]] as const) {
+      if (pages.includes(page)) expect(items[0].evidence).toContain(marker);
+      else expect(items[0].evidence).not.toContain(marker);
+    }
+    expect(result.markdown).toBe(
+      [caption, "", header, "| --- | --- |", "| Gentamicin | Dissolves the nuclear membrane of human neurons [[unsourced]] |"].join("\n"),
+    );
+    expect(result.markdown.split("\n").at(-1)).not.toMatch(/\[S\d/);
+  });
+
+  it("counts two overflow claims as unchecked without tagging them", async () => {
+    const markdown = [
+      "Vancomycin cures every viral infection within three hours.",
+      "Penicillin turns bacterial colonies bright purple after sunset.",
+      "Macrolides permanently erase long term memories in adults.",
+    ].join("\n");
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, maxVerifyItems: 1 });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify.mock.calls[0][0]).toHaveLength(1);
+    expect(result.markdown).toBe(markdown);
+    expect(result.markdown).not.toContain("[[unsourced]]");
+    expect(result.report).toMatchObject({ total: 3, verifiedSupported: 1, truncated: true, unchecked: 2, unsourced: 0 });
+    expect(result.report.uncheckedKeys).toHaveLength(2);
+    expect(result.report.uncheckedKeys).toEqual(expect.arrayContaining(markdown.split("\n").slice(1).map(claimKey)));
+  });
+
+  it("adds verifier failures to the overflow unchecked count", async () => {
+    const markdown = [
+      "Vancomycin cures every viral infection within three hours.",
+      "Penicillin turns bacterial colonies bright purple after sunset.",
+      "Macrolides permanently erase long term memories in adults.",
+    ].join("\n");
+    const verify = vi.fn<VerifyFn>(async () => { throw new Error("provider down"); });
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, maxVerifyItems: 1 });
+
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(result.markdown).toBe(markdown);
+    expect(result.report).toMatchObject({ truncated: true, verifierFailed: true, unchecked: 3, unsourced: 0 });
+    expect(result.report.uncheckedKeys).toHaveLength(3);
+    expect(result.report.uncheckedKeys).toEqual(expect.arrayContaining(markdown.split("\n").map(claimKey)));
+  });
+
+  it("rechecks tagged claims and reports totals and citations for the whole document", async () => {
+    const first = "Vancomycin cures every viral infection within three hours.";
+    const second = "Penicillin turns bacterial colonies bright purple after sunset.";
+    const kept = "Macrolides permanently erase long term memories in adults.";
+    const markdown = `${first} [[unsourced]] [S1 p.14]\n${second} [[unsourced]]\n${kept} [S1 p.15]`;
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item, index) => ({ id: item.id, supported: index === 0 })));
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, recheck: {} });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify.mock.calls[0][0].map((item) => item.sentence)).toEqual([first, second]);
+    expect(result.markdown).toBe(`${first} [S1 p.14]\n${second} [[unsourced]]\n${kept} [S1 p.15]`);
+    expect(result.report).toMatchObject({ total: 3, cited: 2, lexicalSupported: 0, verifiedSupported: 1, unsourced: 1 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+    expect(result.report.uncheckedKeys).toBeUndefined();
+    expect(result.report.unsourced).toBe((result.markdown.match(/\[\[unsourced\]\]/g) ?? []).length);
+  });
+
+  it("keeps failed tagged rechecks as unsourced without counting them as unchecked", async () => {
+    const markdown = [
+      "Vancomycin cures every viral infection within three hours. [[unsourced]]",
+      "Penicillin turns bacterial colonies bright purple after sunset. [[unsourced]]",
+      "Macrolides permanently erase long term memories in adults.",
+    ].join("\n");
+    const verify = vi.fn<VerifyFn>(async () => { throw new Error("provider down"); });
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, recheck: {} });
+
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(verify.mock.calls[0][0]).toHaveLength(2);
+    expect(result.markdown).toBe(markdown);
+    expect(result.report).toMatchObject({ total: 3, cited: 0, verifierFailed: true, unsourced: 2 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+    expect(result.report.uncheckedKeys).toBeUndefined();
+  });
+
+  it("keeps a rechecked overflow tag while clearing the verified tag", async () => {
+    const first = "Vancomycin cures every viral infection within three hours.";
+    const second = "Penicillin turns bacterial colonies bright purple after sunset.";
+    const markdown = `${first} [[unsourced]]\n${second} [[unsourced]]`;
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, recheck: {}, maxVerifyItems: 1 });
+
+    expect(verify.mock.calls[0][0]).toHaveLength(1);
+    expect(result.markdown).toBe(`${first}\n${second} [[unsourced]]`);
+    expect(result.report).toMatchObject({ total: 2, verifiedSupported: 1, truncated: true, unsourced: 1 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+    expect(result.report.uncheckedKeys).toBeUndefined();
+  });
+
+  it.each([true, false])("rechecks a recorded untagged claim when the verifier returns supported=%s", async (supported) => {
+    const kept = "Macrolides permanently erase long term memories in adults.";
+    const markdown = `${INVENTED}\n${kept}`;
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported })));
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, recheck: { uncheckedKeys: [claimKey(INVENTED)] } });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify.mock.calls[0][0].map((item) => item.sentence)).toEqual(["Gentamicin is dosed at 250 mg every hour for twelve consecutive weeks."]);
+    expect(result.markdown).toBe(supported
+      ? markdown
+      : `Gentamicin is dosed at 250 mg every hour for twelve consecutive weeks. [[unsourced]] [S1 p.14]\n${kept}`);
+    expect(result.report).toMatchObject({ total: 2, cited: 1, verifiedSupported: supported ? 1 : 0, unsourced: supported ? 0 : 1 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+    expect(result.report.uncheckedKeys).toBeUndefined();
+  });
+
+  it.each(["overflow", "failure"] as const)("preserves an untagged unchecked claim and its key on recheck %s", async (reason) => {
+    const kept = "Macrolides permanently erase long term memories in adults.";
+    const markdown = `${INVENTED}\n${kept}`;
+    const key = claimKey(INVENTED);
+    const verify = vi.fn<VerifyFn>(async () => { throw new Error("provider down"); });
+    const result = await groundDocument({
+      markdown, sources: [PHARM_SOURCE], verify,
+      recheck: { uncheckedKeys: [key] },
+      maxVerifyItems: reason === "overflow" ? 0 : 1,
+    });
+
+    expect(verify).toHaveBeenCalledTimes(reason === "overflow" ? 0 : 2);
+    expect(result.markdown).toBe(markdown);
+    expect(result.report).toMatchObject({ total: 2, cited: 1, unsourced: 0, unchecked: 1, uncheckedKeys: [key], truncated: reason === "overflow", verifierFailed: reason === "failure" });
+  });
+
+  it("never evaluates kept sentences or other unrecorded untagged claims", async () => {
+    const markdown = `${INVENTED}\n${SUPPORTED}\nMacrolides permanently erase long term memories in adults.`;
+    const verify = rejectAll();
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, recheck: { uncheckedKeys: [] } });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.markdown).toBe(markdown);
+    expect(result.report).toMatchObject({ total: 3, cited: 2, lexicalSupported: 0, verifiedSupported: 0, unsourced: 0 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+    expect(result.report.uncheckedKeys).toBeUndefined();
+  });
+
+  it("removes lexically supported tags and unchecked keys without calling the verifier", async () => {
+    const unchecked = "Macrolides bind the 50S ribosomal subunit and block translocation. [S1 p.15]";
+    const kept = "Vancomycin cures every viral infection within three hours.";
+    const tagged = SUPPORTED.replace(" [S1 p.14]", " [[unsourced]] [S1 p.14]");
+    const verify = neverCalled();
+    const result = await groundDocument({
+      markdown: `${tagged}\n${unchecked}\n${kept}`, sources: [PHARM_SOURCE], verify,
+      recheck: { uncheckedKeys: [claimKey(unchecked)] },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.markdown).toBe(`${SUPPORTED}\n${unchecked}\n${kept}`);
+    expect(result.report).toMatchObject({ total: 3, cited: 2, lexicalSupported: 2, verifiedSupported: 0, unsourced: 0 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+    expect(result.report.uncheckedKeys).toBeUndefined();
+  });
+
+  it("separates retained tags from retained unchecked keys on a mixed verifier failure", async () => {
+    const tagged = "Vancomycin cures every viral infection within three hours. [[unsourced]]";
+    const kept = "Macrolides permanently erase long term memories in adults.";
+    const markdown = `${tagged}\n${INVENTED}\n${kept}`;
+    const key = claimKey(INVENTED);
+    const verify = vi.fn<VerifyFn>(async () => { throw new Error("provider down"); });
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, recheck: { uncheckedKeys: [key] } });
+
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(verify.mock.calls[0][0]).toHaveLength(2);
+    expect(result.markdown).toBe(markdown);
+    expect(result.report).toMatchObject({ total: 3, cited: 1, unsourced: 1, unchecked: 1, uncheckedKeys: [key], verifierFailed: true });
+    expect(result.report.unsourced).toBe((result.markdown.match(/\[\[unsourced\]\]/g) ?? []).length);
+  });
+
+  it("rechecks every untagged lexical miss for a legacy unchecked document", async () => {
+    const kept = "Macrolides permanently erase long term memories in adults.";
+    const markdown = `${SUPPORTED}\n${INVENTED}\n${kept}`;
+    const verify = rejectAll();
+    const result = await groundDocument({ markdown, sources: [PHARM_SOURCE], verify, recheck: { legacyUnchecked: true } });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(verify).mock.calls[0][0].map((item) => item.sentence)).toEqual([
+      "Gentamicin is dosed at 250 mg every hour for twelve consecutive weeks.", kept,
+    ]);
+    expect(result.markdown).toBe(`${SUPPORTED}\nGentamicin is dosed at 250 mg every hour for twelve consecutive weeks. [[unsourced]] [S1 p.14]\n${kept} [[unsourced]]`);
+    expect(result.report).toMatchObject({ total: 3, cited: 2, unsourced: 2, verifiedSupported: 0 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+    expect(result.report.uncheckedKeys).toBeUndefined();
   });
 
   it("truncates evidence to maxEvidenceChars", async () => {
@@ -175,6 +455,8 @@ describe("groundDocument", () => {
     expect(verify).toHaveBeenCalledTimes(2);
     expect(result.markdown).toBe(markdown);
     expect(result.report).toMatchObject({ verifierFailed: true, lexicalSupported: 1, unsourced: 0, unchecked: 2 });
+    expect(result.report.uncheckedKeys).toHaveLength(2);
+    expect(result.report.uncheckedKeys).toEqual(expect.arrayContaining(markdown.split("\n").slice(1).map(claimKey)));
   });
 
   it("uses the retry when the first verifier call fails", async () => {
@@ -190,6 +472,7 @@ describe("groundDocument", () => {
     const verify = vi.fn(async () => ({ nope: true })) as unknown as VerifyFn;
     const result = await groundDocument({ markdown: INVENTED, sources: [PHARM_SOURCE], verify });
     expect(result.report).toMatchObject({ verifierFailed: true, unchecked: 1 });
+    expect(result.report.uncheckedKeys).toEqual([claimKey(INVENTED)]);
     expect(result.markdown).not.toContain("[[unsourced]]");
   });
 

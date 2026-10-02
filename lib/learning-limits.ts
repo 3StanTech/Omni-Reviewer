@@ -41,4 +41,6 @@ export const GROUNDED_STEP_TOTAL_MS = 285_000;
 export const MIN_GROUNDING_VERIFY_MS = 5_000;
 /** Keeps the verify prompt inside the conservative context budget. */
 export const MAX_GROUNDING_VERIFY_ITEMS = 40;
-export const MAX_GROUNDING_EVIDENCE_CHARS = 2_000;
+export const MAX_GROUNDING_EVIDENCE_CHARS = 2_400;
+/** Window size for picking the most relevant passages of a cited page. */
+export const GROUNDING_PASSAGE_CHARS = 600;

@@ -48,9 +48,11 @@ import {
   generateCarded,
   generateStudyPack,
   generateStudyPackStep,
+  generateSummary,
   generateTestMe,
   generateTextFromPrompt,
   getModelId,
+  regroundStudyDocument,
   visionReadImages,
   visionReadPages,
 } from "@/lib/ai";
@@ -72,6 +74,9 @@ import {
   testMePrompt,
 } from "@/lib/prompts";
 import { hasMeaningfulText, joinPages, withSlideImageText } from "@/lib/source-markers";
+import { citedPageCount, studyItemTarget } from "@/lib/ai-budgets";
+import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
+import * as grounding from "@/lib/grounding";
 
 const root = path.resolve(__dirname, "..");
 
@@ -91,6 +96,18 @@ const EIGHTEEN_PAGE_DOC = [
   "",
   ...Array.from({ length: 18 }, (_, i) => `- Fact ${i + 1}. [S1 p.${i + 1}]`),
 ].join("\n");
+
+/** Four separate topics, with 18 distinct cited pages across the whole document. */
+const SECTIONED_EIGHTEEN_PAGE_DOC = [
+  { heading: "Foundations", pages: [1, 2, 3] },
+  { heading: "Mechanisms", pages: [4, 5, 6, 7, 8, 9, 10] },
+  { heading: "Applications", pages: [11, 12, 13, 14] },
+  { heading: "Contraindications", pages: [15, 16, 17, 18] },
+].map(({ heading, pages }) => [
+  `## ${heading}`,
+  "",
+  ...pages.map((page) => `- The specific fact for page ${page} is supported. [S1 p.${page}]`),
+].join("\n")).join("\n\n");
 
 /** Test Me items as the SDK returns them after the wire schema transform. */
 function quizObjects(count: number) {
@@ -320,8 +337,12 @@ describe("generate", () => {
     // Only grounding markers may be added to the generated documents.
     expect(stripCitations(pack.lockedIn)).toBe(SAMPLE_LOCKED_IN);
     expect(stripCitations(pack.summary)).toBe(SAMPLE_SUMMARY);
-    expect(pack.testMe).toEqual(JSON.parse(SAMPLE_TEST_ME_JSON));
-    expect(pack.carded).toEqual(JSON.parse(SAMPLE_CARDED_JSON));
+    expect(pack.testMe).toEqual(JSON.parse(SAMPLE_TEST_ME_JSON).map((item: Record<string, unknown>) => ({
+      ...item, id: expect.stringMatching(/^q-[0-9a-f]{8}$/),
+    })));
+    expect(pack.carded).toEqual(JSON.parse(SAMPLE_CARDED_JSON).map((item: Record<string, unknown>) => ({
+      ...item, id: expect.stringMatching(/^c-[0-9a-f]{8}$/),
+    })));
     expect(pack.meta.lockedIn.citationSources).toEqual([
       { index: 1, sourceId: "", filename: "notes.txt", hasPages: false },
     ]);
@@ -341,7 +362,7 @@ describe("generate", () => {
     generateObject.mockResolvedValue({
       object: Array.from({ length: 101 }, (_, index) => ({
         id: `c${index}`,
-        front: "Front",
+        front: `Front ${index}`,
         back: "Back",
       })),
       response: { modelId: "z-ai/glm-5.2:free" },
@@ -349,12 +370,221 @@ describe("generate", () => {
 
     const cards = await generateCarded("# Summary\n\nMaterial");
     expect(cards.length).toBeGreaterThan(0);
-    expect(cards.length).toBeLessThanOrEqual(100);
-    expect(cards[0]?.id).toBe("c0");
+    expect(cards).toHaveLength(studyItemTarget("carded", "# Summary\n\nMaterial"));
+    expect(cards[0]?.id).toMatch(/^c-[0-9a-f]{8}$/);
     expect(generateObject).toHaveBeenCalledTimes(1);
   });
 
   describe("page-scaled item targets", () => {
+    it.each(["step", "standalone"] as const)("splits Test Me by sections and merges capped halves in order through %s", async (entryPoint) => {
+      const lockedIn = SECTIONED_EIGHTEEN_PAGE_DOC;
+      const halves = balancedHalves(lockedIn);
+      const counts = allocateItems(18, halves);
+      const objectPrompts: string[] = [];
+      expect(splitSections(lockedIn).sections).toHaveLength(4);
+      expect(citedPageCount(lockedIn)).toBe(18);
+      expect(halves).toHaveLength(2);
+
+      generateObject.mockImplementation(async ({ prompt }: { prompt: string }) => {
+        objectPrompts.push(prompt);
+        const half = halves.findIndex((markdown, i) => prompt === testMePrompt(markdown, counts[i]));
+        expect(half).toBeGreaterThanOrEqual(0);
+        return {
+          object: quizObjects(counts[half] + 5).map((item, i) => ({
+            ...item,
+            question: `Half ${half + 1} question ${i + 1}?`,
+          })),
+          response: { modelId: `provider/half-${half + 1}` },
+        };
+      });
+
+      const result = entryPoint === "step"
+        ? await generateStudyPackStep({ step: "test_me", lockedIn })
+        : null;
+      const items = result ? result.payload.content : await generateTestMe(lockedIn);
+      expect(generateObject).toHaveBeenCalledTimes(2);
+      expect(objectPrompts).toEqual(halves.map((half, i) => testMePrompt(half, counts[i])));
+      for (const [i, prompt] of objectPrompts.entries()) {
+        for (const { heading } of splitSections(lockedIn).sections) {
+          if (halves[i].includes(`## ${heading}`)) expect(prompt).toContain(`## ${heading}`);
+          else expect(prompt).not.toContain(`## ${heading}`);
+        }
+      }
+      expect(items).toEqual(counts.flatMap((count, half) => Array.from({ length: count }, (_, i) => (
+        expect.objectContaining({
+          id: expect.stringMatching(/^q-[0-9a-f]{8}$/),
+          question: `Half ${half + 1} question ${i + 1}?`,
+        })
+      ))));
+      expect(items).toHaveLength(18);
+      expect(new Set((items as Array<{ id: string }>).map((item) => item.id)).size).toBe(18);
+      if (result) expect(result.modelUsed).toBe("provider/half-1");
+      expect(generateText).not.toHaveBeenCalled();
+    });
+
+    it.each(["step", "standalone"] as const)("splits Carded from Summary and merges capped halves in order through %s", async (entryPoint) => {
+      const summary = SECTIONED_EIGHTEEN_PAGE_DOC;
+      const total = studyItemTarget("carded", summary);
+      const halves = balancedHalves(summary);
+      const counts = allocateItems(total, halves);
+      const objectPrompts: string[] = [];
+      expect(halves).toHaveLength(2);
+
+      generateObject.mockImplementation(async ({ prompt }: { prompt: string }) => {
+        objectPrompts.push(prompt);
+        const half = halves.findIndex((markdown, i) => prompt === cardedPrompt(markdown, counts[i]));
+        expect(half).toBeGreaterThanOrEqual(0);
+        return {
+          object: cardObjects(counts[half] + 5).map((item, i) => ({
+            ...item,
+            front: `Half ${half + 1} card ${i + 1}`,
+          })),
+          response: { modelId: `provider/half-${half + 1}` },
+        };
+      });
+
+      const result = entryPoint === "step"
+        ? await generateStudyPackStep({ step: "carded", summary })
+        : null;
+      const items = result ? result.payload.content : await generateCarded(summary);
+      expect(generateObject).toHaveBeenCalledTimes(2);
+      expect(objectPrompts).toEqual(halves.map((half, i) => cardedPrompt(half, counts[i])));
+      for (const [i, prompt] of objectPrompts.entries()) {
+        for (const { heading } of splitSections(summary).sections) {
+          if (halves[i].includes(`## ${heading}`)) expect(prompt).toContain(`## ${heading}`);
+          else expect(prompt).not.toContain(`## ${heading}`);
+        }
+      }
+      expect(items).toEqual(counts.flatMap((count, half) => Array.from({ length: count }, (_, i) => (
+        expect.objectContaining({
+          id: expect.stringMatching(/^c-[0-9a-f]{8}$/),
+          front: `Half ${half + 1} card ${i + 1}`,
+        })
+      ))));
+      expect(items).toHaveLength(total);
+      expect(new Set((items as Array<{ id: string }>).map((item) => item.id)).size).toBe(total);
+      if (result) expect(result.modelUsed).toBe("provider/half-1");
+      expect(generateText).not.toHaveBeenCalled();
+    });
+
+    it("keeps the single-section Test Me prompt and call count unchanged", async () => {
+      const total = studyItemTarget("test_me", EIGHTEEN_PAGE_DOC);
+      generateObject.mockResolvedValue({ object: quizObjects(total), response: { modelId: "provider/model" } });
+
+      const result = await generateStudyPackStep({ step: "test_me", lockedIn: EIGHTEEN_PAGE_DOC });
+
+      expect(generateObject).toHaveBeenCalledTimes(1);
+      expect(objectCall().prompt).toBe(testMePrompt(EIGHTEEN_PAGE_DOC, total));
+      expect(result.payload.content).toHaveLength(total);
+    });
+
+    it.each(["test_me", "carded"] as const)("starts both %s halves before either completes and preserves input order", async (kind) => {
+      const markdown = SECTIONED_EIGHTEEN_PAGE_DOC;
+      const halves = balancedHalves(markdown);
+      const counts = allocateItems(studyItemTarget(kind, markdown), halves);
+      const promptFor = kind === "test_me" ? testMePrompt : cardedPrompt;
+      const objects = (half: number) => kind === "test_me"
+        ? quizObjects(counts[half]).map((item, i) => ({ ...item, question: `Half ${half + 1} item ${i + 1}` }))
+        : cardObjects(counts[half]).map((item, i) => ({ ...item, front: `Half ${half + 1} item ${i + 1}` }));
+      let finishFirst!: (result: { object: ReturnType<typeof objects>; response: { modelId: string } }) => void;
+      const firstResult = new Promise<{ object: ReturnType<typeof objects>; response: { modelId: string } }>((resolve) => {
+        finishFirst = resolve;
+      });
+      generateObject.mockImplementation(({ prompt }: { prompt: string }) => {
+        if (prompt === promptFor(halves[0], counts[0])) return firstResult;
+        expect(prompt).toBe(promptFor(halves[1], counts[1]));
+        return Promise.resolve({ object: objects(1), response: { modelId: "provider/half-2" } });
+      });
+
+      const pending = generateStudyPackStep({ step: kind, lockedIn: markdown, summary: markdown });
+      try {
+        expect(generateObject).toHaveBeenCalledTimes(2);
+      } finally {
+        finishFirst({ object: objects(0), response: { modelId: "provider/half-1" } });
+      }
+      const result = await pending;
+      const items = result.payload.content as Array<{ question?: string; front?: string }>;
+      expect(items.map((item) => item.question ?? item.front)).toEqual([
+        ...Array.from({ length: counts[0] }, (_, i) => `Half 1 item ${i + 1}`),
+        ...Array.from({ length: counts[1] }, (_, i) => `Half 2 item ${i + 1}`),
+      ]);
+      expect(result.modelUsed).toBe("provider/half-1");
+    });
+
+    it.each([
+      ["test_me", "step"], ["test_me", "standalone"],
+      ["carded", "step"], ["carded", "standalone"],
+    ] as const)("keeps %s content ids stable across citation changes and drops duplicate prompts through %s", async (kind, entryPoint) => {
+      const markdown = SECTIONED_EIGHTEEN_PAGE_DOC;
+      const halves = balancedHalves(markdown);
+      const counts = allocateItems(studyItemTarget(kind, markdown), halves);
+      const promptFor = kind === "test_me" ? testMePrompt : cardedPrompt;
+      let round = 0;
+      const texts = [
+        [["Shared fact? [S1 p.1]", "Alpha fact?"], ["Shared fact? [S1 p.2]", "Beta fact?"]],
+        [["Beta fact? [S2 p.8]"], ["Shared fact? [S2 p.9]", "New fact?"]],
+      ];
+      generateObject.mockImplementation(async ({ prompt }: { prompt: string }) => {
+        const half = halves.findIndex((value, i) => prompt === promptFor(value, counts[i]));
+        expect(half).toBeGreaterThanOrEqual(0);
+        return {
+          object: texts[round][half].map((text, i) => kind === "test_me"
+            ? { ...quizObjects(1)[0], id: `provider-${round}-${half}-${i}`, question: text }
+            : { ...cardObjects(1)[0], id: `provider-${round}-${half}-${i}`, front: text }),
+          response: { modelId: `provider/half-${half + 1}` },
+        };
+      });
+      const run = async () => {
+        if (entryPoint === "step") {
+          return (await generateStudyPackStep({ step: kind, lockedIn: markdown, summary: markdown })).payload.content;
+        }
+        return kind === "test_me" ? generateTestMe(markdown) : generateCarded(markdown);
+      };
+      const first = await run() as Array<{ id: string; question?: string; front?: string }>;
+      round = 1;
+      const second = await run() as typeof first;
+
+      expect(first.map((item) => item.question ?? item.front)).toEqual([
+        "Shared fact? [S1 p.1]", "Alpha fact?", "Beta fact?",
+      ]);
+      expect(first).toHaveLength(3);
+      expect(second).toHaveLength(3);
+      const pattern = kind === "test_me" ? /^q-[0-9a-f]{8}$/ : /^c-[0-9a-f]{8}$/;
+      for (const item of [...first, ...second]) expect(item.id).toMatch(pattern);
+      expect(new Set(first.map((item) => item.id)).size).toBe(3);
+      expect(new Set(second.map((item) => item.id)).size).toBe(3);
+      expect(second[0].id).toBe(first[2].id);
+      expect(second[1].id).toBe(first[0].id);
+      expect(first.map((item) => item.id)).not.toContain(second[2].id);
+      expect(generateObject).toHaveBeenCalledTimes(4);
+    });
+
+    it.each(["test_me", "carded"] as const)("rejects the entire %s step when the second half exhausts its retries", async (kind) => {
+      const markdown = SECTIONED_EIGHTEEN_PAGE_DOC;
+      const halves = balancedHalves(markdown);
+      const counts = allocateItems(studyItemTarget(kind, markdown), halves);
+      const promptFor = kind === "test_me" ? testMePrompt : cardedPrompt;
+      const firstPrompt = promptFor(halves[0], counts[0]);
+      const secondPrompt = promptFor(halves[1], counts[1]);
+      const objectPrompts: string[] = [];
+      generateObject.mockImplementation(async ({ prompt }: { prompt: string }) => {
+        objectPrompts.push(prompt);
+        if (prompt === secondPrompt) throw { statusCode: 503, message: "unavailable" };
+        expect(prompt).toBe(firstPrompt);
+        return {
+          object: kind === "test_me" ? quizObjects(counts[0]) : cardObjects(counts[0]),
+          response: { modelId: "provider/half-1" },
+        };
+      });
+
+      await expect(generateStudyPackStep({ step: kind, lockedIn: markdown, summary: markdown }))
+        .rejects.toMatchObject({ code: "unavailable", retryable: true });
+      expect(objectPrompts.filter((prompt) => prompt === firstPrompt)).toHaveLength(1);
+      expect(objectPrompts.filter((prompt) => prompt === secondPrompt)).toHaveLength(2);
+      expect(generateObject).toHaveBeenCalledTimes(3);
+      expect(generateText).not.toHaveBeenCalled();
+    });
+
     it("keeps 18 Test Me items and 36 cards through the resumable step for an 18-page pack", async () => {
       generateObject.mockResolvedValueOnce({ object: quizObjects(50), response: { modelId: "provider/model" } });
       const testMe = await generateStudyPackStep({ step: "test_me", lockedIn: EIGHTEEN_PAGE_DOC });
@@ -702,6 +932,43 @@ describe("grounded generation", () => {
     expect(result.meta).toMatchObject({ citationSources, grounding: { verifierFailed: true } });
   });
 
+  it("sanitizes Summary headings before grounding while preserving body citations", async () => {
+    const body = "- Propranolol can cause bronchospasm in patients with asthma. [S1 p.2]";
+    const table = [
+      "| Drug | Adverse effects |",
+      "| --- | --- |",
+      "| Propranolol | Can cause bronchospasm in patients with asthma. |",
+    ].join("\n");
+    const text = `### Table 1.1: X [S1 p.1]\n\n${table}\n\n${body}`;
+    generateText.mockResolvedValue({ text, response: { modelId: "provider/model" } });
+    const citationSources = [{ index: 1, sourceId: "src-1", filename: "pharm.pdf", hasPages: true }];
+
+    const result = await generateStudyPackStep({
+      step: "summary",
+      lockedIn: "## Drugs\n\nPropranolol causes bronchospasm. [S1 p.2]",
+      citationSources,
+      groundingSources: [{ index: 1, text: PHARM_SOURCE }],
+    });
+
+    expect(result.payload.content).toBe(`### Table: X\n\n${table}\n\n${body}`);
+    // An unsanitized heading would restrict the uncited row to page 1,
+    // but its support is on page 2. Cleanup must precede citation inheritance.
+    expect(result.meta?.grounding).toMatchObject({ total: 2, cited: 1, lexicalSupported: 2, unsourced: 0 });
+    expect(verifyCalls()).toHaveLength(0);
+    expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes headings in standalone generateSummary and preserves body citations", async () => {
+    const body = "- Propranolol causes bronchospasm. [S1 p.2]";
+    generateText.mockResolvedValue({
+      text: `### Table 1.1: X [S1 p.1]\n\n${body}`,
+      response: { modelId: "provider/model" },
+    });
+
+    expect(await generateSummary("Locked In body")).toBe(`### Table: X\n\n${body}`);
+    expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
   it("drops citations to unknown sources from Test Me explanations and Carded backs", async () => {
     generateObject.mockResolvedValueOnce({
       object: [{
@@ -805,5 +1072,75 @@ describe("quiz answer repair", () => {
     const { repairQuizAnswer } = await import("@/lib/ai");
     const item = { choices: ["30S", "50S"], answer: "Both 30S and 50S" };
     expect(repairQuizAnswer(item)).toBe(item);
+  });
+});
+
+describe("grounding re-check report merging", () => {
+  const markdown = "A saved claim with an unsourced marker. [[unsourced]]";
+  const sources = [{ index: 1, text: "Source evidence." }];
+  const previous: grounding.GroundingReport = {
+    total: 100, cited: 90, lexicalSupported: 70, verifiedSupported: 20,
+    unsourced: 5, unchecked: 5, uncheckedKeys: ["oldkey01", "oldkey02"],
+    truncated: true, verifierFailed: true,
+  };
+  const pass: grounding.GroundingReport = {
+    total: 101, cited: 91, lexicalSupported: 2, verifiedSupported: 1,
+    unsourced: 3, unchecked: 1, uncheckedKeys: ["newkey01"],
+    truncated: false, verifierFailed: false,
+  };
+
+  it("adds supported counts while replacing pending counts and keeping previous extra fields", async () => {
+    const carried = { ...previous, savedField: "preserved" };
+    const checkedMarkdown = "A saved claim with an unsourced marker.";
+    const ground = vi.spyOn(grounding, "groundDocument").mockResolvedValue({ markdown: checkedMarkdown, report: pass });
+
+    const result = await regroundStudyDocument(markdown, sources, { previous: carried });
+
+    expect(ground).toHaveBeenCalledWith(expect.objectContaining({
+      markdown, sources, recheck: { uncheckedKeys: previous.uncheckedKeys, legacyUnchecked: false },
+    }));
+    expect(result).toEqual({
+      markdown: checkedMarkdown,
+      report: { ...carried, ...pass, lexicalSupported: 72, verifiedSupported: 21 },
+    });
+  });
+
+  it.each(["zero", "absent"] as const)("drops old pending counts and keys when the pass has %s pending claims", async (pending) => {
+    const completed = { ...pass };
+    delete completed.unchecked;
+    delete completed.uncheckedKeys;
+    const completedPass = pending === "zero" ? { ...completed, unchecked: 0, uncheckedKeys: [] } : completed;
+    vi.spyOn(grounding, "groundDocument").mockResolvedValue({ markdown, report: completedPass });
+
+    const result = await regroundStudyDocument(markdown, sources, { previous });
+
+    expect(result.report).toEqual({ ...completed, lexicalSupported: 72, verifiedSupported: 21 });
+    expect(result.report).not.toHaveProperty("unchecked");
+    expect(result.report).not.toHaveProperty("uncheckedKeys");
+  });
+
+  it.each([
+    ["no previous report", null, false],
+    ["no unchecked count", { ...previous, unchecked: undefined, uncheckedKeys: undefined }, false],
+    ["no recorded pending claims", { ...previous, unchecked: 0, uncheckedKeys: undefined }, false],
+    ["legacy pending claims", { ...previous, uncheckedKeys: undefined }, true],
+    ["recorded pending keys", previous, false],
+    ["an explicitly empty key list", { ...previous, uncheckedKeys: [] as string[] }, false],
+  ] as const)("enables legacyUnchecked only for unkeyed pending claims: %s", async (_name, prior, legacyUnchecked) => {
+    const ground = vi.spyOn(grounding, "groundDocument").mockResolvedValue({ markdown, report: pass });
+
+    const result = await regroundStudyDocument(markdown, sources, { previous: prior });
+
+    expect(ground).toHaveBeenCalledWith(expect.objectContaining({
+      recheck: { uncheckedKeys: prior?.uncheckedKeys, legacyUnchecked },
+    }));
+    expect(result.report?.lexicalSupported).toBe((prior?.lexicalSupported ?? 0) + pass.lexicalSupported);
+    expect(result.report?.verifiedSupported).toBe((prior?.verifiedSupported ?? 0) + pass.verifiedSupported);
+  });
+
+  it("returns a null report when there are no sources, without carrying a stale report forward", async () => {
+    const ground = vi.spyOn(grounding, "groundDocument");
+    expect(await regroundStudyDocument(markdown, [], { previous })).toEqual({ markdown, report: null });
+    expect(ground).not.toHaveBeenCalled();
   });
 });

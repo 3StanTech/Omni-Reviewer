@@ -29,8 +29,9 @@ const bodySchema = z.object({
 }).strict();
 
 /**
- * Re-check a study document's claims that an earlier grounding run could not
- * verify. Adding unsourced tags this way is not a reader edit.
+ * Check again: re-check the claims an earlier grounding run tagged unsourced
+ * or recorded as unchecked, and save the merged whole-document report.
+ * Changing unsourced tags this way is not a reader edit.
  */
 export async function POST(
   request: Request,
@@ -67,7 +68,8 @@ export async function POST(
       { status: 409 },
     );
   }
-  const citationSources = readStudyDocumentMeta(view.contentJson)?.citationSources ?? [];
+  const meta = readStudyDocumentMeta(view.contentJson);
+  const citationSources = meta?.citationSources ?? [];
   const groundingSources = await loadGroundingSources(reviewerId, citationSources);
   if (groundingSources.length === 0) {
     return NextResponse.json({ error: "This document has no sources to check against." }, { status: 400 });
@@ -75,7 +77,9 @@ export async function POST(
 
   let regrounded: Awaited<ReturnType<typeof regroundStudyDocument>>;
   try {
-    regrounded = await regroundStudyDocument(view.content, groundingSources);
+    regrounded = await regroundStudyDocument(view.content, groundingSources, {
+      previous: meta?.grounding ?? null,
+    });
   } catch (error) {
     logRedactedError("Grounding re-check failed", error, { reviewerId });
     const classified = classifyGenerationError(error);
@@ -83,6 +87,13 @@ export async function POST(
   }
   if (!regrounded.report) {
     return NextResponse.json({ error: "This document has no sources to check against." }, { status: 400 });
+  }
+  // A failed verifier that changed nothing has no result worth saving.
+  if (regrounded.report.verifierFailed && regrounded.markdown === view.content) {
+    return NextResponse.json(
+      { error: "Could not check these claims right now. Try again later." },
+      { status: 503 },
+    );
   }
 
   const row = await updateStudyView({

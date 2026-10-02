@@ -30,6 +30,8 @@ const request = (body: unknown) => new Request("https://omni-reviewer.example", 
 
 const citationSources = [{ index: 1, sourceId: "source-1", filename: "pharm.pdf", hasPages: true }];
 const report = { total: 2, cited: 2, lexicalSupported: 1, verifiedSupported: 0, unsourced: 1, truncated: false, verifierFailed: false, unchecked: 0 };
+const storedReport = { ...report, unsourced: 0, verifierFailed: true, unchecked: 1, uncheckedKeys: ["12345678"] };
+const storedMarkdown = "Claim one [S1 p.1]. Claim two [S1 p.2].";
 
 describe("grounding re-check route", () => {
   beforeEach(() => {
@@ -38,8 +40,8 @@ describe("grounding re-check route", () => {
     mock(getReviewer).mockResolvedValue({ id: "reviewer-1" });
     mock(getViewForReviewer).mockResolvedValue({
       revision: 3,
-      content: "Claim one [S1 p.1]. Claim two [S1 p.2].",
-      contentJson: { citationSources, grounding: { ...report, unsourced: 0, verifierFailed: true, unchecked: 1 } },
+      content: storedMarkdown,
+      contentJson: { citationSources, grounding: storedReport },
     });
     mock(loadGroundingSources).mockResolvedValue([{ index: 1, text: "<<<page 1>>>\nClaim one." }]);
     mock(regroundStudyDocument).mockResolvedValue({
@@ -57,6 +59,12 @@ describe("grounding re-check route", () => {
     const response = await POST(request({ expectedRevision: 3 }), context());
     expect(response.status).toBe(200);
     expect(mock(loadGroundingSources)).toHaveBeenCalledWith("reviewer-1", citationSources);
+    expect(mock(regroundStudyDocument)).toHaveBeenCalledTimes(1);
+    expect(mock(regroundStudyDocument)).toHaveBeenCalledWith(
+      "Claim one [S1 p.1]. Claim two [S1 p.2].",
+      [{ index: 1, text: "<<<page 1>>>\nClaim one." }],
+      { previous: storedReport },
+    );
     expect(mock(updateStudyView)).toHaveBeenCalledWith(expect.objectContaining({
       kind: "locked_in",
       expectedRevision: 3,
@@ -64,6 +72,49 @@ describe("grounding re-check route", () => {
       grounding: report,
     }));
     expect((await response.json()).grounding).toEqual(report);
+  });
+
+  it("passes null when there is no stored grounding report", async () => {
+    mock(getViewForReviewer).mockResolvedValueOnce({ revision: 3, content: storedMarkdown, contentJson: { citationSources } });
+    expect((await POST(request({ expectedRevision: 3 }), context())).status).toBe(200);
+    expect(mock(regroundStudyDocument)).toHaveBeenCalledWith(
+      storedMarkdown,
+      [{ index: 1, text: "<<<page 1>>>\nClaim one." }],
+      { previous: null },
+    );
+  });
+
+  it("returns 503 without saving when verification fails and markdown is unchanged", async () => {
+    mock(regroundStudyDocument).mockResolvedValueOnce({ markdown: storedMarkdown, report: { ...storedReport, verifierFailed: true } });
+
+    const response = await POST(request({ expectedRevision: 3 }), context());
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "Could not check these claims right now. Try again later." });
+    expect(mock(updateStudyView)).not.toHaveBeenCalled();
+  });
+
+  it("saves the merged report when verification fails but other claims were improved", async () => {
+    const markdown = `${storedMarkdown} [[unsourced]]`;
+    const merged = { ...report, lexicalSupported: 2, verifiedSupported: 1, verifierFailed: true, unchecked: 1, uncheckedKeys: ["87654321"] };
+    mock(regroundStudyDocument).mockResolvedValueOnce({ markdown, report: merged });
+
+    const response = await POST(request({ expectedRevision: 3 }), context());
+
+    expect(response.status).toBe(200);
+    expect(mock(updateStudyView)).toHaveBeenCalledWith(expect.objectContaining({ content: markdown, grounding: merged }));
+    expect((await response.json()).grounding).toEqual(merged);
+  });
+
+  it("saves the merged report when markdown is unchanged and verification succeeded", async () => {
+    const merged = { ...report, unsourced: 0, verifiedSupported: 1 };
+    mock(regroundStudyDocument).mockResolvedValueOnce({ markdown: storedMarkdown, report: merged });
+
+    const response = await POST(request({ expectedRevision: 3 }), context());
+
+    expect(response.status).toBe(200);
+    expect(mock(updateStudyView)).toHaveBeenCalledWith(expect.objectContaining({ content: storedMarkdown, grounding: merged }));
+    expect((await response.json()).grounding).toEqual(merged);
   });
 
   it("refuses a stale revision without calling the model", async () => {

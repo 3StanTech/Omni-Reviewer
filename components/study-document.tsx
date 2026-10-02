@@ -100,6 +100,8 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const showClaimCount = grounded && claims.total > 0;
   // Claims the verifier could not reach are neither confirmed nor tagged.
   const unchecked = Math.min(grounding?.unchecked ?? 0, Math.max(0, claims.total - claims.unsourced));
+  // Tagged or unchecked claims can both be sent back through the checker.
+  const canRecheck = claims.unsourced > 0 || unchecked > 0;
   const [checking, setChecking] = useState(false);
   const viewIdentity = `${view.id}:${view.contentRevision}:${view.annotationRevision}`;
   const [appliedIdentity, setAppliedIdentity] = useState(viewIdentity);
@@ -567,14 +569,14 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
             {claims.total - claims.unsourced - unchecked} of {claims.total} claims from your sources
           </p>
           {unchecked > 0 ? (
-            <>
-              <p className="text-xs text-muted-foreground">
-                {unchecked} {unchecked === 1 ? "claim" : "claims"} could not be checked
-              </p>
-              <Button type="button" variant="outline" size="sm" onClick={() => void recheckClaims()} disabled={busy || checking || editing}>
-                {checking ? "Checking" : "Check again"}
-              </Button>
-            </>
+            <p className="text-xs text-muted-foreground">
+              {unchecked} {unchecked === 1 ? "claim" : "claims"} could not be checked
+            </p>
+          ) : null}
+          {canRecheck ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => void recheckClaims()} disabled={busy || checking || editing}>
+              {checking ? "Checking" : "Check again"}
+            </Button>
           ) : null}
         </div>
       ) : null}

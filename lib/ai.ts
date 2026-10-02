@@ -20,6 +20,7 @@ import {
   type AskSourceInput,
 } from "@/lib/ask";
 import {
+  citationPattern,
   dropUnknownSourceCitations,
   type CitationSourceRef,
   type StudyDocumentMeta,
@@ -73,6 +74,8 @@ import {
   testMePrompt,
 } from "@/lib/prompts";
 import { hasPageMarkers } from "@/lib/source-markers";
+import { sanitizeStudyHeadings } from "@/lib/study-headings";
+import { allocateItems, balancedHalves } from "@/lib/study-sections";
 import type { CardedItem, TestMeItem } from "@/lib/types";
 
 export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision" | "ask";
@@ -713,6 +716,14 @@ async function verifyGroundingItems(
   }, { attempts: budget.attempts, deadlineMs: budget.deadlineMs });
 }
 
+/**
+ * The production verifier call with its standard deadline, for the replay
+ * probe script. Generation and Check again never call this.
+ */
+export function replayVerify(items: VerifyItem[]): Promise<Array<{ id: number; supported: boolean }>> {
+  return verifyGroundingItems(items, GROUNDING_VERIFY_DEADLINE_MS);
+}
+
 /** S1..Sn identities for sources given in citation order. */
 export function citationSourcesFor(
   sources: ReadonlyArray<{ filename: string; text: string; sourceId?: string }>,
@@ -734,6 +745,8 @@ async function groundGeneratedDocument(args: {
   sources: GroundingSource[];
   citationSources: CitationSourceRef[];
   stepStartedAt: number;
+  /** Check again: evaluate only tagged claims and the recorded unchecked ones. */
+  recheck?: { uncheckedKeys?: readonly string[]; legacyUnchecked?: boolean };
 }): Promise<{ markdown: string; meta: StudyDocumentMeta }> {
   // Without any source text (legacy packs) there is nothing to ground against.
   if (args.sources.length === 0) {
@@ -744,6 +757,7 @@ async function groundGeneratedDocument(args: {
     sources: args.sources,
     maxVerifyItems: MAX_GROUNDING_VERIFY_ITEMS,
     maxEvidenceChars: MAX_GROUNDING_EVIDENCE_CHARS,
+    ...(args.recheck ? { recheck: args.recheck } : {}),
     verify: async (items) => {
       const remaining = args.stepStartedAt + GROUNDED_STEP_TOTAL_MS - Date.now();
       const deadlineMs = Math.min(GROUNDING_VERIFY_DEADLINE_MS, remaining);
@@ -757,20 +771,48 @@ async function groundGeneratedDocument(args: {
 }
 
 /**
- * Re-check a saved study document against its uploads, for claims an earlier
- * run could not verify. Already tagged claims stay tagged.
+ * Check again: re-check a saved study document against its uploads. Only
+ * claims tagged unsourced and the claims the previous report recorded as
+ * unchecked are evaluated; any other untagged claim is never newly tagged.
+ * Reports written before unchecked keys existed re-check every untagged
+ * lexical miss instead. The returned report describes the whole document:
+ * this pass's counts, with the supported totals added to the previous ones.
  */
 export async function regroundStudyDocument(
   markdown: string,
   sources: GroundingSource[],
+  options: { previous?: GroundingReport | null } = {},
 ): Promise<{ markdown: string; report: GroundingReport | null }> {
+  const previous = options.previous ?? null;
   const grounded = await groundGeneratedDocument({
     markdown,
     sources,
     citationSources: [],
     stepStartedAt: Date.now(),
+    recheck: {
+      uncheckedKeys: previous?.uncheckedKeys,
+      legacyUnchecked: !previous?.uncheckedKeys && (previous?.unchecked ?? 0) > 0,
+    },
   });
-  return { markdown: grounded.markdown, report: grounded.meta.grounding ?? null };
+  const pass = grounded.meta.grounding;
+  if (!pass) return { markdown: grounded.markdown, report: null };
+  // Unchecked counts and keys come only from this pass.
+  const carried: Partial<GroundingReport> = { ...previous };
+  delete carried.unchecked;
+  delete carried.uncheckedKeys;
+  const report: GroundingReport = {
+    ...carried,
+    total: pass.total,
+    cited: pass.cited,
+    unsourced: pass.unsourced,
+    truncated: pass.truncated,
+    verifierFailed: pass.verifierFailed,
+    lexicalSupported: (previous?.lexicalSupported ?? 0) + pass.lexicalSupported,
+    verifiedSupported: (previous?.verifiedSupported ?? 0) + pass.verifiedSupported,
+    ...(pass.unchecked ? { unchecked: pass.unchecked } : {}),
+    ...(pass.uncheckedKeys?.length ? { uncheckedKeys: pass.uncheckedKeys } : {}),
+  };
+  return { markdown: grounded.markdown, report };
 }
 
 function withKnownCitations<T extends Record<K, string>, K extends keyof T>(
@@ -847,8 +889,10 @@ export async function generateStudyPackStep(input: {
       const result = await generateTextFromPrompt(summaryPrompt(lockedIn), {
         purpose: "summary",
       });
+      // Headings are cleaned in code: the free model keeps slide numbering
+      // ("Table 1.1:") and citations in headings despite the prompt rule.
       const grounded = await groundGeneratedDocument({
-        markdown: result.text,
+        markdown: sanitizeStudyHeadings(result.text),
         sources: input.groundingSources ?? [],
         citationSources: input.citationSources ?? [],
         stepStartedAt,
@@ -889,14 +933,70 @@ export async function generateStudyPackStep(input: {
   }
 }
 
+/**
+ * Content id for a generated item: prefix plus the 8-hex FNV-1a 32-bit hash
+ * of its prompt text with citations removed, whitespace collapsed and
+ * lowercased. Cards are stored by id and keep their schedule, and quiz
+ * attempts feed mastery by id, so a Redo item must never inherit an
+ * unrelated item's state through a positional id such as "c1".
+ */
+function stableItemId(prefix: "q" | "c", text: string): string {
+  const normalized = text.replace(citationPattern(), " ").replace(/\s+/g, " ").trim().toLowerCase();
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < normalized.length; index++) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${prefix}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * Test Me or Carded items from one request per balanced half of the document,
+ * sent in parallel. Each half gets its share of the page-scaled target, so the
+ * later sections are covered even when the model favours the opening ones.
+ * Items are merged in half order, given content ids (stableItemId), with a
+ * repeated id dropped, then capped at the total. A half that fails after its retries fails the whole step. A document
+ * with one "##" section is a single request with the whole target.
+ */
+async function generateItemsByHalves<T extends { id: string }>(args: {
+  kind: "test_me" | "carded";
+  markdown: string;
+  prompt: (markdown: string, maxItems: number) => string;
+  elementSchema: z.ZodType<T>;
+  /** The item's prompt text: the Test Me question or the Carded front. */
+  promptText: (item: T) => string;
+}): Promise<{ items: T[]; modelUsed: string }> {
+  const total = studyItemTarget(args.kind, args.markdown);
+  const halves = balancedHalves(args.markdown);
+  const counts = allocateItems(total, halves);
+  const requests = halves.flatMap((half, index) =>
+    counts[index] > 0 ? [{ half, count: counts[index] }] : []);
+  const results = await Promise.all(requests.map(({ half, count }) => generateJsonArray({
+    kind: args.kind,
+    prompt: args.prompt(half, count),
+    elementSchema: args.elementSchema,
+    maxItems: count,
+  })));
+  const prefix = args.kind === "test_me" ? "q" : "c";
+  const seen = new Set<string>();
+  const items: T[] = [];
+  for (const item of results.flatMap((result) => result.items)) {
+    const id = stableItemId(prefix, args.promptText(item));
+    if (seen.has(id)) continue;
+    seen.add(id);
+    items.push({ ...item, id });
+  }
+  return { items: items.slice(0, total), modelUsed: results[0].modelUsed };
+}
+
 async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; modelUsed: string }> {
   try {
-    const maxItems = studyItemTarget("test_me", lockedIn);
-    const result = await generateJsonArray({
+    const result = await generateItemsByHalves({
       kind: "test_me",
-      prompt: testMePrompt(lockedIn, maxItems),
+      markdown: lockedIn,
+      prompt: testMePrompt,
       elementSchema: testMeWireItemSchema,
-      maxItems,
+      promptText: (item) => item.question,
     });
     // Valid items can still carry "A. ..." labels; the UI numbers choices.
     return { ...result, items: result.items.map((item) => repairQuizAnswer(item) as TestMeItem) };
@@ -916,12 +1016,12 @@ async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; model
 
 async function runCarded(summary: string): Promise<{ items: CardedItem[]; modelUsed: string }> {
   try {
-    const maxItems = studyItemTarget("carded", summary);
-    return await generateJsonArray({
+    return await generateItemsByHalves({
       kind: "carded",
-      prompt: cardedPrompt(summary, maxItems),
+      markdown: summary,
+      prompt: cardedPrompt,
       elementSchema: cardedItemSchema,
-      maxItems,
+      promptText: (item) => item.front,
     });
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
@@ -1010,18 +1110,18 @@ export async function generateSummary(lockedInMarkdown: string): Promise<string>
   const result = await generateTextFromPrompt(summaryPrompt(lockedInMarkdown), {
     purpose: "summary",
   });
-  return result.text;
+  return sanitizeStudyHeadings(result.text);
 }
 
 export async function generateTestMe(
   lockedInMarkdown: string,
 ): Promise<TestMeItem[]> {
-  const maxItems = studyItemTarget("test_me", lockedInMarkdown);
-  const result = await generateJsonArray({
+  const result = await generateItemsByHalves({
     kind: "test_me",
-    prompt: testMePrompt(lockedInMarkdown, maxItems),
+    markdown: lockedInMarkdown,
+    prompt: testMePrompt,
     elementSchema: testMeWireItemSchema,
-    maxItems,
+    promptText: (item) => item.question,
   });
   return result.items;
 }
@@ -1029,12 +1129,12 @@ export async function generateTestMe(
 export async function generateCarded(
   summaryMarkdown: string,
 ): Promise<CardedItem[]> {
-  const maxItems = studyItemTarget("carded", summaryMarkdown);
-  const result = await generateJsonArray({
+  const result = await generateItemsByHalves({
     kind: "carded",
-    prompt: cardedPrompt(summaryMarkdown, maxItems),
+    markdown: summaryMarkdown,
+    prompt: cardedPrompt,
     elementSchema: cardedItemSchema,
-    maxItems,
+    promptText: (item) => item.front,
   });
   return result.items;
 }

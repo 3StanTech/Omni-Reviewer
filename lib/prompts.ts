@@ -3,6 +3,7 @@
 import { MAX_GENERATED_JSON_CHARS } from "@/lib/learning-limits";
 import { studyItemTarget } from "@/lib/ai-budgets";
 import { hasPageMarkers, pageCount } from "@/lib/source-markers";
+import { splitSections } from "@/lib/study-sections";
 
 export const PROMPT_LIMITS = {
   maxSources: 50,
@@ -163,6 +164,8 @@ Requirements:
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
 - ${NO_META_TEXT}
+- Do not add quiz, self-check, checkpoint or review-question sections; Test Me covers practice.
+- Do not describe this document or its purpose.
 - Output Markdown only. No preamble or closing remarks outside the document.
 
 # Source materials
@@ -171,13 +174,30 @@ ${sourcesBlock}`
   );
 }
 
+/**
+ * Per-section Summary targets: about 40% of each Locked In "##" section, never
+ * below 150 characters. Free models ignore a single total and spend most of it
+ * on the opening sections; a line per section keeps the later ones covered.
+ * Empty when Locked In has fewer than two sections.
+ */
+function summarySectionBudgets(lockedInMarkdown: string): string {
+  const { sections } = splitSections(lockedInMarkdown);
+  if (sections.length < 2) return "";
+  const lines = sections.map((section) => {
+    const chars = Math.max(150, Math.round((section.markdown.length * 0.4) / 10) * 10);
+    return `- ${section.heading}: about ${chars.toLocaleString("en-US")} characters`;
+  });
+  return `\nSection budgets (about 40% of each Locked In section):\n${lines.join("\n")}`;
+}
+
 export function summaryPrompt(lockedInMarkdown: string): string {
   const target = summaryTargetChars(lockedInMarkdown).toLocaleString("en-US");
+  const sectionBudgets = summarySectionBudgets(lockedInMarkdown);
   return assertPromptWithinLimit(`You are writing a detailed "Summary" study document for last-minute review.
 
 Requirements:
 - Derive the summary **only** from the Locked In document below, not from external knowledge or other sources.
-- Keep it detailed enough to review the full material. Aim for about ${target} characters, about 40% of Locked In's length.
+- Keep it detailed enough to review the full material. Aim for about ${target} characters, about 40% of Locked In's length.${sectionBudgets}
 - Use clear Markdown with headings that mirror Locked In structure when helpful.
 - Do not number tables or figures from the slides (write 'Table: Sources of antimicrobials', not 'Table 2: Sources of antimicrobials'). Put no citations in headings; cite the bullets and table rows under them.
 - Prefer bullets and tight paragraphs for scannability; preserve critical definitions, numbers, and distinctions.
@@ -270,6 +290,8 @@ export function groundingVerifyPrompt(
 Rules:
 - Judge each sentence ONLY against the evidence text given in the same item. Ignore outside knowledge and ignore other items, even when you know the sentence is true.
 - List in "missing" every fact, name, number, mechanism, cause, or example in the sentence that the evidence does not state. Paraphrase of what the evidence says is fine and is not missing.
+- Paraphrase, synonyms, abbreviations, summarising several evidence lines, and reordering are not missing.
+- Do not list connective words, framing, or general phrasing. List only specific facts (names, numbers, drugs, doses, mechanisms, causes, examples) that the evidence never states.
 - A sentence whose facts are all stated in its evidence has an empty "missing" list.
 - Ignore bracket citations such as [S1 p.14] inside the sentence.
 - Return one entry per item, keeping each id.

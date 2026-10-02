@@ -137,6 +137,16 @@ describe("study Markdown and cloze contracts", () => {
     expect(summary).toContain("Do not add HTML spans, semantic ink classes, or automatic highlighting.");
   });
 
+  it("keeps practice and document framing out of Locked In's requirements", () => {
+    const prompt = lockedInPrompt([{ filename: "notes.txt", text: "Body" }]);
+    const requirements = prompt.split("Requirements:\n")[1].split("# Source materials")[0].split("\n");
+    expect(requirements).toContain("- Do not add quiz, self-check, checkpoint or review-question sections; Test Me covers practice.");
+    expect(requirements).toContain("- Do not describe this document or its purpose.");
+    expect(requirements).toContain("- Produce cohesive, long-form Markdown suitable for serious study.");
+    expect(requirements).toContain("- Be thorough: definitions, key claims, examples, formulas, procedures, and relationships between ideas.");
+    expect(requirements).toContain("- Write only study content. Do not describe the document itself, how it was written, or its citations, and do not add a references or bibliography list.");
+  });
+
   it("parses and masks bounded cloze placeholders without changing legacy cards", () => {
     const parsed = parseClozeText("The capital of {{France}} is {{Paris}}.");
     expect(parsed?.answers).toEqual(["France", "Paris"]);
