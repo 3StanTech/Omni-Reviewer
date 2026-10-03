@@ -74,7 +74,7 @@ import {
   testMePrompt,
 } from "@/lib/prompts";
 import { hasPageMarkers } from "@/lib/source-markers";
-import { itemPages, uncoveredSections } from "@/lib/study-coverage";
+import { itemPages, sectionPages, uncoveredSections } from "@/lib/study-coverage";
 import { stripDocumentFraming } from "@/lib/study-framing";
 import { sanitizeStudyHeadings } from "@/lib/study-headings";
 import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
@@ -1061,11 +1061,13 @@ function stableItemId(prefix: "q" | "c", text: string): string {
  * repeated id dropped, then capped at the total. A half that fails after its retries fails the whole step. A document
  * with one "##" section is a single request with the whole target.
  *
- * Sections that no item cites (uncoveredSections) then get one top-up request
- * for one item each, through the same model chain, when enough of the 270 s
- * step is left. Top-up items are kept when the result is capped at 120% of the
- * target, and the base items dropped first are those whose pages other kept
- * items still cite. A failed top-up keeps the base items.
+ * Sections that no item cites (uncoveredSections) then get one request per
+ * uncovered section, up to 3, in parallel and through the same model chain,
+ * when enough of the 270 s step is left. With more than 3, the sections citing
+ * the most pages are chosen. A single joined request was seen writing every
+ * item about the first section. Top-up items are kept when the result is
+ * capped at 120% of the target, and the base items dropped first are those
+ * whose pages other kept items still cite. A failed section top-up is skipped.
  */
 async function generateItemsByHalves<T extends { id: string }>(args: {
   kind: "test_me" | "carded";
@@ -1104,25 +1106,45 @@ async function generateItemsByHalves<T extends { id: string }>(args: {
   if (uncovered.length === 0) return { items, modelUsed };
   const timeLeft = startedAt + GENERATION_STEP_DEADLINE_MS - TOP_UP_SAFETY_MS - Date.now();
   if (timeLeft < TOP_UP_MIN_MS) return { items, modelUsed };
-  const count = uncovered.length;
-  let topUp: T[];
-  try {
-    const result = await generateJsonArray({
+  const settled = await Promise.allSettled(topUpSections(args.markdown, uncovered).map((section) =>
+    generateJsonArray({
       kind: args.kind,
-      prompt: args.prompt(uncovered.map((section) => section.markdown).join("\n\n"), count),
+      prompt: args.prompt(section.markdown, 1),
       elementSchema: args.elementSchema,
-      maxItems: count,
+      maxItems: 1,
       deadlineMs: timeLeft,
-    });
-    topUp = withIds(result.items, new Set(items.map((item) => item.id)));
-  } catch {
-    // Coverage is a bonus on top of a usable set; the base items still stand.
-    return { items, modelUsed };
-  }
+    })));
+  // Coverage is a bonus on top of a usable set; a failed section is skipped.
+  const generated = settled.flatMap((result) => (result.status === "fulfilled" ? result.value.items : []));
+  const topUp = withIds(generated, new Set(items.map((item) => item.id)));
+  if (topUp.length === 0) return { items, modelUsed };
   const cap = Math.ceil(total * 1.2);
   const keptTopUp = topUp.slice(0, cap);
   const keptBase = trimKeepingCoverage(items, cap - keptTopUp.length, keptTopUp, args.textOf);
   return { items: [...keptBase, ...keptTopUp], modelUsed };
+}
+
+/** Top-up requests per Test Me or Carded step, one per uncovered section. */
+const MAX_TOP_UP_REQUESTS = 3;
+
+/**
+ * Up to MAX_TOP_UP_REQUESTS uncovered sections, preferring those citing the
+ * most pages, in document order.
+ */
+function topUpSections(
+  markdown: string,
+  uncovered: ReadonlyArray<{ heading: string; markdown: string }>,
+): Array<{ heading: string; markdown: string }> {
+  if (uncovered.length <= MAX_TOP_UP_REQUESTS) return [...uncovered];
+  const sections = sectionPages(markdown);
+  const pagesOf = (section: { heading: string; markdown: string }) => sections.find((candidate) =>
+    candidate.heading === section.heading && candidate.markdown === section.markdown)?.pages.size ?? 0;
+  const chosen = new Set(uncovered
+    .map((section, index) => ({ index, pages: pagesOf(section) }))
+    .sort((a, b) => b.pages - a.pages || a.index - b.index)
+    .slice(0, MAX_TOP_UP_REQUESTS)
+    .map(({ index }) => index));
+  return uncovered.filter((_, index) => chosen.has(index));
 }
 
 /** The top-up runs only with this much of the item step left, after the safety margin. */

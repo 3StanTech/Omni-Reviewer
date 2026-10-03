@@ -314,7 +314,7 @@ describe.each(["test_me", "carded"] as const)("%s coverage top-up wiring", (kind
   function mockBase(extra: Item[] = []) {
     generateObject.mockResolvedValueOnce({ object: baseItems().slice(0, counts[0]), response: { modelId: freeModel } })
       .mockResolvedValueOnce({ object: baseItems().slice(counts[0]), response: { modelId: freeModel } });
-    if (extra.length) generateObject.mockResolvedValueOnce({ object: extra, response: { modelId: freeModel } });
+    for (const value of extra) generateObject.mockResolvedValueOnce({ object: [value], response: { modelId: freeModel } });
   }
   async function run(): Promise<Item[]> {
     const result = await generateStudyPackStep({
@@ -359,30 +359,108 @@ describe.each(["test_me", "carded"] as const)("%s coverage top-up wiring", (kind
     expect(generateText).not.toHaveBeenCalled();
   });
 
-  it("tops up only uncovered sections in their original order, one item per section through the same free model", async () => {
-    const missing = [sections[2], sections[4]];
-    const extra = [item("Coverage for Applications", 3), item("Coverage for Later material", 5)];
+  it("starts three one-item section top-ups in parallel, each using only its own markdown and the same free model", async () => {
+    const missing = sections.slice(2);
+    const extra = missing.map((section, i) => item(`Coverage for ${section.heading}`, i + 3));
+    type Reply = { object: Item[]; response: { modelId: string } };
+    const finishers: Array<(value: Reply) => void> = [];
+    const pendingSections = extra.map(() => new Promise<Reply>((resolve) => { finishers.push(resolve); }));
     uncoveredSections.mockReturnValue(missing);
-    mockBase(extra);
-    const items = await run();
-    expect(generateObject).toHaveBeenCalledTimes(3);
-    const topUp = sdkCall(2);
-    expect(topUp.prompt).toBe(promptFor(missing.map((section) => section.markdown).join("\n\n"), missing.length));
-    for (const covered of [sections[0], sections[1], sections[3]]) {
-      expect(topUp.prompt).not.toContain(covered.markdown);
+    mockBase();
+    for (const pendingSection of pendingSections) generateObject.mockReturnValueOnce(pendingSection);
+    const pending = run();
+    try {
+      // No section response has completed; all three SDK calls must already be in flight.
+      await vi.waitFor(() => expect(generateObject).toHaveBeenCalledTimes(5));
+      for (const [i, section] of missing.entries()) {
+        const topUp = sdkCall(i + 2);
+        expect(topUp.prompt).toBe(promptFor(section.markdown, 1));
+        expect(topUp.prompt).toContain(`Return about 1 ${kind === "test_me" ? "items" : "cards"} (never more than 1)`);
+        for (const other of sections.filter((value) => value.heading !== section.heading)) {
+          expect(topUp.prompt).not.toContain(other.markdown);
+        }
+      }
+      const models = generateObject.mock.calls.map((_call, i) => sdkCall(i).model.modelId);
+      expect(models).toEqual(Array(5).fill(getModelId("json")));
+      expect(models.every((model) => model === freeModel && model.endsWith(":free"))).toBe(true);
+      expect(generateObject.mock.calls.every((_call, i) => sdkCall(i).maxRetries === 0)).toBe(true);
+      // Resolve in reverse order; merge order still follows the section order.
+      for (let i = extra.length - 1; i >= 0; i--) finishers[i]({ object: [extra[i]], response: { modelId: freeModel } });
+    } finally {
+      for (const [i, finish] of finishers.entries()) finish({ object: [extra[i]], response: { modelId: freeModel } });
+      await pending;
     }
-    expect(topUp.prompt).toContain(`Return about ${missing.length} ${kind === "test_me" ? "items" : "cards"} (never more than ${missing.length})`);
-    const models = generateObject.mock.calls.map((_call, i) => sdkCall(i).model.modelId);
-    expect(models).toEqual([getModelId("json"), getModelId("json"), getModelId("json")]);
-    expect(models.every((model) => model === freeModel && model.endsWith(":free"))).toBe(true);
-    expect(generateObject.mock.calls.every((_call, i) => sdkCall(i).maxRetries === 0)).toBe(true);
-    for (const extraItem of extra) expect(items.map(promptText)).toContain(promptText(extraItem));
+    const items = await pending;
+    expect(items.slice(-3).map(promptText)).toEqual(extra.map(promptText));
+    expect(generateObject).toHaveBeenCalledTimes(5);
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it("selects only the three sections with the most cited pages out of five, keeping document order", async () => {
+    const definitions = [
+      { heading: "One page", pages: "p.1" },
+      { heading: "Four pages", pages: "pp.2-5" },
+      { heading: "Two pages", pages: "pp.6-7" },
+      { heading: "Five pages", pages: "pp.8-12" },
+      { heading: "Three pages", pages: "pp.13-15" },
+    ];
+    const input = definitions.map(({ heading, pages }) => `## ${heading}\n\n- A supported fact. [S1 ${pages}]`).join("\n\n");
+    const inputSections = splitSections(input).sections;
+    const selected = [inputSections[1], inputSections[3], inputSections[4]];
+    const inputTotal = studyItemTarget(kind, input);
+    const inputCounts = allocateItems(inputTotal, balancedHalves(input));
+    const base = Array.from({ length: inputTotal }, (_, i) => item(`Weighted base ${i + 1}`));
+    const extra = selected.map((section, i) => item(`Top-up ${section.heading}`, [2, 8, 13][i]));
+    uncoveredSections.mockReturnValue(inputSections);
+    generateObject.mockResolvedValueOnce({ object: base.slice(0, inputCounts[0]), response: { modelId: freeModel } })
+      .mockResolvedValueOnce({ object: base.slice(inputCounts[0]), response: { modelId: freeModel } });
+    for (const value of extra) generateObject.mockResolvedValueOnce({ object: [value], response: { modelId: freeModel } });
+    const result = await generateStudyPackStep({
+      step: kind,
+      lockedIn: kind === "test_me" ? input : "LOCKED_IN_SHOULD_NOT_BE_USED",
+      summary: kind === "carded" ? input : "SUMMARY_SHOULD_NOT_BE_USED",
+      citationSources: [{ index: 1, sourceId: "src-1", filename: "notes.pdf", hasPages: true }],
+    });
+    expect(generateObject).toHaveBeenCalledTimes(5);
+    const topUpPrompts = generateObject.mock.calls.slice(2).map((call) => (call[0] as SdkCall).prompt);
+    expect(topUpPrompts).toEqual(selected.map((section) => promptFor(section.markdown, 1)));
+    for (const prompt of topUpPrompts) {
+      expect(prompt).not.toContain(inputSections[0].markdown);
+      expect(prompt).not.toContain(inputSections[2].markdown);
+    }
+    expect(generateObject.mock.calls.every((_call, i) => sdkCall(i).model.modelId === freeModel)).toBe(true);
+    expect(result.modelUsed).toBe(freeModel);
+    expect((result.payload.content as Item[]).slice(-3).map(promptText)).toEqual(extra.map(promptText));
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it("skips one rejected section top-up while merging the other section items", async () => {
+    const missing = sections.slice(2);
+    const extra = missing.map((section, i) => item(`Top-up ${section.heading}`, i + 3));
+    uncoveredSections.mockReturnValue(missing);
+    mockBase();
+    generateObject.mockResolvedValueOnce({ object: [extra[0]], response: { modelId: freeModel } })
+      .mockRejectedValueOnce(new GenerationError("unknown", "Section top-up rejected.", false))
+      .mockResolvedValueOnce({ object: [extra[2]], response: { modelId: freeModel } });
+    const items = await run();
+    expect(generateObject).toHaveBeenCalledTimes(5);
+    expect(generateObject.mock.calls.slice(2).map((call) => (call[0] as SdkCall).prompt))
+      .toEqual(missing.map((section) => promptFor(section.markdown, 1)));
+    expect(items.slice(-2).map(promptText)).toEqual([promptText(extra[0]), promptText(extra[2])]);
+    expect(items.map(promptText)).not.toContain(promptText(extra[1]));
+    expect(items.some((value) => baseItems().some((base) => promptText(base) === promptText(value)))).toBe(true);
+    expect(items).toHaveLength(Math.min(target + 2, Math.ceil(target * 1.2)));
+    expect(generateObject.mock.calls.every((_call, i) => sdkCall(i).model.modelId === freeModel)).toBe(true);
     expect(generateText).not.toHaveBeenCalled();
   });
 
   it("requests and accepts exactly one top-up item for one uncovered section", async () => {
     uncoveredSections.mockReturnValue([sections[4]]);
-    mockBase([item("Last section fact", 5), item("Unrequested extra fact", 5)]);
+    mockBase();
+    generateObject.mockResolvedValueOnce({
+      object: [item("Last section fact", 5), item("Unrequested extra fact", 5)],
+      response: { modelId: freeModel },
+    });
     const items = await run();
     expect(sdkCall(2).prompt).toBe(promptFor(sections[4].markdown, 1));
     expect(items.map(promptText)).toContain(promptText(item("Last section fact", 5)));
@@ -406,21 +484,21 @@ describe.each(["test_me", "carded"] as const)("%s coverage top-up wiring", (kind
       vi.setSystemTime(0);
       let completeBase!: (value: { object: Item[]; response: { modelId: string } }) => void;
       const slow = new Promise<{ object: Item[]; response: { modelId: string } }>((resolve) => { completeBase = resolve; });
-      const missing = [sections[4]];
-      const extra = item("Late coverage fact", 5);
+      const missing = sections.slice(2);
+      const extra = missing.map((section, i) => item(`Late coverage ${section.heading}`, i + 3));
       uncoveredSections.mockReturnValue(missing);
       generateObject.mockReturnValueOnce(slow)
-        .mockResolvedValueOnce({ object: baseItems().slice(counts[0]), response: { modelId: freeModel } })
-        .mockResolvedValue({ object: [extra], response: { modelId: freeModel } });
+        .mockResolvedValueOnce({ object: baseItems().slice(counts[0]), response: { modelId: freeModel } });
+      for (const value of extra) generateObject.mockResolvedValueOnce({ object: [value], response: { modelId: freeModel } });
       const pending = run();
       try {
         await vi.advanceTimersByTimeAsync(elapsed);
         completeBase({ object: baseItems().slice(0, counts[0]), response: { modelId: freeModel } });
         const items = await pending;
         expect(uncoveredSections).toHaveBeenCalledTimes(1);
-        expect(generateObject).toHaveBeenCalledTimes(shouldTopUp ? 3 : 2);
+        expect(generateObject).toHaveBeenCalledTimes(shouldTopUp ? 5 : 2);
         if (shouldTopUp) {
-          expect(items.map(promptText)).toContain(promptText(extra));
+          for (const value of extra) expect(items.map(promptText)).toContain(promptText(value));
         } else {
           expect(items.map(promptText)).toEqual(baseItems().map(promptText));
           expect(items).toHaveLength(target);
@@ -487,14 +565,14 @@ describe.each(["test_me", "carded"] as const)("%s coverage top-up wiring", (kind
       const extra = [6, 7, 8].map((page) => item(`Top-up page ${page}`, page));
       uncoveredSections.mockReturnValue(inputSections.slice(5));
       generateObject.mockResolvedValueOnce({ object: base.slice(0, inputCounts[0]), response: { modelId: freeModel } })
-        .mockResolvedValueOnce({ object: base.slice(inputCounts[0]), response: { modelId: freeModel } })
-        .mockResolvedValueOnce({ object: extra, response: { modelId: freeModel } });
+        .mockResolvedValueOnce({ object: base.slice(inputCounts[0]), response: { modelId: freeModel } });
+      for (const value of extra) generateObject.mockResolvedValueOnce({ object: [value], response: { modelId: freeModel } });
       const result = await generateStudyPackStep({
         step: "test_me", lockedIn: input,
         citationSources: [{ index: 1, sourceId: "src-1", filename: "notes.pdf", hasPages: true }],
       });
       const items = result.payload.content as TestMeItem[];
-      expect(generateObject).toHaveBeenCalledTimes(3);
+      expect(generateObject).toHaveBeenCalledTimes(5);
       expect(items).toHaveLength(10);
       for (let page = 1; page <= 8; page++) {
         expect(items.some((value) => value.explanation.includes(`[S1 p.${page}]`))).toBe(true);
