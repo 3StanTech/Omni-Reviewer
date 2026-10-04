@@ -774,3 +774,50 @@ describe("inline math", () => {
     expect(result.markdown).toBe(markdown);
   });
 });
+
+describe("display math", () => {
+  const PROSE = [
+    "Aminoglycosides bind the 30S ribosomal subunit and cause mRNA misreading. [S1 p.14]",
+    "Macrolides bind the 50S ribosomal subunit and block translocation. [S1 p.15]",
+  ];
+
+  async function extracted(markdown: string): Promise<string[]> {
+    const sentences: string[] = [];
+    await groundDocument({
+      markdown,
+      sources: [],
+      maxVerifyItems: Number.MAX_SAFE_INTEGER,
+      verify: async (items) => {
+        sentences.push(...items.map((item) => item.sentence));
+        return items.map((item) => ({ id: item.id, supported: true }));
+      },
+    });
+    return sentences;
+  }
+
+  it("closes a one-line display block that carries a trailing citation", async () => {
+    const markdown = [String.raw`$$v(t) = (E_c + e_m) \sin(\omega_c t)$$ [S1 p.6]`, "", ...PROSE].join("\n");
+    expect(await extracted(markdown)).toEqual(PROSE.map((line) => line.replace(/ \[S1 p\.\d+\]$/, "")));
+  });
+
+  it("closes a one-line display block with trailing citations and an unsourced token", async () => {
+    const markdown = [String.raw`\[ P_t = P_c (1 + m^2/2) \] [S1 p.6] [[unsourced]] [S1 p.7]`, ...PROSE].join("\n");
+    expect(await extracted(markdown)).toHaveLength(2);
+  });
+
+  it("closes a multi-line display block on the line holding its closer and a citation", async () => {
+    const markdown = [
+      "$$",
+      String.raw`m = \frac{E_{max} - E_{min}}{E_{max} + E_{min}} \text{ is the ratio of the envelope swing to its sum}`,
+      "$$ [S1 p.6]",
+      ...PROSE,
+    ].join("\n");
+    expect(await extracted(markdown)).toHaveLength(2);
+  });
+
+  it("never extracts claims inside an unclosed block, up to its closer", async () => {
+    const inside = "Gentamicin grows new teeth on every patient within three short hours.";
+    const markdown = ["$$", inside, inside, "x = 1 $$", PROSE[0], "\\[", inside, PROSE[1]].join("\n");
+    expect(await extracted(markdown)).toEqual([PROSE[0].replace(" [S1 p.14]", "")]);
+  });
+});

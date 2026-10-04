@@ -219,6 +219,15 @@ const INLINE_CODE_OR_MATH = /`+[^`]*`+|\$\$[^$]*\$\$|\$[^$\s][^$]*\$/g;
 const INLINE_CODE = /`+[^`]*`+/g;
 const LIST_OR_QUOTE_PREFIX = /^\s*(?:>\s?)*\s*(?:(?:[-*+]|\d{1,3}[.)])\s+(?:\[[ xX]\]\s+)?)?/;
 
+/** A trimmed line without its trailing citations and unsourced tokens. */
+function withoutTrailingMarks(trimmed: string): string {
+  let text = trimmed;
+  for (let trailing = TRAILING_MARK.exec(text); trailing; trailing = TRAILING_MARK.exec(text)) {
+    text = text.slice(0, trailing.index).trimEnd();
+  }
+  return text;
+}
+
 function blank(match: string): string {
   return FILL.repeat(match.length);
 }
@@ -345,7 +354,8 @@ function tableCitations(lines: string[], tableStart: number): Citation[] {
 function extractClaims(lines: string[]): Claim[] {
   const claims: Claim[] = [];
   let fence: string | null = null;
-  let inMathBlock = false;
+  /** Closer of the open display-math block (`$$` or `\\]`), or null outside one. */
+  let mathCloser: string | null = null;
   let inFootnote = false;
   let previousBlank = false;
   let tableStart = 0;
@@ -363,13 +373,15 @@ function extractClaims(lines: string[]): Claim[] {
       fence = fenceMatch[1];
       return;
     }
-    if (inMathBlock) {
-      if (trimmed.endsWith("$$") || trimmed.endsWith("\\]")) inMathBlock = false;
+    // Display math is never a claim. A display line may carry trailing
+    // citations ("$$v(t) = ...$$ [S1 p.6]"), so its closer need not end the line.
+    if (mathCloser) {
+      if (withoutTrailingMarks(trimmed).includes(mathCloser)) mathCloser = null;
       return;
     }
     if (trimmed.startsWith("$$") || trimmed.startsWith("\\[")) {
-      const closed = trimmed.length > 2 && (trimmed.endsWith("$$") || trimmed.endsWith("\\]"));
-      if (!closed) inMathBlock = true;
+      const closer = trimmed.startsWith("$$") ? "$$" : "\\]";
+      if (!withoutTrailingMarks(trimmed).includes(closer, 2)) mathCloser = closer;
       return;
     }
     // Footnote definitions and their continuation lines are not rendered, so never mark them.
