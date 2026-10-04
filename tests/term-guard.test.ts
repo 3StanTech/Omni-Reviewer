@@ -166,3 +166,34 @@ describe("absentTerms", () => {
     expect(absentTerms(sentence, buildSourceVocabulary([]))).toEqual([]);
   });
 });
+
+describe("hyphen and space variants", () => {
+  // Hand-written excerpt in the style of an AM lecture page.
+  const AM_PAGE = "Standard AM and double-sideband suppressed-carrier (DSBSC) systems. The envelope detector uses a capacitor and resistor as a low pass filter.";
+
+  it("finds a hyphenated abbreviation the source writes as one word, and does not flag its parts", () => {
+    expect(absentTerms("**DSBSC (DSB-SC)** keeps both sidebands but drops the carrier.", buildSourceVocabulary([AM_PAGE]))).toEqual([]);
+  });
+
+  it("finds a one-word abbreviation the source writes with a hyphen or space", () => {
+    expect(absentTerms("A DSBSC transmitter drops the carrier.", buildSourceVocabulary(["The DSB-SC transmitter drops it."]))).toEqual([]);
+    expect(absentTerms("A DSBSC transmitter drops the carrier.", buildSourceVocabulary(["The DSB SC transmitter drops it."]))).toEqual([]);
+  });
+
+  it("still flags a hyphenated abbreviation and its part when the source never writes it", () => {
+    expect(absentTerms("**Standard AM (DSB-LC)** wastes carrier power.", buildSourceVocabulary([AM_PAGE]))).toEqual(["DSB-LC", "DSB", "LC"]);
+  });
+
+  it("still flags a short abbreviation the source only spells out", () => {
+    expect(absentTerms("The detector uses a low-pass RC filter.", buildSourceVocabulary([AM_PAGE]))).toEqual(["RC"]);
+  });
+
+  it("still flags a part that also appears on its own", () => {
+    expect(absentTerms("SC differs from DSB-SC in practice.", buildSourceVocabulary([AM_PAGE]))).toEqual(["SC"]);
+  });
+
+  it("does not join one-letter words or bare numbers", () => {
+    expect(absentTerms("The RC filter smooths ripple.", buildSourceVocabulary(["The R C pair smooths ripple."]))).toEqual(["RC"]);
+    expect(normalized(absentTerms("The 2024 report.", buildSourceVocabulary(["Pages 20 24."])))).toContain("2024");
+  });
+});

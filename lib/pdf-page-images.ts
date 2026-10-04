@@ -39,7 +39,11 @@ export async function* renderPdfPages(
         });
         if (canvas) releaseCanvas(canvas);
         canvas = createCanvas(Math.floor(viewport.width), Math.floor(viewport.height));
-        task = pdfPage.render({ canvas, viewport });
+        // The default "display" intent paces drawing with requestAnimationFrame,
+        // which a hidden tab pauses, so reading would stall in the background.
+        // "print" draws the same page content to this canvas without frame
+        // pacing; annotations follow their Print flag instead of View.
+        task = pdfPage.render({ canvas, viewport, intent: "print" });
         signal?.addEventListener("abort", cancel, { once: true });
         try {
           await task.promise;

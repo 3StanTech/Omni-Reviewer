@@ -19,6 +19,7 @@ import {
   UNSOURCED_TOKEN,
   type Citation,
 } from "@/lib/citations";
+import { canonicalizeLatex } from "@/lib/latex-text";
 import { GROUNDING_PASSAGE_CHARS } from "@/lib/learning-limits";
 import { splitPages } from "@/lib/source-markers";
 import { absentTerms, buildSourceVocabulary } from "@/lib/term-guard";
@@ -73,11 +74,13 @@ const STOPWORDS = new Set([
 
 const UNSOURCED_PATTERN = /\[\[unsourced\]\]/g;
 
-/** Lowercased, diacritic-free, citation-free content words joined by single spaces. */
-export function normalizeForMatch(text: string): string {
+function withoutMarks(text: string): string {
+  return text.replace(UNSOURCED_PATTERN, " ").replace(citationPattern(), " ");
+}
+
+/** Lowercased, diacritic-free content words joined by single spaces; LaTeX left as markup. */
+function contentWords(text: string): string {
   return text
-    .replace(UNSOURCED_PATTERN, " ")
-    .replace(citationPattern(), " ")
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
@@ -87,10 +90,19 @@ export function normalizeForMatch(text: string): string {
     .join(" ");
 }
 
-/** Stable 8-hex id of a claim: FNV-1a (32-bit) over the UTF-8 of its normalized text. */
+/** Lowercased, diacritic-free, citation-free content words joined by single spaces, LaTeX read as plain words. */
+export function normalizeForMatch(text: string): string {
+  return contentWords(canonicalizeLatex(withoutMarks(text)));
+}
+
+/**
+ * Stable 8-hex id of a claim: FNV-1a (32-bit) over the UTF-8 of its normalized
+ * text. Deliberately without the LaTeX rewrite of normalizeForMatch, so keys
+ * stored by earlier runs still match; callers pass the claim's key text.
+ */
 export function claimKey(sentence: string): string {
   let hash = 0x811c9dc5;
-  for (const byte of new TextEncoder().encode(normalizeForMatch(sentence))) {
+  for (const byte of new TextEncoder().encode(contentWords(withoutMarks(sentence)))) {
     hash ^= byte;
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
@@ -109,7 +121,7 @@ const NUMBER_WITH_UNIT = /\d+(?:[.,]\d+)?(?:\s?(?:%|[A-Za-zµμ]{1,5}(?:\/[A-Za-
 
 /** Distinctive terms a supporting page should contain: names, numbers with units, long words. */
 export function keyTerms(sentence: string): string[] {
-  const text = sentence.replace(UNSOURCED_PATTERN, " ").replace(citationPattern(), " ");
+  const text = canonicalizeLatex(withoutMarks(sentence));
   const raw: string[] = [];
 
   for (const match of text.matchAll(NUMBER_WITH_UNIT)) raw.push(match[0]);
@@ -155,6 +167,20 @@ function scoreTerms(terms: SentenceTerms, candidate: IndexedText): number {
   return 0.6 * keyRecall + 0.4 * contentRecall;
 }
 
+/**
+ * A claim scores as the better of its forms: with its inline math, so a
+ * formula sentence keeps its numbers and units, and without it, as earlier
+ * runs read it, so math the page writes differently never costs a match.
+ */
+function scoreForms(forms: SentenceTerms[], candidate: IndexedText): number {
+  return Math.max(...forms.map((terms) => scoreTerms(terms, candidate)));
+}
+
+function claimForms(claim: Claim): SentenceTerms[] {
+  const withMath = sentenceTerms(claim.sentence);
+  return claim.keyText === claim.sentence ? [withMath] : [withMath, sentenceTerms(claim.keyText)];
+}
+
 /** Share of the sentence's key terms and content words found in the candidate, in [0, 1]. */
 export function lexicalSupport(sentence: string, candidateText: string): number {
   return scoreTerms(sentenceTerms(sentence), indexText(candidateText));
@@ -169,8 +195,14 @@ type Claim = {
   insertAt: number;
   /** End of the claim's span in the line, including trailing citations. */
   end: number;
-  /** Claim text without citations, for scoring and verification. */
+  /** Claim text without citations or inline code, inline math kept, for scoring and verification. */
   sentence: string;
+  /**
+   * The claim text as earlier runs read it: prose sentences without inline code
+   * or math (table rows keep theirs). Feeds claimKey, so stored keys still
+   * match, and the term guard, whose input this change leaves alone.
+   */
+  keyText: string;
   citations: Citation[];
   /** A table's caption or header citations, for an uncited row's evidence pages only. */
   inheritedCitations: Citation[];
@@ -184,6 +216,7 @@ const FENCE = /^\s*(```|~~~)/;
 const FOOTNOTE_DEFINITION = /^ {0,3}\[\^[^\]\s]+\]:/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d{1,3}[.)])\s/;
 const INLINE_CODE_OR_MATH = /`+[^`]*`+|\$\$[^$]*\$\$|\$[^$\s][^$]*\$/g;
+const INLINE_CODE = /`+[^`]*`+/g;
 const LIST_OR_QUOTE_PREFIX = /^\s*(?:>\s?)*\s*(?:(?:[-*+]|\d{1,3}[.)])\s+(?:\[[ xX]\]\s+)?)?/;
 
 function blank(match: string): string {
@@ -236,13 +269,26 @@ function insertionPoint(line: string, start: number, end: number): number {
   return start + text.replace(/\s+$/, "").length;
 }
 
-function makeClaim(line: string, lineIndex: number, start: number, end: number, insertAt: number, sentenceText: string): Claim {
+function claimText(text: string): string {
+  return stripCitations(text).replace(/\s+/g, " ").trim();
+}
+
+function makeClaim(
+  line: string,
+  lineIndex: number,
+  start: number,
+  end: number,
+  insertAt: number,
+  sentenceText: string,
+  keyText = sentenceText,
+): Claim {
   const segment = line.slice(start, end);
   return {
     line: lineIndex,
     insertAt,
     end,
-    sentence: stripCitations(sentenceText).replace(/\s+/g, " ").trim(),
+    sentence: claimText(sentenceText),
+    keyText: claimText(keyText),
     citations: parseCitations(segment),
     inheritedCitations: [],
     alreadyUnsourced: segment.includes(UNSOURCED_TOKEN),
@@ -355,12 +401,22 @@ function extractClaims(lines: string[]): Claim[] {
     const contentStart = LIST_OR_QUOTE_PREFIX.exec(line)?.[0].length ?? 0;
     for (const [start, end] of sentenceSpans(masked, contentStart, line.length)) {
       if (wordCount(masked.slice(start, end)) < MIN_CLAIM_WORDS) continue;
-      const readable = line.slice(start, end).replace(INLINE_CODE_OR_MATH, " ");
-      claims.push(makeClaim(line, lineIndex, start, end, insertionPoint(line, start, end), readable));
+      const text = line.slice(start, end);
+      const withMath = text.replace(INLINE_CODE, " ");
+      const withoutMath = text.replace(INLINE_CODE_OR_MATH, " ");
+      claims.push(makeClaim(line, lineIndex, start, end, insertionPoint(line, start, end), withMath, withoutMath));
     }
   });
 
   return claims;
+}
+
+/**
+ * Each claim's verifier sentence and the text its term guard reads, in
+ * document order, for local replay tooling. Unsourced tokens are not stripped.
+ */
+export function groundingClaimTexts(markdown: string): Array<{ sentence: string; termGuardText: string }> {
+  return extractClaims(markdown.split("\n")).map((claim) => ({ sentence: claim.sentence, termGuardText: claim.keyText }));
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +475,7 @@ function pageWindows(text: string, size: number): Array<{ start: number; text: s
  * until the budget is full, then printed in page and position order. A dense
  * page no longer loses its supporting text to a fixed prefix cut.
  */
-function passageEvidence(terms: SentenceTerms, pages: EvidencePage[], maxChars: number, passageChars: number): string {
+function passageEvidence(terms: SentenceTerms[], pages: EvidencePage[], maxChars: number, passageChars: number): string {
   const size = Math.max(1, Math.min(passageChars, maxChars));
   const windows = pages.flatMap((page, rank) =>
     pageWindows(page.text, size).map((window) => ({
@@ -427,7 +483,7 @@ function passageEvidence(terms: SentenceTerms, pages: EvidencePage[], maxChars: 
       rank,
       start: window.start,
       text: window.text,
-      score: scoreTerms(terms, indexText(window.text)),
+      score: scoreForms(terms, indexText(window.text)),
     })),
   );
   windows.sort((a, b) => b.score - a.score || a.rank - b.rank || a.start - b.start);
@@ -529,7 +585,7 @@ export async function groundDocument({
   const allPages = [...bySource.values()].flat();
   const vocabulary = buildSourceVocabulary(sources.map((source) => source.text));
   /** A supported claim naming a term the sources never mention is treated as unsourced. */
-  const termGuarded = (claim: Claim): boolean => absentTerms(claim.sentence, vocabulary).length > 0;
+  const termGuarded = (claim: Claim): boolean => absentTerms(claim.keyText, vocabulary).length > 0;
 
   // Claims whose end carried a token before stripping (re-check only).
   const tokenClaims = new Map<Insertion, Claim>();
@@ -547,7 +603,7 @@ export async function groundDocument({
   const considered = (claim: Claim, lexicalMiss: boolean): boolean => {
     if (!recheck) return !claim.alreadyUnsourced;
     if (tagged.has(claim)) return true;
-    return legacy ? lexicalMiss : pendingKeys.has(claimKey(claim.sentence));
+    return legacy ? lexicalMiss : pendingKeys.has(claimKey(claim.keyText));
   };
 
   let lexicalSupported = 0;
@@ -556,15 +612,15 @@ export async function groundDocument({
   let truncated = false;
   let verifierFailed = false;
   const outcomes = new Map<Claim, Outcome>();
-  const misses: Array<{ claim: Claim; terms: SentenceTerms; best: EvidencePage[] }> = [];
+  const misses: Array<{ claim: Claim; terms: SentenceTerms[]; best: EvidencePage[] }> = [];
 
   for (const claim of claims) {
     // Normal and keyed passes know up front which claims they evaluate; a
     // legacy re-check must score untagged claims first to find the misses.
     if (!legacy && !considered(claim, true)) continue;
-    const terms = sentenceTerms(claim.sentence);
+    const terms = claimForms(claim);
     const scored = evidencePagesFor(claim, bySource, allPages)
-      .map((page) => ({ page, score: scoreTerms(terms, page.index) }))
+      .map((page) => ({ page, score: scoreForms(terms, page.index) }))
       .sort((a, b) => b.score - a.score);
     const lexicalMiss = !(scored.length > 0 && scored[0].score >= LEXICAL_SUPPORT_THRESHOLD);
     if (!considered(claim, lexicalMiss)) continue;
@@ -624,7 +680,7 @@ export async function groundDocument({
   // re-checked keeps its tag.
   const uncheckedKeys = claims
     .filter((claim) => outcomes.get(claim) === "unchecked" && !tagged.has(claim))
-    .map((claim) => claimKey(claim.sentence));
+    .map((claim) => claimKey(claim.keyText));
   const newTags = claims
     .filter((claim) => outcomes.get(claim) === "reject" && !tagged.has(claim))
     .map((claim) => ({ line: claim.line, at: claim.insertAt, text: ` ${UNSOURCED_TOKEN}` }));

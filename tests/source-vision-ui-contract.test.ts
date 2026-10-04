@@ -9,9 +9,11 @@ import {
   chunkPages,
   classifyBatchResponse,
   failureDecision,
+  isLastTry,
   missingFollowUp,
   progressFor,
   splitBySize,
+  unreadableMessage,
   VISION_BATCH_BYTES,
   VISION_BATCH_PAGES,
   VISION_CONCURRENCY,
@@ -25,17 +27,20 @@ import {
 
 const root = path.resolve(__dirname, "..");
 
-type Posted = { sourceId: string; pages: number[]; final: boolean };
+type Posted = { sourceId: string; pages: number[]; final: boolean; last: boolean };
 type Reply = { status: number; body: unknown } | ((batch: Posted) => { status: number; body: unknown });
 
 /**
  * A fake pages route. Each source keeps a server-side pending list; a POST
- * reads what it is sent unless a scripted reply says otherwise.
+ * reads what it is sent unless a scripted reply says otherwise. `failWhen`
+ * is an outage (always 502). `rejects` is a page the provider refuses: 502,
+ * except on a single page's last try, which the route settles as unreadable.
  */
 function harness(
   initial: Record<string, number[]>,
   script: Record<string, Reply[]> = {},
   failWhen?: (batch: Posted) => boolean,
+  rejects?: (sourceId: string, page: number) => boolean,
 ) {
   const pending = new Map(Object.entries(initial).map(([id, pages]) => [id, [...pages]]));
   const posts: Posted[] = [];
@@ -57,7 +62,7 @@ function harness(
       for (const page of pages) yield { page, blob: new Blob([new Uint8Array(10)]) };
     },
     async post(sourceId, batch) {
-      const posted = { sourceId, pages: batch.pages, final: batch.final };
+      const posted = { sourceId, pages: batch.pages, final: batch.final, last: batch.last };
       posts.push(posted);
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
@@ -66,6 +71,12 @@ function harness(
       if (failWhen?.(posted)) return { status: 502, body: { error: "Model failed", code: "json_parse" } };
       const scripted = script[sourceId]?.shift();
       if (scripted) return typeof scripted === "function" ? scripted(posted) : scripted;
+      if (rejects && batch.pages.some((page) => rejects(sourceId, page))) {
+        if (!batch.last) return { status: 502, body: { error: "Model failed", code: "unknown" } };
+        const left = (pending.get(sourceId) ?? []).filter((page) => !batch.pages.includes(page));
+        pending.set(sourceId, left);
+        return { status: 200, body: { read: [], missing: [], pending: left, unreadable: batch.pages } };
+      }
       const left = (pending.get(sourceId) ?? []).filter((page) => !batch.pages.includes(page));
       pending.set(sourceId, left);
       return { status: 200, body: { read: batch.pages, missing: [], pending: left } };
@@ -147,7 +158,9 @@ describe("slide-image reading decisions", () => {
       expect(classifyBatchResponse(status, { error: "x" })).toEqual({ kind: "failed" });
     }
     expect(classifyBatchResponse(200, { read: [1], missing: [2], pending: [2, 5] }))
-      .toEqual({ kind: "ok", read: [1], missing: [2], pending: [2, 5] });
+      .toEqual({ kind: "ok", read: [1], missing: [2], pending: [2, 5], unreadable: [] });
+    expect(classifyBatchResponse(200, { read: [], missing: [], pending: [], unreadable: [6] }))
+      .toMatchObject({ kind: "ok", unreadable: [6] });
   });
 
   it("halves a failed batch down to single pages, retrying only a lone page once", () => {
@@ -162,6 +175,10 @@ describe("slide-image reading decisions", () => {
     expect(failureDecision({ ...task, pages: [3], attempt: 1 })).toEqual({ kind: "give_up" });
     // A page sent alone from the start gets one more try.
     expect(failureDecision({ ...task, pages: [9] })).toMatchObject({ kind: "retry", task: { pages: [9], attempt: 1 } });
+    // Only a single page on its last allowed try is marked last.
+    expect(isLastTry({ ...task, pages: [3], attempt: 1 })).toBe(true);
+    expect(isLastTry({ ...task, pages: [9], attempt: 0 })).toBe(false);
+    expect(isLastTry({ ...task, pages: [1, 2], attempt: 1 })).toBe(false);
     expect(changedDecision(false)).toBe("refetch");
     expect(changedDecision(true)).toBe("stop");
   });
@@ -210,8 +227,8 @@ describe("VisionRunner", () => {
     });
     await h.start();
     expect(h.posts).toEqual([
-      { sourceId: "a", pages: [1, 2, 3], final: false },
-      { sourceId: "a", pages: [2], final: true },
+      { sourceId: "a", pages: [1, 2, 3], final: false, last: false },
+      { sourceId: "a", pages: [2], final: true, last: false },
     ]);
     expect(h.progress.get("a")?.state).toBe("done");
   });
@@ -266,6 +283,57 @@ describe("VisionRunner", () => {
     await twice.start();
     expect(twice.posts).toHaveLength(2);
     expect(twice.progress.get("a")).toMatchObject({ state: "stopped", message: VISION_FAILED_MESSAGE });
+  });
+
+  it("settles a page the provider keeps refusing and finishes the source", async () => {
+    const bad = 6;
+    const h = harness({ a: range(1, 8), b: [1] }, {}, undefined, (id, page) => id === "a" && page === bad);
+    await h.start();
+    const aPosts = h.posts.filter((p) => p.sourceId === "a");
+    const key = (pages: number[]) => pages.join(",");
+    expect(aPosts.map((p) => key(p.pages)).sort()).toEqual(
+      [range(1, 8), range(1, 4), range(5, 8), [5, 6], [7, 8], [5], [6]].map(key).sort(),
+    );
+    // Only the single page's last try is marked, and it is never sent again.
+    expect(aPosts.filter((p) => p.last).map((p) => p.pages)).toEqual([[5], [6]]);
+    expect(aPosts.length).toBeLessThanOrEqual(15);
+    expect(h.pending.get("a")).toEqual([]);
+    expect(h.progress.get("a")).toEqual({
+      state: "done",
+      done: 8,
+      total: 8,
+      message: "Page 6 could not be read.",
+      unreadable: [6],
+    });
+    expect(h.progress.get("b")).toEqual({ state: "done", done: 1, total: 1 });
+    expect(h.textChanged.sort()).toEqual(["a", "b"]);
+  });
+
+  it("costs no more than 15 posts when the provider refuses all 8 pages", async () => {
+    const h = harness({ a: range(1, 8) }, {}, undefined, () => true);
+    await h.start();
+    expect(h.posts).toHaveLength(15);
+    expect(h.posts.filter((p) => p.last)).toHaveLength(8);
+    expect(h.progress.get("a")).toMatchObject({ state: "done", unreadable: range(1, 8) });
+    expect(h.progress.get("a")?.message).toBe("Pages 1, 2, 3, 4, 5, 6, 7 and 8 could not be read.");
+  });
+
+  it("gives a lone refused page its one retry as the last try", async () => {
+    const h = harness({ a: [4] }, {}, undefined, () => true);
+    await h.start();
+    expect(h.posts).toEqual([
+      { sourceId: "a", pages: [4], final: false, last: false },
+      { sourceId: "a", pages: [4], final: false, last: true },
+    ]);
+    expect(h.progress.get("a")).toMatchObject({ state: "done", unreadable: [4], message: "Page 4 could not be read." });
+  });
+
+  it("still halts every source on a 429 during a last try", async () => {
+    const quota = { status: 429, body: { error: "Rate limited", code: "rate_limited" } };
+    const h = harness({ a: [1], b: range(1, 3) }, { a: [{ status: 502, body: {} }, quota] });
+    await h.start();
+    expect(h.posts.filter((p) => p.sourceId === "a").map((p) => p.last)).toEqual([false, true]);
+    expect(h.progress.get("a")).toMatchObject({ state: "stopped", message: VISION_QUOTA_MESSAGE });
   });
 
   it("re-GETs the pending list once when the source changed", async () => {
@@ -334,5 +402,15 @@ describe("slide-image reading copy", () => {
       "The free reading limit is reached for now. Reading picks up the next time you open this pack.",
     );
     expect(VISION_FAILED_MESSAGE).toBe("Could not read some slides.");
+  });
+
+  it("names the pages that could not be read", () => {
+    expect(unreadableMessage([])).toBeNull();
+    expect(unreadableMessage([6])).toBe("Page 6 could not be read.");
+    expect(unreadableMessage([9, 3])).toBe("Pages 3 and 9 could not be read.");
+    expect(unreadableMessage([1, 2, 5])).toBe("Pages 1, 2 and 5 could not be read.");
+    const workspace = readFileSync(path.join(root, "components/reviewer-workspace.tsx"), "utf8");
+    expect(workspace).toContain("unreadableMessage(entry.unreadable ?? [])");
+    expect(workspace).toContain("{note.filename}: {note.message}");
   });
 });

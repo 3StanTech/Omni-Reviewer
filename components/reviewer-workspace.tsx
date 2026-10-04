@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CaretDown, CaretUp } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, WarningCircle } from "@phosphor-icons/react";
 
 import type { ViewsPayload } from "@/lib/serialize-view";
 import {
@@ -30,7 +30,7 @@ import type { ViewKind } from "@/lib/types";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
 import { useGeneration } from "@/lib/use-generation";
-import { useSourceVision } from "@/lib/use-source-vision";
+import { unreadableMessage, useSourceVision } from "@/lib/use-source-vision";
 import type { GenerationRequest } from "@/lib/generation-plan";
 import type { LockedInDraftController } from "@/components/locked-in-editor";
 import {
@@ -276,6 +276,12 @@ export function ReviewerWorkspace({
   const vision = useSourceVision({ reviewerId, sources });
   const readingSlides = vision.reading;
   const busyReason = readingSlides ? READING_SLIDES_NOTE : null;
+  // Pages the provider refused were settled with no readable content; say so.
+  const unreadableNotes = sources.flatMap((source) => {
+    const entry = vision.progress[source.id];
+    const message = entry && entry.state !== "reading" ? unreadableMessage(entry.unreadable ?? []) : null;
+    return message ? [{ id: source.id, filename: source.filename, message }] : [];
+  });
 
   const generation = useGeneration({
     userId,
@@ -451,6 +457,18 @@ export function ReviewerWorkspace({
       expanded={sourcesExpanded}
       vision={vision}
     />
+    {unreadableNotes.length > 0 ? (
+      <ul className="mt-2 space-y-1">
+        {unreadableNotes.map((note) => (
+          <li key={note.id} role="status" className="flex items-start gap-1.5 text-xs text-muted-foreground">
+            <WarningCircle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" weight="bold" />
+            <span>
+              {note.filename}: {note.message}
+            </span>
+          </li>
+        ))}
+      </ul>
+    ) : null}
     </div>
   );
 

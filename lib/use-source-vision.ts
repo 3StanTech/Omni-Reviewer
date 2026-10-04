@@ -29,6 +29,8 @@ export type VisionProgress = {
   done: number;
   total: number;
   message?: string;
+  /** Pages the provider refused to read; they are settled as having no readable content. */
+  unreadable?: number[];
 };
 
 export type VisionSource = {
@@ -50,7 +52,7 @@ export type VisionTask = {
 };
 
 export type BatchOutcome =
-  | { kind: "ok"; read: number[]; missing: number[]; pending: number[] }
+  | { kind: "ok"; read: number[]; missing: number[]; pending: number[]; unreadable: number[] }
   | { kind: "quota" }
   | { kind: "changed" }
   | { kind: "gone" }
@@ -108,6 +110,7 @@ export function classifyBatchResponse(status: number, body: unknown): BatchOutco
       read: numberList(record.read),
       missing: numberList(record.missing),
       pending: numberList(record.pending),
+      unreadable: numberList(record.unreadable),
     };
   }
   if (status === 429) return { kind: "quota" };
@@ -134,6 +137,10 @@ export type FailureDecision =
  * reached by halving has already failed once, so it is not retried again;
  * only a page sent alone from the start gets one more try. Eight pages cost
  * at most 15 posts. Giving up on a page does not stop the rest of its source.
+ *
+ * A single page's last try is sent marked `last` (see `isLastTry`): if the
+ * provider refuses that page, the server settles it as unreadable and answers
+ * 200, so a give-up here only follows an outage, a network or render failure.
  */
 export function failureDecision(task: VisionTask): FailureDecision {
   if (task.pages.length > 1) {
@@ -148,6 +155,20 @@ export function failureDecision(task: VisionTask): FailureDecision {
   }
   if (task.attempt < 1) return { kind: "retry", task: { ...task, attempt: task.attempt + 1 } };
   return { kind: "give_up" };
+}
+
+/** A single page on its last allowed try: the server may settle it as unreadable. */
+export function isLastTry(task: VisionTask): boolean {
+  return task.pages.length === 1 && task.attempt >= 1;
+}
+
+/** "Page 6 could not be read." for the pages the provider refused. */
+export function unreadableMessage(pages: readonly number[]): string | null {
+  if (pages.length === 0) return null;
+  const sorted = [...pages].sort((a, b) => a - b);
+  if (sorted.length === 1) return `Page ${sorted[0]} could not be read.`;
+  const head = sorted.slice(0, -1).join(", ");
+  return `Pages ${head} and ${sorted[sorted.length - 1]} could not be read.`;
 }
 
 /** A source changed under a merge re-reads its pending list once, then stops. */
@@ -172,7 +193,7 @@ export type VisionDeps = {
   ): AsyncIterable<{ page: number; blob: Blob }>;
   post(
     sourceId: string,
-    batch: { pages: number[]; images: Blob[]; final: boolean },
+    batch: { pages: number[]; images: Blob[]; final: boolean; last: boolean },
     signal: AbortSignal,
   ): Promise<{ status: number; body: unknown }>;
   onProgress(sourceId: string, progress: VisionProgress | null): void;
@@ -189,6 +210,8 @@ type Job = {
   wrote: boolean;
   /** A page was given up on; the source stops once its other batches finish. */
   failed: boolean;
+  /** Pages the server settled as unreadable after the provider refused them. */
+  unreadable: number[];
   /** Tasks queued or running for this source. */
   open: number;
   state: VisionProgress["state"];
@@ -277,6 +300,7 @@ export class VisionRunner {
         epoch: 0,
         wrote: false,
         failed: false,
+        unreadable: [],
         open: 0,
         state: "reading",
       };
@@ -404,7 +428,7 @@ export class VisionRunner {
     try {
       const response = await this.deps.post(
         task.sourceId,
-        { pages: task.pages, images, final: task.final },
+        { pages: task.pages, images, final: task.final, last: isLastTry(task) },
         this.signal,
       );
       outcome = classifyBatchResponse(response.status, response.body);
@@ -418,7 +442,10 @@ export class VisionRunner {
     switch (outcome.kind) {
       case "ok": {
         job.pending = outcome.pending;
-        if (outcome.read.length > 0) job.wrote = true;
+        if (outcome.read.length > 0 || outcome.unreadable.length > 0) job.wrote = true;
+        for (const page of outcome.unreadable) {
+          if (!job.unreadable.includes(page)) job.unreadable.push(page);
+        }
         const follow = missingFollowUp(task, outcome.missing);
         if (follow) this.pushFront(follow);
         this.report(task.sourceId, job);
@@ -515,7 +542,7 @@ export class VisionRunner {
       job.bytes = null;
       this.removeQueued(sourceId);
     }
-    this.deps.onProgress(sourceId, { state: "stopped", ...counts, message });
+    this.deps.onProgress(sourceId, { state: "stopped", ...counts, message, ...unreadableFields(job) });
     if (job?.wrote) this.deps.onTextChanged(sourceId);
   }
 
@@ -540,8 +567,20 @@ export class VisionRunner {
   private report(sourceId: string, job: Job): void {
     const counts = progressFor(job.total, job.pending);
     job.total = counts.total;
-    this.deps.onProgress(sourceId, { state: job.state, ...counts });
+    const note = job.state === "done" ? unreadableMessage(job.unreadable) : null;
+    this.deps.onProgress(sourceId, {
+      state: job.state,
+      ...counts,
+      ...(note ? { message: note } : {}),
+      ...unreadableFields(job),
+    });
   }
+}
+
+function unreadableFields(job: Job | undefined): { unreadable?: number[] } {
+  return job && job.unreadable.length > 0
+    ? { unreadable: [...job.unreadable].sort((a, b) => a - b) }
+    : {};
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -585,6 +624,7 @@ function browserDeps(
         form.append("image", batch.images[index]!, `page-${page}.jpg`);
       });
       if (batch.final) form.append("final", "1");
+      if (batch.last) form.append("last", "1");
       const response = await fetch(`${base}/${sourceId}/pages`, { method: "POST", body: form, signal });
       return { status: response.status, body: await readJson(response) };
     },

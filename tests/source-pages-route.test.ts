@@ -70,7 +70,7 @@ function jpeg(size = 16): Uint8Array {
 
 async function batchRequest(
   entries: Array<{ page: string | number; image?: Uint8Array }>,
-  options: { final?: boolean; contentLength?: string | null } = {},
+  options: { final?: boolean; last?: string; contentLength?: string | null } = {},
 ): Promise<Request> {
   const form = new FormData();
   for (const entry of entries) form.append("page", String(entry.page));
@@ -78,6 +78,7 @@ async function batchRequest(
     if (entry.image) form.append("image", new Blob([entry.image.slice().buffer], { type: "image/jpeg" }), `p${entry.page}.jpg`);
   }
   if (options.final) form.append("final", "1");
+  if (options.last !== undefined) form.append("last", options.last);
   const encoded = new Request(URL_BASE, { method: "POST", body: form });
   const body = await encoded.arrayBuffer();
   const headers = new Headers({ "content-type": encoded.headers.get("content-type")! });
@@ -196,7 +197,7 @@ describe("source pages route", () => {
       sourceMock.mockResolvedValue(pdfSource(joinPages([withSlideImageText("", "Read"), "", "t".repeat(400)])));
       const response = await POST(await batchRequest([{ page: 1, image: jpeg() }]), context);
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ read: [], missing: [], pending: [2] });
+      expect(await response.json()).toEqual({ read: [], missing: [], pending: [2], unreadable: [] });
       expect(visionMock).not.toHaveBeenCalled();
       expect(replaceTextMock).not.toHaveBeenCalled();
     });
@@ -208,7 +209,7 @@ describe("source pages route", () => {
         context,
       );
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ read: [1], missing: [2], pending: [2] });
+      expect(await response.json()).toEqual({ read: [1], missing: [2], pending: [2], unreadable: [] });
       expect(visionMock).toHaveBeenCalledTimes(1);
       const [pages, instruction] = visionMock.mock.calls[0]!;
       expect(pages.map((entry: { page: number; mime: string }) => [entry.page, entry.mime]))
@@ -234,7 +235,7 @@ describe("source pages route", () => {
         context,
       );
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ read: [1, 2], missing: [], pending: [] });
+      expect(await response.json()).toEqual({ read: [1, 2], missing: [], pending: [], unreadable: [] });
       const written = replaceTextMock.mock.calls[0]![0];
       expect(pageText(written.text, 2)).toBe("<<<slide image>>>\n(no readable content)");
     });
@@ -255,7 +256,7 @@ describe("source pages route", () => {
         context,
       );
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ read: [2], missing: [], pending: [] });
+      expect(await response.json()).toEqual({ read: [2], missing: [], pending: [], unreadable: [] });
       expect(visionMock).toHaveBeenCalledTimes(1);
       expect(replaceTextMock).toHaveBeenCalledTimes(2);
       const retry = replaceTextMock.mock.calls[1]![0];
@@ -305,6 +306,74 @@ describe("source pages route", () => {
       );
       const logged = JSON.stringify(logMock.mock.calls[0]![2]);
       expect(logged).not.toContain("t".repeat(20));
+    });
+
+    describe("a single page's last try", () => {
+      const rejected = () => Object.assign(new Error("Bad Request"), {
+        statusCode: 400,
+        responseBody: JSON.stringify({ error: { message: "Invalid image payload" } }),
+      });
+
+      it("settles a page the provider refuses as unreadable", async () => {
+        visionMock.mockRejectedValue(rejected());
+        const response = await POST(await batchRequest([{ page: 2, image: jpeg() }], { last: "1" }), context);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ read: [], missing: [], pending: [1], unreadable: [2] });
+        expect(visionMock).toHaveBeenCalledTimes(1);
+        const written = replaceTextMock.mock.calls[0]![0];
+        expect(written.expectedFingerprint).toBe(`md5:${SCAN_TEXT}`);
+        expect(pageText(written.text, 2)).toBe("<<<slide image>>>\n(no readable content)");
+        expect(pageText(written.text, 1)).toBe("");
+        // The provider's reason is still logged.
+        expect(logMock).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.anything(),
+          expect.objectContaining({ providerStatus: 400 }),
+        );
+      });
+
+      it("settles a reading too long to keep", async () => {
+        visionMock.mockRejectedValue(new GenerationError("token_limit", "Vision output exceeds the safe text limit.", false));
+        const response = await POST(await batchRequest([{ page: 1, image: jpeg() }], { last: "1" }), context);
+        expect(response.status).toBe(200);
+        expect((await response.json()).unreadable).toEqual([1]);
+      });
+
+      it.each([
+        ["a quota error", new GenerationError("rate_limited", "x", true), 429],
+        ["a credits error", Object.assign(new Error("Payment Required"), { statusCode: 402 }), 429],
+        ["a provider outage", Object.assign(new Error("Bad Gateway"), { statusCode: 502 }), 502],
+        ["a timeout", new GenerationError("timeout", "Generation timed out.", true), 502],
+        ["an error without a provider status", new Error("boom"), 502],
+      ])("does not settle on %s", async (_label, error, status) => {
+        visionMock.mockRejectedValue(error);
+        const response = await POST(await batchRequest([{ page: 1, image: jpeg() }], { last: "1" }), context);
+        expect(response.status).toBe(status);
+        expect(replaceTextMock).not.toHaveBeenCalled();
+      });
+
+      it("does not settle a refused page that is not on its last try", async () => {
+        visionMock.mockRejectedValue(rejected());
+        const response = await POST(await batchRequest([{ page: 1, image: jpeg() }], { final: true }), context);
+        expect(response.status).toBe(502);
+        expect(replaceTextMock).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["more than one page", [{ page: 1, image: jpeg() }, { page: 2, image: jpeg() }], "1"],
+        ["an invalid value", [{ page: 1, image: jpeg() }], "yes"],
+      ])("rejects a last flag with %s", async (_label, entries, last) => {
+        const response = await POST(await batchRequest(entries, { last }), context);
+        expect(response.status).toBe(400);
+        expect(visionMock).not.toHaveBeenCalled();
+      });
+
+      it("answers 404 for another owner's source before reading a last try", async () => {
+        reviewerMock.mockResolvedValue(null);
+        const response = await POST(await batchRequest([{ page: 1, image: jpeg() }], { last: "1" }), context);
+        expect(response.status).toBe(404);
+        expect(visionMock).not.toHaveBeenCalled();
+      });
     });
 
     it("logs the provider's reason for a 400 without source text or keys", async () => {

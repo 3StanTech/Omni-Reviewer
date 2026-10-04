@@ -698,3 +698,79 @@ describe("groundDocument", () => {
     expect(result.report).toMatchObject({ total: 2, cited: 2, lexicalSupported: 2 });
   });
 });
+
+describe("inline math", () => {
+  // Hand-written excerpt in the style of a scanned AM lecture page.
+  const AM_SOURCE: GroundingSource = {
+    index: 1,
+    text: [
+      "<<<page 33>>>",
+      "",
+      "Total power of an AM signal",
+      "$$P_t = P_c \\left( 1 + \\frac{m^2}{2} \\right)$$",
+      "Example: a carrier power of $P_c = 50\\text{ W}$ modulated at $80\\%$ gives $P_t = 66\\text{ W}$.",
+    ].join("\n"),
+  };
+  const FORMULA_CLAIM = String.raw`Total transmitted power is $P_t = P_c \left(1 + \frac{m^2}{2}\right)$; at $m = 0.8$ with $P_c = 50\text{ W}$, the total power is $66\text{ W}$. [S1 p.33]`;
+
+  it("keeps the claim key of the math-stripped sentence that earlier runs stored", async () => {
+    const result = await groundDocument({ markdown: FORMULA_CLAIM, sources: [], verify: neverCalled(), maxVerifyItems: 0 });
+    // Pinned from the release that deleted inline math before keying.
+    expect(result.report.uncheckedKeys).toEqual(["0ae3c85a"]);
+    expect(claimKey("Total transmitted power is; at with, the total power is.")).toBe("0ae3c85a");
+  });
+
+  it("re-checks a stored key for a sentence with inline math", async () => {
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
+    const result = await groundDocument({
+      markdown: FORMULA_CLAIM,
+      sources: [{ index: 1, text: "<<<page 33>>>\nUnrelated page about antenna arrays." }],
+      verify,
+      recheck: { uncheckedKeys: ["0ae3c85a"] },
+    });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.report.uncheckedKeys).toBeUndefined();
+  });
+
+  it("sends the verifier the sentence with its inline math", async () => {
+    const verify = rejectAll();
+    await groundDocument({
+      markdown: FORMULA_CLAIM,
+      sources: [{ index: 1, text: "<<<page 33>>>\nUnrelated page about antenna arrays." }],
+      verify,
+    });
+    expect(verify).toHaveBeenCalledWith([
+      expect.objectContaining({ sentence: String.raw`Total transmitted power is $P_t = P_c \left(1 + \frac{m^2}{2}\right)$; at $m = 0.8$ with $P_c = 50\text{ W}$, the total power is $66\text{ W}$.` }),
+    ]);
+  });
+
+  it("supports a formula sentence lexically from the page that states the formula", async () => {
+    const result = await groundDocument({ markdown: FORMULA_CLAIM, sources: [AM_SOURCE], verify: neverCalled() });
+    expect(result.report).toMatchObject({ total: 1, lexicalSupported: 1, unsourced: 0 });
+  });
+
+  it("still sends a formula sentence with numbers the page never states to the verifier", async () => {
+    const verify = rejectAll();
+    const markdown = String.raw`Total transmitted power is $P_t = P_c \left(1 + \frac{m^2}{2}\right)$; at $m = 0.3$ with $P_c = 20\text{ W}$, the total power is $21\text{ W}$. [S1 p.33]`;
+    const result = await groundDocument({ markdown, sources: [AM_SOURCE], verify });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.report).toMatchObject({ lexicalSupported: 0, unsourced: 1 });
+  });
+
+  it("reads LaTeX the same way on the claim and the source side", () => {
+    expect(normalizeForMatch(String.raw`A load of $P_c = 50\text{ W}$ at $80\%$`)).toBe("load 50 w 80");
+    expect(normalizeForMatch(String.raw`$$P_c = 50\text{ W}$$ at 80\%`)).toBe(normalizeForMatch(String.raw`$P_c = 50\text{ W}$ at $80\%$`));
+    expect(keyTerms(String.raw`A carrier of $P_c = 50\text{ W}$ is used.`)).toContain("50 w");
+    const tokens = normalizeForMatch(String.raw`$$\left( 1 + \frac{m^2}{2} \right) \approx \mathrm{dB} \cdot \mathbf{x}$$`).split(" ");
+    for (const command of ["left", "right", "frac", "approx", "mathrm", "cdot", "mathbf", "text"]) expect(tokens).not.toContain(command);
+  });
+
+  it("runs the term guard on the sentence without its inline math", async () => {
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
+    // 33.3 appears only inside the claim's inline math, never in the source.
+    const markdown = String.raw`At full modulation the sidebands carry only $\frac{1}{3}$ ($33.3\%$) of the total transmitted power in every case. [S1 p.33]`;
+    const result = await groundDocument({ markdown, sources: [AM_SOURCE], verify });
+    expect(result.report.termFlagged).toBeUndefined();
+    expect(result.markdown).toBe(markdown);
+  });
+});

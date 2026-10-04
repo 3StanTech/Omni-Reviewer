@@ -81,7 +81,7 @@ export async function GET(_request: Request, context: RouteContext) {
   return NextResponse.json(visionPageSummary(owned.source.extractedText ?? ""), { headers: NO_STORE });
 }
 
-type Batch = { pages: number[]; images: Uint8Array[]; final: boolean };
+type Batch = { pages: number[]; images: Uint8Array[]; final: boolean; last: boolean };
 
 function badRequest(error: string) {
   return NextResponse.json({ error }, { status: 400 });
@@ -91,12 +91,19 @@ function isJpeg(bytes: Uint8Array): boolean {
   return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
-/** Parse and bound `page`, `image` and `final`. Returns a 400 response on any invalid field. */
+/**
+ * Parse and bound `page`, `image`, `final` and `last`. `last` marks a single
+ * page's last allowed try. Returns a 400 response on any invalid field.
+ */
 async function readBatch(form: FormData, pageTotal: number): Promise<Batch | Response> {
   const pageFields = form.getAll("page");
   const imageFields = form.getAll("image");
   const finalField = form.get("final");
+  const lastField = form.get("last");
   if (finalField !== null && finalField !== "1") return badRequest("Invalid final flag");
+  if (lastField !== null && (lastField !== "1" || pageFields.length !== 1)) {
+    return badRequest("Invalid last flag");
+  }
   if (pageFields.length < 1 || pageFields.length > MAX_VISION_BATCH_PAGES) {
     return badRequest(`Send 1 to ${MAX_VISION_BATCH_PAGES} pages at a time`);
   }
@@ -127,7 +134,7 @@ async function readBatch(form: FormData, pageTotal: number): Promise<Batch | Res
     if (!isJpeg(bytes)) return badRequest("Each image must be a JPEG file");
     images.push(bytes);
   }
-  return { pages, images, final: finalField === "1" };
+  return { pages, images, final: finalField === "1", last: lastField === "1" };
 }
 
 /**
@@ -154,6 +161,18 @@ async function writeReadings(
     text: mergeVisionPages(text, applicable),
   });
   return row ? { row, read: [...applicable.keys()].sort((a, b) => a - b) } : null;
+}
+
+/**
+ * Whether the provider refused this request's own content: a 4xx answer other
+ * than quota (402, 429), or a reading too long to keep. Outages (5xx, network),
+ * timeouts and our own errors are not, so they never settle a page.
+ */
+function isContentRejection(error: unknown, code: string): boolean {
+  if (code === "rate_limited" || code === "payment_required") return false;
+  if (code === "token_limit") return true;
+  const status = parseProviderError(error).status;
+  return status !== undefined && status >= 400 && status < 500 && status !== 402 && status !== 429;
 }
 
 /** Read one batch of rendered page images and merge the readings into the source text. */
@@ -204,7 +223,7 @@ export async function POST(request: Request, context: RouteContext) {
     .filter((entry) => pending.has(entry.page));
   if (wanted.length === 0) {
     return NextResponse.json(
-      { read: [], missing: [], pending: [...pending] },
+      { read: [], missing: [], pending: [...pending], unreadable: [] },
       { headers: NO_STORE },
     );
   }
@@ -220,6 +239,8 @@ export async function POST(request: Request, context: RouteContext) {
   }, VISION_DEADLINE_MS);
 
   let output: string;
+  /** Pages the provider refused on their last try; recorded as read with nothing. */
+  let unreadable: number[] = [];
   try {
     output = await visionReadPages(
       wanted.map((entry) => ({ page: entry.page, mime: "image/jpeg" as const, bytes: entry.bytes })),
@@ -244,10 +265,16 @@ export async function POST(request: Request, context: RouteContext) {
     const message = publicGenerationErrorMessage(classified.code, classified.message)
       ?? "Could not read the slide images. Try again.";
     const quota = classified.code === "rate_limited" || classified.code === "payment_required";
-    return NextResponse.json(
-      { error: message, code: classified.code },
-      { status: quota ? 429 : 502 },
-    );
+    if (!(batch.last && !timedOut && !request.signal.aborted && isContentRejection(error, classified.code))) {
+      return NextResponse.json(
+        { error: message, code: classified.code },
+        { status: quota ? 429 : 502 },
+      );
+    }
+    // A page the provider keeps refusing would otherwise block its source for
+    // good. Settle it like a page still missing on the final try.
+    unreadable = wanted.map((entry) => entry.page);
+    output = "";
   } finally {
     clearTimeout(timer);
     request.signal.removeEventListener("abort", onAbort);
@@ -256,7 +283,7 @@ export async function POST(request: Request, context: RouteContext) {
   const requested = wanted.map((entry) => entry.page);
   const readings = parseVisionBatch(output, requested);
   let missing = requested.filter((page) => !readings.has(page));
-  if (batch.final) {
+  if (batch.final || unreadable.length > 0) {
     // A page absent twice is recorded as read with nothing, so it is never re-sent.
     for (const page of missing) readings.set(page, "");
     missing = [];
@@ -282,9 +309,10 @@ export async function POST(request: Request, context: RouteContext) {
     const nowPending = pendingVisionPages(written.row.extractedText ?? "");
     return NextResponse.json(
       {
-        read: written.read,
+        read: written.read.filter((page) => !unreadable.includes(page)),
         missing: missing.filter((page) => nowPending.includes(page)),
         pending: nowPending,
+        unreadable: unreadable.filter((page) => written.read.includes(page)),
       },
       { headers: NO_STORE },
     );

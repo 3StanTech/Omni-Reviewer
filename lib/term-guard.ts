@@ -8,8 +8,14 @@
 
 import { citationPattern, UNSOURCED_TOKEN } from "@/lib/citations";
 
-/** Normalized source texts (joined with " | ", padded with spaces) plus their word set. */
-export type SourceVocabulary = { text: string; words: ReadonlySet<string> };
+/**
+ * Normalized source texts (joined with " | ", padded with spaces), their word
+ * set, and every run of 2 to 4 adjacent words of 2+ characters written as one
+ * ("dsb sc" as "dsbsc"), so a hyphen or space variant of a term still matches.
+ */
+export type SourceVocabulary = { text: string; words: ReadonlySet<string>; joined: ReadonlySet<string> };
+
+const MAX_JOINED_WORDS = 4;
 
 const GREEK_NAMES: Record<string, string> = { α: "alpha", β: "beta", γ: "gamma", δ: "delta", κ: "kappa", μ: "mu", µ: "mu" };
 const GREEK_GLYPH = /[αβγδκμµ]/g;
@@ -33,9 +39,21 @@ function normalize(text: string): string {
 /** Each text normalized on its own and joined with " | ", so no phrase matches across two texts. */
 export function buildSourceVocabulary(texts: readonly string[]): SourceVocabulary {
   const normalized = texts.map((text) => normalize(canonicalizeGreek(text)));
+  const joined = new Set<string>();
+  for (const text of normalized) {
+    const words = text.split(" ").filter(Boolean);
+    words.forEach((_, start) => {
+      let run = "";
+      for (let end = start; end < words.length && end < start + MAX_JOINED_WORDS && words[end].length >= 2; end++) {
+        run += words[end];
+        if (end > start) joined.add(run);
+      }
+    });
+  }
   return {
     text: ` ${normalized.join(" | ")} `,
     words: new Set(normalized.flatMap((text) => text.split(" ")).filter(Boolean)),
+    joined,
   };
 }
 
@@ -101,21 +119,34 @@ function specificWord(word: string, atBoundary: boolean, inLabel = false): boole
   return hasMedicalSuffix(word);
 }
 
+/** A specific term and the hyphenated words it was split from; standalone when it also occurs on its own. */
+type FoundTerm = { term: string; standalone: boolean; compounds: string[] };
+
 /**
  * Specific terms in a sentence, in first-seen order, deduplicated by their
  * normalized form and reported with their original casing.
  */
 export function specificTerms(sentence: string): string[] {
+  return findTerms(sentence).map((found) => found.term);
+}
+
+function findTerms(sentence: string): FoundTerm[] {
   const text = canonicalizeGreek(
     sentence.split(UNSOURCED_TOKEN).join(" ").replace(citationPattern(), " ").replace(LIST_OR_QUOTE_PREFIX, ""),
   );
-  const found: string[] = [];
-  const seen = new Set<string>();
-  const add = (term: string) => {
+  const found: FoundTerm[] = [];
+  const seen = new Map<string, FoundTerm>();
+  const add = (term: string, compound?: string) => {
     const key = normalize(term);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    found.push(term);
+    if (!key) return;
+    let entry = seen.get(key);
+    if (!entry) {
+      entry = { term, standalone: false, compounds: [] };
+      seen.set(key, entry);
+      found.push(entry);
+    }
+    if (compound === undefined) entry.standalone = true;
+    else if (!entry.compounds.includes(compound)) entry.compounds.push(compound);
   };
 
   const labelEnd = LEAD_IN_LABEL.exec(text)?.[0].length ?? 0;
@@ -145,7 +176,7 @@ export function specificTerms(sentence: string): string[] {
       parts.forEach((part, index) => {
         const letters = part.replace(/[^\p{L}]/gu, "");
         if (isRomanNumeral(part) || isAllowlisted(part)) return;
-        if (letters.length >= 4 || specificWord(part, atBoundary && index === 0, inLabel)) add(part);
+        if (letters.length >= 4 || specificWord(part, atBoundary && index === 0, inLabel)) add(part, word);
       });
     } else if (specificWord(word, atBoundary, inLabel)) {
       add(word);
@@ -178,7 +209,22 @@ function singular(word: string): string {
 /** "E. coli": a one-letter genus initial followed by the species. */
 const ABBREVIATED_GENUS = /^\p{Lu}\.?\s+\p{L}/u;
 
+/** Letters and digits of a term run together ("DSB-SC" and "DSB SC" as "dsbsc"). */
+function joinedForm(term: string): string {
+  return normalize(term).replace(/ /g, "");
+}
+
+/** The term (4+ characters, with a letter) written as one word, matched against a source word or a source run of words written as one. */
+function joinedPresent(term: string, vocab: SourceVocabulary): boolean {
+  const joined = joinedForm(term);
+  return joined.length >= 4 && /\p{L}/u.test(joined) && (vocab.words.has(joined) || vocab.joined.has(joined));
+}
+
 function termPresent(term: string, vocab: SourceVocabulary): boolean {
+  return exactTermPresent(term, vocab) || joinedPresent(term, vocab);
+}
+
+function exactTermPresent(term: string, vocab: SourceVocabulary): boolean {
   const original = term
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
@@ -205,7 +251,16 @@ function termPresent(term: string, vocab: SourceVocabulary): boolean {
   return long.length > 0 && long.every((word) => wordPresent(word, vocab));
 }
 
-/** Specific terms of the sentence that the source text never mentions. */
+/**
+ * Specific terms of the sentence that the source text never mentions. A part
+ * of a hyphenated word ("SC" of "DSB-SC") is not reported on its own when the
+ * whole word is present.
+ */
 export function absentTerms(sentence: string, vocab: SourceVocabulary): string[] {
-  return specificTerms(sentence).filter((term) => !termPresent(term, vocab));
+  return findTerms(sentence)
+    .filter(({ term, standalone, compounds }) => {
+      if (termPresent(term, vocab)) return false;
+      return standalone || !compounds.some((compound) => termPresent(compound, vocab));
+    })
+    .map(({ term }) => term);
 }

@@ -29,6 +29,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { claimSentences, stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import {
   groundDocument,
+  groundingClaimTexts,
   normalizeForMatch,
   type GroundingSource,
   type VerifyFn,
@@ -114,19 +115,9 @@ async function liveVerify(): Promise<VerifyFn> {
 
 async function replayTermGuard(fixture: Fixture) {
   const vocabulary = buildSourceVocabulary(fixture.sources.map((source) => source.text));
-  const sentences: string[] = [];
-  // extractClaims is private. With no evidence every claim reaches this local
-  // callback, so its splitting, minimum length, table and code handling are
-  // exactly the production checker's. Remove tags so tagged claims are included.
-  await groundDocument({
-    markdown: fixture.markdown.replaceAll(UNSOURCED_TOKEN, " "),
-    sources: [],
-    maxVerifyItems: Number.MAX_SAFE_INTEGER,
-    verify: async (items) => {
-      sentences.push(...items.map((item) => item.sentence));
-      return items.map((item) => ({ id: item.id, supported: false }));
-    },
-  });
+  // Each claim's term guard text, exactly as production evaluates it (prose
+  // without inline math). Remove tags so tagged claims are included.
+  const sentences = groundingClaimTexts(fixture.markdown.replaceAll(UNSOURCED_TOKEN, " ")).map((claim) => claim.termGuardText);
   const termCounts: Record<string, number> = Object.create(null);
   const flaggedSentences = sentences.flatMap((sentence) => {
     const terms = absentTerms(sentence, vocabulary);
