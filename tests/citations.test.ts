@@ -19,6 +19,7 @@ import {
   dropUnknownSourceCitations,
   parseCitations,
   remarkCitations,
+  repairPageAsSourceCitations,
   citationSourcesForMode,
   resolveUnsourcedClaim,
   stripCitations,
@@ -110,6 +111,17 @@ describe("citation helpers", () => {
 
   it("drops citations to sources outside the pack", () => {
     expect(dropUnknownSourceCitations("A [S1 p.2] B [S3] C [S0]", 2)).toBe("A [S1 p.2] B  C ");
+  });
+
+  it("reads a bare page-as-source citation as a page of the one source that has it", () => {
+    const pages = new Map([
+      [1, new Set([1, 2, 28])],
+      [2, new Set([1, 2, 3])],
+    ]);
+    expect(repairPageAsSourceCitations("A [S28]. B [S2]. C [S3].", pages)).toBe("A [S1 p.28]. B [S2]. C [S2 p.3].");
+    expect(repairPageAsSourceCitations("Shared [S1 p.2] [S40].", pages)).toBe("Shared [S1 p.2] [S40].");
+    expect(repairPageAsSourceCitations("Both [S2].", new Map([[1, new Set([2])]]))).toBe("Both [S1 p.2].");
+    expect(repairPageAsSourceCitations("Ambiguous [S5].", new Map([[1, new Set([5])], [2, new Set([5])]]))).toBe("Ambiguous [S5].");
   });
 });
 

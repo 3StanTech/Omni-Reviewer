@@ -86,6 +86,23 @@ export function dropUnknownSourceCitations(text: string, sourceCount: number): s
   });
 }
 
+/**
+ * Rewrite a bare `[S<n>]` whose n is not a source in the pack but is a page of
+ * exactly one source as `[S<k> p.<n>]`: the model sometimes writes the page in
+ * place of the source ("[S28]" for "[S1 p.28]"). Anything else is left as is.
+ */
+export function repairPageAsSourceCitations(
+  text: string,
+  pagesBySource: ReadonlyMap<number, ReadonlySet<number>>,
+): string {
+  return text.replace(/\[S(\d{1,2})\]/g, (raw, value: string) => {
+    const n = Number(value);
+    if (pagesBySource.has(n)) return raw;
+    const owners = [...pagesBySource].filter(([, pages]) => pages.has(n));
+    return owners.length === 1 ? `[S${owners[0][0]} p.${n}]` : raw;
+  });
+}
+
 const UNSOURCED_SOURCE = String.raw`\[\[unsourced\]\]`;
 const CLOSERS = `"'”’)`;
 /** Terminal punctuation, closers, then any trailing citations or unsourced token. */

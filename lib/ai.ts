@@ -22,6 +22,7 @@ import {
 import {
   citationPattern,
   dropUnknownSourceCitations,
+  repairPageAsSourceCitations,
   type CitationSourceRef,
   type StudyDocumentMeta,
 } from "@/lib/citations";
@@ -73,7 +74,7 @@ import {
   summaryHalfPrompt,
   testMePrompt,
 } from "@/lib/prompts";
-import { hasPageMarkers } from "@/lib/source-markers";
+import { hasPageMarkers, splitPages } from "@/lib/source-markers";
 import { itemPages, sectionPages, uncoveredSections } from "@/lib/study-coverage";
 import { stripDocumentFraming } from "@/lib/study-framing";
 import { sanitizeStudyHeadings } from "@/lib/study-headings";
@@ -759,8 +760,14 @@ async function groundGeneratedDocument(args: {
   if (args.sources.length === 0) {
     return { markdown: args.markdown, meta: { citationSources: args.citationSources } };
   }
+  const pagesBySource = new Map(
+    args.sources.map((source) => [
+      source.index,
+      new Set(splitPages(source.text).map((page) => page.page).filter((page) => page > 0)),
+    ]),
+  );
   const { markdown, report } = await groundDocument({
-    markdown: args.markdown,
+    markdown: repairPageAsSourceCitations(args.markdown, pagesBySource),
     sources: args.sources,
     maxVerifyItems: MAX_GROUNDING_VERIFY_ITEMS,
     maxEvidenceChars: MAX_GROUNDING_EVIDENCE_CHARS,
