@@ -120,7 +120,7 @@ export const FAITHFUL_RESTATEMENT =
   "Restate only what the cited page says. Do not add causes, consequences, comparisons, applications or 'why' explanations the page does not state, and keep the direction of every relation exactly as the page gives it (more or less, increases or decreases).";
 
 export const PHARMACY_GUIDANCE =
-  "When the sources cover drugs or pharmacology, give each drug class a GFM table with the columns Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications. Fill every cell only from the sources, cite each row, and write \"Not in sources\" in any cell the sources do not cover.";
+  "Drug tables apply only if the sources actually describe specific drugs or drug classes. If they do, give each drug class a GFM table with the columns Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications, fill every cell only from the sources, cite each row, and write \"Not in sources\" in any cell the sources do not cover. If the sources do not describe drugs, skip this entirely: write no drug table, no placeholder rows, and no note about topics the sources do not cover.";
 
 const SECTION_COVERAGE =
   "Cover every ## section in proportion to its length; every section with factual content gets at least one item. Do not cluster items in the opening sections.";

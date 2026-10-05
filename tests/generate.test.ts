@@ -1238,6 +1238,10 @@ describe("grounded generation", () => {
     ]);
     expect(prompt).toContain(CITE_EVERY_CLAIM);
     expect(prompt).toContain(PHARMACY_GUIDANCE);
+    expect(PHARMACY_GUIDANCE).not.toContain("\u2014");
+    const skip = "If the sources do not describe drugs, skip this entirely: write no drug table, no placeholder rows, and no note about topics the sources do not cover.";
+    expect(prompt).toContain(skip);
+    expect(summaryPrompt("Body [S1 p.1]")).toContain(skip);
     expect(prompt).toContain(NO_META_TEXT);
     expect(summaryPrompt("# Locked In [S1 p.1]")).toContain(NO_META_TEXT);
     expect(prompt).toContain("### Source S1: b-pharm.pdf (pages 1-2)");
