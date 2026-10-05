@@ -31,6 +31,7 @@ const PASSAGE_OVERLAP_CHARS = 150;
 const PASSAGE_SEPARATOR = "\n...\n";
 /** Non-blank lines above a table searched for a caption or lead-in citation. */
 const TABLE_CAPTION_LOOKBACK = 3;
+const THEMATIC_BREAK = /^(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/;
 
 const MIN_CLAIM_WORDS = 6;
 
@@ -334,7 +335,9 @@ function tableRowClaim(line: string, lineIndex: number): Claim | null {
 /**
  * Citations an uncited row borrows from its table: the nearest cited line in
  * the few non-blank lines above the table (a heading, caption or lead-in),
- * else the header row. Never written into the Markdown.
+ * else the header row. The search stops at the table's own heading or a
+ * thematic break, so a table never borrows the previous section's pages.
+ * Never written into the Markdown.
  */
 function tableCitations(lines: string[], tableStart: number): Citation[] {
   let seen = 0;
@@ -342,9 +345,11 @@ function tableCitations(lines: string[], tableStart: number): Citation[] {
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
     if (trimmed.startsWith("|")) break;
+    if (THEMATIC_BREAK.test(trimmed)) break;
     seen++;
     const citations = parseCitations(lines[i]);
     if (citations.length > 0) return citations;
+    if (trimmed.startsWith("#")) break;
   }
   const next = lines[tableStart + 1];
   const hasHeader = next !== undefined && next.trim().startsWith("|") && TABLE_SEPARATOR.test(next);

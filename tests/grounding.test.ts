@@ -401,6 +401,42 @@ describe("groundDocument", () => {
     expect(result.markdown.split("\n").at(-1)).not.toMatch(/\[S\d/);
   });
 
+  it.each([
+    { name: "a rule and a heading", between: ["---", "", "## Summary of key equations"] },
+    { name: "a heading", between: ["## Summary of key equations"] },
+    { name: "a rule", between: ["***"] },
+  ])("never lets cheat-sheet rows borrow the previous section's citation across $name", async ({ between }) => {
+    const sources = [
+      {
+        index: 1,
+        text: [
+          "<<<page 2>>>\nALPHA_PAGE Gentamicin weather records.",
+          "<<<page 3>>>\nBETA_PAGE Macrolide harbor records.",
+          "<<<page 4>>>\nPREVIOUS_PAGE Single sideband spectrum.",
+        ].join("\n"),
+      },
+    ];
+    const markdown = [
+      "* **Spectrum:** Only a single sideband is transmitted [S1 p.4].",
+      "",
+      ...between,
+      "",
+      "| Parameter | Description |",
+      "| --- | --- |",
+      "| Gentamicin weather | Dissolves the nuclear membrane of human neurons |",
+      "| Macrolide harbor | Dissolves the nuclear membrane of human neurons |",
+    ].join("\n");
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
+    await groundDocument({ markdown, sources, verify, maxEvidenceChars: 2400, passageChars: 600 });
+
+    const items = verify.mock.calls.flatMap(([batch]) => batch).filter((item) => item.sentence.includes("|"));
+    expect(items).toHaveLength(2);
+    const [alpha, beta] = items;
+    expect(alpha.evidence).toContain("ALPHA_PAGE");
+    expect(beta.evidence).toContain("BETA_PAGE");
+    for (const item of items) expect(item.evidence).not.toContain("PREVIOUS_PAGE");
+  });
+
   it("counts two overflow claims as unchecked without tagging them", async () => {
     const markdown = [
       "Gentamicin cures every viral infection within three hours.",

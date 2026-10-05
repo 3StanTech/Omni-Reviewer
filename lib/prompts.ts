@@ -111,10 +111,13 @@ export const NO_META_TEXT =
   "Write only study content. Do not describe the document itself, how it was written, or its citations, and do not add a references or bibliography list.";
 
 export const CITE_EVERY_CLAIM =
-  "End every factual sentence, bullet, and table row with its citation in the exact form [S1 p.14], [S1 pp.14-15], or [S2] for a source without pages. Cite only pages whose text supports the claim. Never cite a page you did not read. If a helpful clarification is not in the sources you may include it, but give it no citation.";
+  "End every factual sentence, bullet, and table row with its citation in the exact form [S1 p.14], [S1 pp.14-15], or [S2] for a source without pages. Cite only pages whose text supports the claim. Never cite a page you did not read. Include only what the sources state; leave out explanations, consequences or background the sources do not give.";
 
 const NO_AUTOMATIC_HIGHLIGHTING =
   "Do not add HTML spans, semantic ink classes, or automatic highlighting. Keep the Markdown content plain so the learner can manage highlights and notes. Bracket citations such as [S1 p.14] are allowed and are not highlighting.";
+
+export const FAITHFUL_RESTATEMENT =
+  "Restate only what the cited page says. Do not add causes, consequences, comparisons, applications or 'why' explanations the page does not state, and keep the direction of every relation exactly as the page gives it (more or less, increases or decreases).";
 
 export const PHARMACY_GUIDANCE =
   "When the sources cover drugs or pharmacology, give each drug class a GFM table with the columns Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications. Fill every cell only from the sources, cite each row, and write \"Not in sources\" in any cell the sources do not cover.";
@@ -160,6 +163,7 @@ Requirements:
 - Merge overlapping content; resolve minor contradictions by preferring the most specific source and noting uncertainty briefly when needed.
 - Be thorough: definitions, key claims, examples, formulas, procedures, and relationships between ideas.
 - ${CITE_EVERY_CLAIM}
+- ${FAITHFUL_RESTATEMENT}
 - ${PHARMACY_GUIDANCE}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
@@ -202,7 +206,8 @@ Requirements:
 - Use clear Markdown with headings that mirror Locked In structure when helpful.
 - Do not number tables or figures from the slides (write 'Table: Sources of antimicrobials', not 'Table 2: Sources of antimicrobials'). Put no citations in headings; cite the bullets and table rows under them.
 - Prefer bullets and tight paragraphs for scannability; preserve critical definitions, numbers, and distinctions.
-- Keep Locked In's citations verbatim: end every factual sentence, bullet, and table row with the exact citation (for example [S1 p.14], [S1 pp.14-15], or [S2]) that the supporting Locked In claim carries. Never create a new citation. Do not copy [[unsourced]] markers; leave those claims uncited.
+- Keep Locked In's citations verbatim: end every factual sentence, bullet, and table row with the exact citation (for example [S1 p.14], [S1 pp.14-15], or [S2]) that the supporting Locked In claim carries. Never create a new citation. Leave out any Locked In claim that carries [[unsourced]] or has no citation.
+- ${FAITHFUL_RESTATEMENT}
 - ${PHARMACY_GUIDANCE}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
@@ -253,7 +258,8 @@ Requirements:
 - Never copy a Locked In sentence verbatim; compress each point to its key fact, number or distinction.
 - Keep a table only when it compresses the material, with at most 6 rows.
 - Do not number tables or figures from the slides (write 'Table: Sources of antimicrobials', not 'Table 2: Sources of antimicrobials'). Put no citations in headings; cite the bullets and table rows under them.
-- Keep Locked In's citations verbatim: end every factual bullet and table row with the exact citation (for example [S1 p.14], [S1 pp.14-15], or [S2]) that the supporting Locked In claim carries. Never create a new citation. Do not copy [[unsourced]] markers; leave those claims uncited.${strict}
+- Keep Locked In's citations verbatim: end every factual bullet and table row with the exact citation (for example [S1 p.14], [S1 pp.14-15], or [S2]) that the supporting Locked In claim carries. Never create a new citation. Leave out any Locked In claim that carries [[unsourced]] or has no citation.${strict}
+- ${FAITHFUL_RESTATEMENT}
 - ${PHARMACY_GUIDANCE}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}

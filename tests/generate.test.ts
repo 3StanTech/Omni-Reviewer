@@ -73,11 +73,13 @@ import { GenerationError, classifyGenerationError } from "@/lib/generation-error
 import { stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import {
   CITE_EVERY_CLAIM,
+  FAITHFUL_RESTATEMENT,
   NO_META_TEXT,
   PHARMACY_GUIDANCE,
   cardedPrompt,
   groundingVerifyPrompt,
   lockedInPrompt,
+  summaryHalfPrompt,
   summaryPrompt,
   testMePrompt,
 } from "@/lib/prompts";
@@ -1204,6 +1206,29 @@ describe("grounded generation", () => {
     process.env.AI_MODEL_JSON = "z-ai/glm-5.2:free";
     process.env.AI_MODEL_FALLBACKS =
       "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,openrouter/free";
+  });
+
+  it("keeps unstated inference out of every prompt", () => {
+    const half = { targetChars: 1000, bulletLimits: [] };
+    const lockedIn = lockedInPrompt([{ filename: "a.pdf", text: PHARM_SOURCE }]);
+    const summary = summaryPrompt("Body [S1 p.1]");
+    const parts = [1, 2].map((part) =>
+      summaryHalfPrompt("Body [S1 p.1]", { ...half, part: part as 1 | 2, parts: 2 }),
+    );
+    const strictPart = summaryHalfPrompt("Body [S1 p.1]", { ...half, part: 1, parts: 2, strict: true });
+    const all = [lockedIn, summary, ...parts, strictPart, testMePrompt("Body [S1 p.1]"), cardedPrompt("Body [S1 p.1]")];
+    for (const prompt of all) expect(prompt).not.toContain("helpful clarification");
+    for (const prompt of [lockedIn, summary, ...parts, strictPart]) {
+      expect(prompt).toContain(FAITHFUL_RESTATEMENT);
+    }
+    for (const prompt of [summary, ...parts, strictPart]) {
+      expect(prompt).toContain("Leave out any Locked In claim that carries [[unsourced]] or has no citation.");
+      expect(prompt).not.toContain("Do not copy [[unsourced]]");
+    }
+    expect(CITE_EVERY_CLAIM).toContain("Include only what the sources state");
+    expect(CITE_EVERY_CLAIM).not.toContain("you may include it");
+    expect(CITE_EVERY_CLAIM).not.toContain("\u2014");
+    expect(FAITHFUL_RESTATEMENT).not.toContain("\u2014");
   });
 
   it("requests citations and pharmacy tables and labels sources S1..Sn in the given order", () => {
