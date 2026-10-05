@@ -118,10 +118,16 @@ describe("citation helpers", () => {
       [1, new Set([1, 2, 28])],
       [2, new Set([1, 2, 3])],
     ]);
-    expect(repairPageAsSourceCitations("A [S28]. B [S2]. C [S3].", pages)).toBe("A [S1 p.28]. B [S2]. C [S2 p.3].");
-    expect(repairPageAsSourceCitations("Shared [S1 p.2] [S40].", pages)).toBe("Shared [S1 p.2] [S40].");
-    expect(repairPageAsSourceCitations("Both [S2].", new Map([[1, new Set([2])]]))).toBe("Both [S1 p.2].");
-    expect(repairPageAsSourceCitations("Ambiguous [S5].", new Map([[1, new Set([5])], [2, new Set([5])]]))).toBe("Ambiguous [S5].");
+    expect(repairPageAsSourceCitations("A [S28]. B [S2]. C [S3].", pages)).toEqual({
+      text: "A [S1 p.28]. B [S2]. C [S2 p.3].",
+      repaired: 2,
+    });
+    expect(repairPageAsSourceCitations("Shared [S1 p.2] [S40].", pages)).toEqual({ text: "Shared [S1 p.2] [S40].", repaired: 0 });
+    expect(repairPageAsSourceCitations("Both [S2].", new Map([[1, new Set([2])]]))).toEqual({ text: "Both [S1 p.2].", repaired: 1 });
+    expect(repairPageAsSourceCitations("Ambiguous [S5].", new Map([[1, new Set([5])], [2, new Set([5])]]))).toEqual({
+      text: "Ambiguous [S5].",
+      repaired: 0,
+    });
   });
 });
 

@@ -60,6 +60,8 @@ export type GroundingReport = {
   uncheckedKeys?: string[];
   /** Claims judged supported but tagged because a specific term is absent from the sources; included in unsourced. */
   termFlagged?: number;
+  /** Bare page-as-source citations rewritten before grounding. */
+  repairedCitations?: number;
 };
 
 // ---------------------------------------------------------------------------

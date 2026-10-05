@@ -26,7 +26,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 
-import { claimSentences, stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
+import { claimSentences, repairPageAsSourceCitations, stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import {
   groundDocument,
   groundingClaimTexts,
@@ -36,6 +36,7 @@ import {
   type VerifyItem,
 } from "@/lib/grounding";
 import { MAX_GROUNDING_EVIDENCE_CHARS, MAX_GROUNDING_VERIFY_ITEMS } from "@/lib/learning-limits";
+import { splitPages } from "@/lib/source-markers";
 import { balancedHalves, splitSections } from "@/lib/study-sections";
 import { absentTerms, buildSourceVocabulary } from "@/lib/term-guard";
 
@@ -305,8 +306,16 @@ async function main() {
     ? async () => { throw new Error("Lexical-only replay: verifier disabled."); }
     : await liveVerify();
   const captured: VerifyItem[] = [];
+  // Production repairs page-as-source citations before grounding; replay does too.
+  const pagesBySource = new Map(
+    fixture.sources.map((source) => [
+      source.index,
+      new Set(splitPages(source.text).map((page) => page.page).filter((page) => page > 0)),
+    ]),
+  );
+  const { text: repairedMarkdown, repaired } = repairPageAsSourceCitations(fixture.markdown, pagesBySource);
   const result = await groundDocument({
-    markdown: retestTags ? fixture.markdown.replace(/ ?\[\[unsourced\]\]/g, "") : fixture.markdown,
+    markdown: retestTags ? repairedMarkdown.replace(/ ?\[\[unsourced\]\]/g, "") : repairedMarkdown,
     sources: fixture.sources,
     ...(asCheckAgain ? {
       recheck: {
@@ -323,7 +332,11 @@ async function main() {
     },
   });
 
-  console.log(JSON.stringify({ ...result.report, unchecked: result.report.unchecked ?? 0 }, null, 2));
+  console.log(JSON.stringify({
+    ...result.report,
+    unchecked: result.report.unchecked ?? 0,
+    ...(repaired > 0 ? { repairedCitations: repaired } : {}),
+  }, null, 2));
   const tagged = claimSentences(result.markdown)
     .filter((claim) => claim.text.includes(UNSOURCED_TOKEN))
     .slice(0, 20)

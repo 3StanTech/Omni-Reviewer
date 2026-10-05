@@ -766,8 +766,9 @@ async function groundGeneratedDocument(args: {
       new Set(splitPages(source.text).map((page) => page.page).filter((page) => page > 0)),
     ]),
   );
+  const { text: repairedMarkdown, repaired } = repairPageAsSourceCitations(args.markdown, pagesBySource);
   const { markdown, report } = await groundDocument({
-    markdown: repairPageAsSourceCitations(args.markdown, pagesBySource),
+    markdown: repairedMarkdown,
     sources: args.sources,
     maxVerifyItems: MAX_GROUNDING_VERIFY_ITEMS,
     maxEvidenceChars: MAX_GROUNDING_EVIDENCE_CHARS,
@@ -781,6 +782,7 @@ async function groundGeneratedDocument(args: {
       return verifyGroundingItems(items, deadlineMs);
     },
   });
+  if (repaired > 0) report.repairedCitations = repaired;
   return { markdown, meta: { citationSources: args.citationSources, grounding: report } };
 }
 
