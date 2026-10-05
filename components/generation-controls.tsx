@@ -4,6 +4,12 @@ import { CircleNotch, Sparkle } from "@phosphor-icons/react";
 
 import { Button } from "@/components/ui/button";
 import type { GenerationState } from "@/lib/use-generation";
+import { cn } from "@/lib/utils";
+
+/** Free OpenRouter requests left today on the shared key. A full pack costs about 10 to 14. */
+export type FreeRequestQuota = { remaining: number; limit: number };
+/** Below this, a full pack may not fit in what is left today. */
+export const LOW_QUOTA_THRESHOLD = 14;
 
 export function GenerationControls({
   state,
@@ -12,6 +18,7 @@ export function GenerationControls({
   hasCompleteViews,
   sourcesAreMediaOnly,
   busyReason = null,
+  quota,
   onGenerate,
   onResume,
 }: {
@@ -22,6 +29,7 @@ export function GenerationControls({
   sourcesAreMediaOnly: boolean;
   /** Set while something must finish first; Generate and Resume wait for it. */
   busyReason?: string | null;
+  quota?: FreeRequestQuota | null;
   onGenerate: () => void;
   onResume: () => void;
 }) {
@@ -53,6 +61,16 @@ export function GenerationControls({
         </Button>
         <p className="text-xs text-muted-foreground">{help}</p>
       </div>
+      {quota ? (
+        <p
+          className={cn(
+            "text-xs",
+            quota.remaining < LOW_QUOTA_THRESHOLD ? "text-warning" : "text-muted-foreground",
+          )}
+        >
+          {quota.remaining} of {quota.limit} free requests left today
+        </p>
+      ) : null}
       {busyReason ? (
         <p role="status" className="text-xs text-muted-foreground">
           {busyReason}

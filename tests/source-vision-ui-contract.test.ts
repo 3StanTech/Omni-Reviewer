@@ -409,8 +409,12 @@ describe("slide-image reading copy", () => {
     expect(unreadableMessage([6])).toBe("Page 6 could not be read.");
     expect(unreadableMessage([9, 3])).toBe("Pages 3 and 9 could not be read.");
     expect(unreadableMessage([1, 2, 5])).toBe("Pages 1, 2 and 5 could not be read.");
+    // The note lives on the source row; the collapsed Sources toggle only carries a count hint.
+    const panel = readFileSync(path.join(root, "components/source-panel.tsx"), "utf8");
+    expect(panel).toContain("unreadableMessage(progress.unreadable ?? [])");
     const workspace = readFileSync(path.join(root, "components/reviewer-workspace.tsx"), "utf8");
-    expect(workspace).toContain("unreadableMessage(entry.unreadable ?? [])");
-    expect(workspace).toContain("{note.filename}: {note.message}");
+    expect(workspace).toContain('id="sources-unreadable-hint"');
+    expect(workspace).toContain('"1 page unreadable"');
+    expect(workspace).toContain("pages unreadable");
   });
 });

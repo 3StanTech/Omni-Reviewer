@@ -13,6 +13,7 @@ import {
   Trash,
   UploadSimple,
   VideoCamera,
+  WarningCircle,
 } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/empty-state";
@@ -20,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MAX_PASTE_TEXT_CHARS, MAX_PASTE_TITLE_CHARS } from "@/lib/paste";
 import { buildPhotoSetFile, isHeic } from "@/lib/photo-set";
+import { unreadableMessage } from "@/lib/use-source-vision";
 import type { SourceVision, VisionProgress } from "@/lib/use-source-vision";
 import type { IngestStatus, SourceKind } from "@/lib/types";
 import { buildClientBlobPathname, readApiError } from "@/lib/utils";
@@ -119,15 +121,15 @@ function KindIcon({ kind }: { kind: SourceKind }) {
   }
 }
 
-/** Slide-image reading for one row. A finished read adds nothing. */
-function VisionStatus({
+/** Slide-image reading for one row. A finished read adds nothing unless pages were refused. */
+export function VisionStatus({
   progress,
   onRetry,
 }: {
   progress: VisionProgress | undefined;
   onRetry: () => void;
 }) {
-  if (!progress || progress.state === "done") return null;
+  if (!progress) return null;
   if (progress.state === "reading") {
     return (
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -142,16 +144,27 @@ function VisionStatus({
       </p>
     );
   }
+  const unreadable = unreadableMessage(progress.unreadable ?? []);
+  const note = unreadable ? (
+    <p role="status" className="flex items-start gap-1.5 text-xs text-muted-foreground">
+      <WarningCircle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" weight="bold" />
+      <span>{unreadable}</span>
+    </p>
+  ) : null;
+  if (progress.state === "done") return note;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <p role="status" className="text-xs text-warning">
-        {progress.message}
-      </p>
-      <Button type="button" variant="ghost" size="xs" onClick={onRetry}>
-        <ArrowClockwise />
-        Try again
-      </Button>
-    </div>
+    <>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <p role="status" className="text-xs text-warning">
+          {progress.message}
+        </p>
+        <Button type="button" variant="ghost" size="xs" onClick={onRetry}>
+          <ArrowClockwise />
+          Try again
+        </Button>
+      </div>
+      {note}
+    </>
   );
 }
 

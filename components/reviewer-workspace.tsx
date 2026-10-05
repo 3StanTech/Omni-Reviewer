@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CaretDown, CaretUp, WarningCircle } from "@phosphor-icons/react";
+import { CaretDown, CaretUp } from "@phosphor-icons/react";
 
 import type { ViewsPayload } from "@/lib/serialize-view";
 import {
@@ -13,7 +13,7 @@ import {
 import { AskProvider } from "@/components/ask-provider";
 import { useSectionMastery } from "@/components/study-side-panel";
 import { ViewTabs } from "@/components/view-tabs";
-import { GenerationControls } from "@/components/generation-controls";
+import { GenerationControls, type FreeRequestQuota } from "@/components/generation-controls";
 import { GenerationStatus } from "@/components/generation-status";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -30,7 +30,7 @@ import type { ViewKind } from "@/lib/types";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
 import { useGeneration } from "@/lib/use-generation";
-import { unreadableMessage, useSourceVision } from "@/lib/use-source-vision";
+import { useSourceVision } from "@/lib/use-source-vision";
 import type { GenerationRequest } from "@/lib/generation-plan";
 import type { LockedInDraftController } from "@/components/locked-in-editor";
 import {
@@ -276,12 +276,12 @@ export function ReviewerWorkspace({
   const vision = useSourceVision({ reviewerId, sources });
   const readingSlides = vision.reading;
   const busyReason = readingSlides ? READING_SLIDES_NOTE : null;
-  // Pages the provider refused were settled with no readable content; say so.
-  const unreadableNotes = sources.flatMap((source) => {
+  // Pages the provider refused were settled with no readable content. Each
+  // source row says which; the toggle hints at the total while Sources is hidden.
+  const unreadablePages = sources.reduce((total, source) => {
     const entry = vision.progress[source.id];
-    const message = entry && entry.state !== "reading" ? unreadableMessage(entry.unreadable ?? []) : null;
-    return message ? [{ id: source.id, filename: source.filename, message }] : [];
-  });
+    return entry && entry.state !== "reading" ? total + (entry.unreadable?.length ?? 0) : total;
+  }, 0);
 
   const generation = useGeneration({
     userId,
@@ -289,6 +289,33 @@ export function ReviewerWorkspace({
     onViews: applyGenerated,
     onCardsRefresh: refreshCards,
   });
+
+  // Free requests left today on the shared key. Read on mount, after each
+  // finished step, and when a job ends; never on a timer.
+  const [quota, setQuota] = useState<FreeRequestQuota | null>(null);
+  const generationStatus = generation.state.status;
+  const quotaRefreshKey = `${generation.state.job?.completedKinds.length ?? 0}:${
+    generationStatus === "succeeded" || generationStatus === "failed" || generationStatus === "partial"
+      ? generationStatus
+      : ""
+  }`;
+  // The mount read may use the server's short cache; reads after progress
+  // skip it, since requests were just spent.
+  const initialQuotaKeyRef = useRef(quotaRefreshKey);
+  useEffect(() => {
+    let cancelled = false;
+    const url = quotaRefreshKey === initialQuotaKeyRef.current ? "/api/quota" : "/api/quota?fresh=1";
+    void fetch(url, { cache: "no-store" })
+      .then(async (response) => (response.ok ? (await response.json()) as { remaining: number | null; limit: number | null } : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setQuota(data.remaining !== null && data.limit !== null ? { remaining: data.remaining, limit: data.limit } : null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [quotaRefreshKey]);
 
   function protectedRevisionSnapshot() {
     return [
@@ -457,18 +484,6 @@ export function ReviewerWorkspace({
       expanded={sourcesExpanded}
       vision={vision}
     />
-    {unreadableNotes.length > 0 ? (
-      <ul className="mt-2 space-y-1">
-        {unreadableNotes.map((note) => (
-          <li key={note.id} role="status" className="flex items-start gap-1.5 text-xs text-muted-foreground">
-            <WarningCircle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" weight="bold" />
-            <span>
-              {note.filename}: {note.message}
-            </span>
-          </li>
-        ))}
-      </ul>
-    ) : null}
     </div>
   );
 
@@ -494,6 +509,7 @@ export function ReviewerWorkspace({
         hasCompleteViews={hasCompleteViews}
         sourcesAreMediaOnly={sourcesAreMediaOnly}
         busyReason={busyReason}
+        quota={quota}
         onGenerate={() => void generation.start({ intent: "generate_missing" })}
         onResume={() => void generation.resume()}
       />
@@ -535,6 +551,7 @@ export function ReviewerWorkspace({
         showRedo={hasViews}
         busy={generation.state.busy}
         busyReason={busyReason}
+        quota={quota}
         cards={cards}
         examDate={currentExamDate}
         testAttemptStats={testAttemptStats}
@@ -587,21 +604,29 @@ export function ReviewerWorkspace({
             </div>
           </div>
           {hasViews ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-expanded={sourcesExpanded}
-              aria-controls="sources-panel"
-              onClick={() => setSourcesUserOpen((open) => !open)}
-            >
-              Sources
-              {sourcesExpanded ? (
-                <CaretUp weight="bold" />
-              ) : (
-                <CaretDown weight="bold" />
-              )}
-            </Button>
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+              {!sourcesExpanded && unreadablePages > 0 ? (
+                <span id="sources-unreadable-hint" className="text-xs text-muted-foreground">
+                  {unreadablePages === 1 ? "1 page unreadable" : `${unreadablePages} pages unreadable`}
+                </span>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-expanded={sourcesExpanded}
+                aria-controls="sources-panel"
+                aria-describedby={!sourcesExpanded && unreadablePages > 0 ? "sources-unreadable-hint" : undefined}
+                onClick={() => setSourcesUserOpen((open) => !open)}
+              >
+                Sources
+                {sourcesExpanded ? (
+                  <CaretUp weight="bold" />
+                ) : (
+                  <CaretDown weight="bold" />
+                )}
+              </Button>
+            </div>
           ) : null}
         </div>
         <details className="print-hide mt-3 max-w-md rounded-lg border border-border/70 bg-muted/20 px-3 py-2">

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
+import { LOW_QUOTA_THRESHOLD, type FreeRequestQuota } from "@/components/generation-controls";
 import { LockedInView } from "@/components/locked-in-view";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { SourceViewerProvider, useSourceViewer, type PackSourceRef } from "@/components/source-modal";
@@ -39,6 +40,8 @@ type ViewTabsProps = {
   busy: boolean;
   /** Set while something must finish first; Redo shows it and waits. */
   busyReason?: string | null;
+  /** Free requests left today on the shared key; shown beside Redo. */
+  quota?: FreeRequestQuota | null;
   onRedo: (kind: ViewKind, forceOverwrite?: boolean) => void;
   reviewerId: string;
   reviewerName?: string;
@@ -172,6 +175,7 @@ export function ViewTabs({
   showRedo,
   busy,
   busyReason = null,
+  quota,
   onRedo,
   reviewerId,
   reviewerName = "",
@@ -266,26 +270,38 @@ export function ViewTabs({
 
       {showRedo ? (
         <div className="print-hide flex flex-col gap-2 sm:flex-row sm:items-start">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={redoDisabled}
-            aria-disabled={redoDisabled}
-            title={blockReason ?? copy.description}
-            onClick={requestRedo}
-          >
-            {busy ? (
-              <>
-                <CircleNotch className="animate-spin" weight="bold" />
-                Redoing
-              </>
-            ) : (
-              <>
-                <ArrowsClockwise weight="bold" />
-                Redo
-              </>
-            )}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={redoDisabled}
+              aria-disabled={redoDisabled}
+              title={blockReason ?? copy.description}
+              onClick={requestRedo}
+            >
+              {busy ? (
+                <>
+                  <CircleNotch className="animate-spin" weight="bold" />
+                  Redoing
+                </>
+              ) : (
+                <>
+                  <ArrowsClockwise weight="bold" />
+                  Redo
+                </>
+              )}
+            </Button>
+            {quota ? (
+              <span
+                className={cn(
+                  "text-xs",
+                  quota.remaining < LOW_QUOTA_THRESHOLD ? "text-warning" : "text-muted-foreground",
+                )}
+              >
+                {quota.remaining} left today
+              </span>
+            ) : null}
+          </div>
           <p className="max-w-xl text-xs leading-relaxed text-muted-foreground">
             {blockReason ?? copy.description}
           </p>
