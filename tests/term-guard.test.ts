@@ -23,12 +23,32 @@ describe("specificTerms", () => {
     expect(normalized(specificTerms("A carries ordinary information."))).not.toContain("a");
   });
 
-  it("extracts each compound part with at least four letters", () => {
+  it("extracts each compound part with at least four letters beside a specific part", () => {
     const terms = normalized(specificTerms("A calcium-dependent state-of-the-art pathway is dose-independent."));
-    expect(terms).toEqual(expect.arrayContaining(["calcium", "dependent", "state", "dose", "independent"]));
+    expect(terms).toEqual(expect.arrayContaining(["calcium", "dependent", "dose", "independent"]));
+    expect(terms).not.toContain("state");
     expect(terms).not.toContain("of");
     expect(terms).not.toContain("the");
     expect(terms).not.toContain("art");
+  });
+
+  it.each([
+    "Polypeptides stop the peptide-chain growth.",
+    "The peptide-chain grows at the ribosome.",
+    "A broad-spectrum agent covers both.",
+  ])("ignores a compound of ordinary lowercase words: %s", (sentence) => {
+    expect(specificTerms(sentence)).toEqual([]);
+  });
+
+  it.each([
+    "De-escalation narrows therapy once culture results return.",
+    "- De-escalation narrows therapy once culture results return.",
+    "a) De-escalation narrows therapy once culture results return.",
+    "b. De-escalation narrows therapy once culture results return.",
+    "Then: De-escalation narrows therapy once culture results return.",
+    "**Step 3:** De-escalation narrows therapy once culture results return.",
+  ])("ignores a capitalized hyphenated word at a sentence, list, colon or label start: %s", (sentence) => {
+    expect(specificTerms(sentence)).toEqual([]);
   });
 
   it.each([
@@ -160,6 +180,38 @@ describe("absentTerms", () => {
     expect(normalized(absentTerms("The *abcdefgh* effect occurs.", vocab))).toContain("abcdefgh");
     expect(absentTerms("The *abcdefghi* effect occurs.", vocab)).toEqual([]);
   });
+
+  it("accepts ordinary hyphenated words the source never writes", () => {
+    const vocabulary = buildSourceVocabulary(["Natural peptides form during sickness. Collect specimens before empiric therapy."]);
+    expect(absentTerms("Polypeptides stop the peptide-chain growth [S1 p.2].", vocabulary)).toEqual([]);
+    expect(absentTerms("- De-escalation follows once specimens are collected.", vocabulary)).toEqual([]);
+  });
+
+  describe("acronyms", () => {
+    const vocabulary = buildSourceVocabulary(["TMP-SMX treats Pneumocystis jiroveci pneumonia."]);
+
+    it("accepts an acronym the sentence spells out with a phrase the source has", () => {
+      expect(absentTerms("Pneumocystis jiroveci pneumonia (PJP) responds to TMP-SMX.", vocabulary)).toEqual([]);
+    });
+
+    it("flags an acronym the sentence does not spell out", () => {
+      expect(absentTerms("TMP-SMX is used for PCP.", vocabulary)).toEqual(["PCP"]);
+    });
+
+    it("flags an acronym whose spelled-out phrase the source lacks", () => {
+      expect(absentTerms("Pneumocystis carinii pneumonia (PCP) responds to TMP-SMX.", vocabulary)).toEqual(["PCP"]);
+    });
+  });
+
+  it.each(["gyrase", "Doxycycline", "Tobramycin", "Levofloxacin", "Colistin"])(
+    "still flags the verified true positive %s against a source lacking it",
+    (term) => {
+      const vocabulary = buildSourceVocabulary([
+        "Fluoroquinolones inhibit DNA topoisomerase. Aminoglycosides and polymyxins are nephrotoxic. Tetracyclines bind the 30S subunit.",
+      ]);
+      expect(absentTerms(`The class also includes ${term} in practice.`, vocabulary)).toEqual([term]);
+    },
+  );
 
   it("does not flag sentence-start capitals, citations or allowlisted words against an empty source", () => {
     const sentence = "Ordinary cells recover. The Gram Table Figure Note Example Type Class details [S1 p.6] [[unsourced]].";

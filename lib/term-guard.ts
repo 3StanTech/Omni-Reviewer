@@ -80,7 +80,7 @@ const ITALIC_SPAN = /(?<![*\p{L}\p{N}])\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?![*\p{
  */
 const LEAD_IN_LABEL = /^\s*(\*\*|__|\*|_)[^*_\n]+?(?::\1|\1:)/;
 
-const LIST_OR_QUOTE_PREFIX = /^\s*(?:>\s?)*\s*(?:(?:[-*+]|\d{1,3}[.)])\s+(?:\[[ xX]\]\s+)?)?/;
+const LIST_OR_QUOTE_PREFIX = /^\s*(?:>\s?)*\s*(?:(?:[-*+]|\d{1,3}[.)]|[a-zA-Z][.)])\s+(?:\[[ xX]\]\s+)?)?/;
 
 /** A word (inner hyphens, apostrophes and dots between letters or digits kept) or a boundary mark. */
 const TOKEN = /[\p{L}\p{N}]+(?:[-'’.][\p{L}\p{N}]+)*|[|:.!?\n]/gu;
@@ -172,11 +172,18 @@ function findTerms(sentence: string): FoundTerm[] {
       const parts = word.split("-").filter(Boolean);
       // The whole compound counts for a digit ("IL-6"), an abbreviation ("TMP-SMX") or a medical suffix ("calcium-dependent").
       const abbreviated = parts.some((part) => !/\p{N}/u.test(part) && isExactToken(part));
-      if ((!inLabel && /\p{N}/u.test(word)) || abbreviated || hasMedicalSuffix(word)) add(word);
+      const whole = (!inLabel && /\p{N}/u.test(word)) || abbreviated || hasMedicalSuffix(word);
+      if (whole) add(word);
+      const specificParts = parts.map(
+        (part, index) => !isRomanNumeral(part) && !isAllowlisted(part) && specificWord(part, atBoundary && index === 0, inLabel),
+      );
+      // Ordinary parts of 4+ letters count only beside a specific one ("calcium" of
+      // "calcium-dependent"), never in a compound of ordinary words ("peptide-chain").
+      const specificCompound = whole || specificParts.some(Boolean);
       parts.forEach((part, index) => {
         const letters = part.replace(/[^\p{L}]/gu, "");
         if (isRomanNumeral(part) || isAllowlisted(part)) return;
-        if (letters.length >= 4 || specificWord(part, atBoundary && index === 0, inLabel)) add(part, word);
+        if (specificParts[index] || (specificCompound && letters.length >= 4)) add(part, word);
       });
     } else if (specificWord(word, atBoundary, inLabel)) {
       add(word);
@@ -252,6 +259,23 @@ function exactTermPresent(term: string, vocab: SourceVocabulary): boolean {
 }
 
 /**
+ * An acronym of 3+ letters ("PJP") that the sentence spells out as adjacent
+ * words with its initials ("Pneumocystis jiroveci pneumonia"), where the
+ * source also has that phrase. Initials alone are not matched across the
+ * source, where some run of words shares almost any short acronym's initials.
+ */
+function expansionPresent(acronym: string, sentence: string, vocab: SourceVocabulary): boolean {
+  if (!/^\p{Lu}{3,}$/u.test(acronym)) return false;
+  const initials = acronym.toLowerCase();
+  const words = normalize(canonicalizeGreek(sentence.replace(citationPattern(), " "))).split(" ").filter(Boolean);
+  for (let start = 0; start + initials.length <= words.length; start++) {
+    const run = words.slice(start, start + initials.length);
+    if (run.every((word, index) => word[0] === initials[index] && word !== initials) && termPresent(run.join(" "), vocab)) return true;
+  }
+  return false;
+}
+
+/**
  * Specific terms of the sentence that the source text never mentions. A part
  * of a hyphenated word ("SC" of "DSB-SC") is not reported on its own when the
  * whole word is present.
@@ -259,7 +283,7 @@ function exactTermPresent(term: string, vocab: SourceVocabulary): boolean {
 export function absentTerms(sentence: string, vocab: SourceVocabulary): string[] {
   return findTerms(sentence)
     .filter(({ term, standalone, compounds }) => {
-      if (termPresent(term, vocab)) return false;
+      if (termPresent(term, vocab) || expansionPresent(term, sentence, vocab)) return false;
       return standalone || !compounds.some((compound) => termPresent(compound, vocab));
     })
     .map(({ term }) => term);
