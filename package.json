@@ -13,6 +13,7 @@
     "db:baseline": "tsx scripts/db-baseline.ts",
     "db:backfill-fsrs": "tsx --conditions=react-server scripts/backfill-fsrs.ts",
     "user:create": "tsx scripts/create-user.ts",
+    "user:reset-password": "tsx scripts/reset-password.ts",
     "test": "vitest run"
   },
   "dependencies": {
