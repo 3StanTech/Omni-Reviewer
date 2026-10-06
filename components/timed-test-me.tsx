@@ -289,9 +289,9 @@ export function TimedTestMe({
     function onKeyDown(event: KeyboardEvent) {
       if (!isStudyKeyTarget(event) || !started || !session || complete || !item) return;
       if (event.key === "Enter") {
-        // A focused button already activates on Enter; let that click run once.
-        // Choice radios are the exception: Enter there submits or advances.
-        if (event.target instanceof HTMLButtonElement && event.target.getAttribute("role") !== "radio") return;
+        // The sitting's own buttons already activate on Enter; let that click run once.
+        // Choice radios and buttons outside the sitting (tabs, header) do not block Enter.
+        if (event.target instanceof Element && event.target.closest("button:not([role='radio'])")?.closest("[data-test-me-sitting]")) return;
         if (submitted) {
           event.preventDefault();
           nextQuestion();
@@ -368,7 +368,7 @@ export function TimedTestMe({
   const expired = secondsRemaining <= 0;
 
   return (
-    <section className="space-y-4" aria-labelledby={questionId}>
+    <section className="space-y-4" aria-labelledby={questionId} data-test-me-sitting>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/80 bg-surface/50 px-4 py-3">
         <span className="text-sm text-muted-foreground">Question {index + 1} of {items.length}</span>
         <span className={cn("inline-flex items-center gap-1.5 text-sm font-semibold tabular-nums", secondsRemaining <= 30 && "text-destructive")} role="timer" aria-live="polite">

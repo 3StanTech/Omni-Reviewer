@@ -69,7 +69,9 @@ describe("Test Me keys and recap contract", () => {
       expect(src).toContain('import { isStudyKeyTarget } from "@/lib/study-keys";');
       expect(src).toContain("if (!isStudyKeyTarget(event)");
       expect(src).toContain('event.key === "Enter"');
-      expect(src).toContain('if (event.target instanceof HTMLButtonElement && event.target.getAttribute("role") !== "radio") return;');
+      expect(src).toContain(`event.target.closest("button:not([role='radio'])")?.closest("[data-test-me-sitting]")) return;`);
+      expect(src).toContain("data-test-me-sitting>");
+      expect(src).not.toContain("if (event.target instanceof HTMLButtonElement");
       expect(src).toContain('if (event.key !== "Enter" || event.nativeEvent.isComposing) return;');
       expect(src).toContain('item.choices ? "1-4 choose · Enter submit · F focus" : "Enter submit · F focus"');
       expect(src).toContain("/^[1-4]$/.test(event.key)");

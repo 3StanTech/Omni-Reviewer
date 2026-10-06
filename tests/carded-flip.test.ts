@@ -42,7 +42,9 @@ describe("Carded recall flip", () => {
     expect(effect).not.toContain('"Enter"');
     const controlGuard = effect.indexOf(`closest("button, a, [role='button'], summary")`);
     expect(controlGuard).toBeGreaterThan(-1);
-    expect(controlGuard).toBeLessThan(effect.indexOf("toggleFlip();"));
+    const spaceDefer = effect.indexOf('event.key === " " && control?.closest("[data-carded-root]")');
+    expect(spaceDefer).toBeGreaterThan(controlGuard);
+    expect(spaceDefer).toBeLessThan(effect.indexOf("toggleFlip();"));
   });
 
   it("shows a fine-pointer key hint, a phone thumb bar, and a focus-mode root", () => {

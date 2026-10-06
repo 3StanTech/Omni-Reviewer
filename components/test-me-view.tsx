@@ -231,9 +231,9 @@ function UntimedSitting({
     function onKeyDown(event: KeyboardEvent) {
       if (!isStudyKeyTarget(event) || !item || complete) return;
       if (event.key === "Enter") {
-        // A focused button already activates on Enter; let that click run once.
-        // Choice radios are the exception: Enter there submits or advances.
-        if (event.target instanceof HTMLButtonElement && event.target.getAttribute("role") !== "radio") return;
+        // The sitting's own buttons already activate on Enter; let that click run once.
+        // Choice radios and buttons outside the sitting (tabs, header) do not block Enter.
+        if (event.target instanceof Element && event.target.closest("button:not([role='radio'])")?.closest("[data-test-me-sitting]")) return;
         if (!submitted && selected.trim() && !saveBusy) {
           event.preventDefault();
           void submitAnswer();
@@ -475,7 +475,7 @@ function UntimedSitting({
   const correct = item ? progress.answersByItemId[item.id]?.correct : undefined;
 
   return (
-    <section className="space-y-4" aria-labelledby="test-me-sitting-title">
+    <section className="space-y-4" aria-labelledby="test-me-sitting-title" data-test-me-sitting>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="test-me-sitting-title" className="text-base font-semibold text-foreground">

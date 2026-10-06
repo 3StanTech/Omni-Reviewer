@@ -283,10 +283,14 @@ export function CardedView({
     function onKeyDown(event: KeyboardEvent) {
       if (!isStudyKeyTarget(event)) return;
       if (!card || editing || busy || dueStale) return;
-      // A focused control owns Space (Tab to Good, then Space grades); arrows still step.
-      const onControl = event.target instanceof Element
-        && Boolean(event.target.closest("button, a, [role='button'], summary"));
-      if (onControl && event.key === " ") return;
+      // A focused control inside Carded owns Space (Tab to Good, then Space grades); arrows still step.
+      // Controls outside (the tab trigger, header, Focus toggle) must not block the flip.
+      const control = event.target instanceof Element
+        ? event.target.closest("button, a, [role='button'], summary")
+        : null;
+      if (event.key === " " && control?.closest("[data-carded-root]")) return;
+      // A focused tab list already moves between modes on the arrows.
+      if (event.target instanceof Element && event.target.closest("[role='tab']") && event.key !== " ") return;
       if (event.key === " ") {
         event.preventDefault();
         toggleFlip();
