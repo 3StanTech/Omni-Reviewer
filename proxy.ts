@@ -101,7 +101,8 @@ export const config = {
      * Match all pathnames except Next static assets and common public files.
      * Includes /api/* so unauthenticated API calls get 401 JSON.
      * POST /api/blob/upload is exempted in the handler (Blob callback; see top comment).
+     * The manifest and generated icons are public so signed-out browsers can install the app.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest\\.webmanifest$|icon(?:/|$)|apple-icon(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

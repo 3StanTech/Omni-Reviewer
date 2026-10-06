@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import {
   IBM_Plex_Mono,
@@ -33,6 +33,22 @@ const lookBootstrap = `(function(){try{var v=localStorage.getItem("omni-look");v
 export const metadata: Metadata = {
   title: "Omni-Reviewer",
   description: "Personal study packs with four durable study modes.",
+  applicationName: "Omni-Reviewer",
+  appleWebApp: {
+    capable: true,
+    title: "Reviewer",
+    statusBarStyle: "default",
+  },
+};
+
+// Day look `--background: #ffffff`; Night look `--background:
+// oklch(0.14 0.025 250)` converted to hex (app/globals.css).
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#030a13" },
+  ],
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

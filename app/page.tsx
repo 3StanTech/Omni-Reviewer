@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import type { ReviewerListItem } from "@/components/reviewer-list";
 import { StudyHome } from "@/components/study-home";
 import type { TopicListItem } from "@/components/topic-tabs";
+import { greetingFor } from "@/lib/greeting";
 import {
   getTodayPlan,
   listActiveUntimedReviewerIds,
@@ -72,7 +73,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
 
   return (
     <AppShell
-      title="Study desk"
+      title={greetingFor(session?.user?.name, new Date()) ?? "Study desk"}
       subtitle="Pick a topic, open a study pack, attach sources, then generate when you are ready."
       topics={serializedTopics}
       selectedTopicId={selectedId}
