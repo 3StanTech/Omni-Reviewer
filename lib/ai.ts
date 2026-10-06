@@ -80,6 +80,7 @@ import { stripDocumentFraming } from "@/lib/study-framing";
 import { sanitizeStudyHeadings } from "@/lib/study-headings";
 import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
 import { capSummarySections } from "@/lib/summary-cap";
+import { withFallbackCitations } from "@/lib/test-me-citations";
 import type { CardedItem, TestMeItem } from "@/lib/types";
 
 export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision" | "ask";
@@ -1024,7 +1025,10 @@ export async function generateStudyPackStep(input: {
         step: "test_me",
         payload: {
           kind: "test_me",
-          content: withKnownCitations(result.items, "explanation", input.citationSources?.length ?? 0),
+          content: withFallbackCitations(
+            withKnownCitations(result.items, "explanation", input.citationSources?.length ?? 0),
+            lockedIn,
+          ),
         },
         modelUsed: result.modelUsed,
       };
