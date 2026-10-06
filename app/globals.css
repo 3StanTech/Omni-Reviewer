@@ -661,3 +661,34 @@ html[data-focus="on"] [data-carded-root] {
 html[data-focus="on"] main {
   padding-top: 2.5rem;
 }
+
+/* Phase 4: study packet print */
+@media print {
+  .print-document {
+    --muted-foreground: #555;
+  }
+
+  .print-document table {
+    break-inside: auto;
+  }
+
+  .print-document tr,
+  .print-document .katex-display,
+  .print-document figure,
+  .packet-card {
+    break-inside: avoid;
+  }
+
+  .print-document thead {
+    display: table-header-group;
+  }
+
+  .print-document h2,
+  .print-document h3 {
+    break-after: avoid;
+  }
+
+  .packet-section + .packet-section {
+    break-before: page;
+  }
+}

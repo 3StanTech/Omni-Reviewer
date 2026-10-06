@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import { buildMarkdownExport, exportFilename, type ExportAnnotation } from "@/lib/study-export";
 
 type StudyExportProps = {
+  topicId: string;
+  reviewerId: string;
   reviewerName: string;
   modeLabel: string;
   markdown: string;
@@ -24,7 +26,7 @@ function clearPrintFlags() {
   delete document.body.dataset.exportAnnotations;
 }
 
-export function StudyExport({ reviewerName, modeLabel, markdown, annotations }: StudyExportProps) {
+export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, markdown, annotations }: StudyExportProps) {
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -81,6 +83,11 @@ export function StudyExport({ reviewerName, modeLabel, markdown, annotations }: 
     body.dataset.exportAnnotations = includeNotes ? "on" : "off";
     window.addEventListener("afterprint", clearPrintFlags, { once: true });
     window.print();
+  }
+
+  function openPacket() {
+    close(true);
+    window.open(`/topics/${topicId}/reviewers/${reviewerId}/packet?print=1`, "_blank", "noopener");
   }
 
   function exportMarkdown() {
@@ -140,6 +147,9 @@ export function StudyExport({ reviewerName, modeLabel, markdown, annotations }: 
           </button>
           <button type="button" role="menuitem" className={ITEM_CLASS} onClick={exportMarkdown}>
             Markdown (.md)
+          </button>
+          <button type="button" role="menuitem" className={ITEM_CLASS} onClick={openPacket}>
+            Study packet (PDF)
           </button>
           <div role="separator" className="my-1 h-px bg-border" />
           <button

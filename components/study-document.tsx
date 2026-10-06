@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { ArrowCounterClockwise, Presentation, SealCheck } from "@phosphor-icons/react";
+import { useParams } from "next/navigation";
 
 import { AnnotationMenu } from "@/components/annotation-menu";
 import { StudyEditor } from "@/components/study-editor";
@@ -89,6 +90,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const pointerSelectingRef = useRef(false);
   const selectionSettleTimer = useRef<number | undefined>(undefined);
   const { reviewerName } = useContext(StudyPackContext);
+  const { topicId } = useParams<{ topicId: string }>();
   const { openSource, available: sourcesAvailable } = useSourceViewer();
   const modeLabel = kind === "summary" ? "Summary" : "Locked In";
   const claims = useMemo(() => countClaims(view.content), [view.content]);
@@ -612,7 +614,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
           </Button>
         ) : null}
         {!editing ? (
-          <StudyExport reviewerName={reviewerName || modeLabel} modeLabel={modeLabel} markdown={view.content} annotations={annotations} />
+          <StudyExport topicId={topicId} reviewerId={reviewerId} reviewerName={reviewerName || modeLabel} modeLabel={modeLabel} markdown={view.content} annotations={annotations} />
         ) : null}
         {editing ? <Button type="button" size="sm" onClick={() => void save(draft)} disabled={busy || !draft.trim() || draftIsStale}>{busy ? "Saving" : "Save changes"}</Button> : null}
         {kind === "locked_in" && view.isPinned ? <span className="text-xs text-warning">Pinned and protected from silent overwrite</span> : null}
