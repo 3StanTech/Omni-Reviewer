@@ -77,7 +77,7 @@ import {
 import { hasPageMarkers, splitPages } from "@/lib/source-markers";
 import { itemPages, sectionPages, uncoveredSections } from "@/lib/study-coverage";
 import { stripDocumentFraming } from "@/lib/study-framing";
-import { sanitizeStudyHeadings } from "@/lib/study-headings";
+import { demoteShiftedHeadings, sanitizeStudyHeadings } from "@/lib/study-headings";
 import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
 import { capSummarySections } from "@/lib/summary-cap";
 import { withFallbackCitations } from "@/lib/test-me-citations";
@@ -985,7 +985,8 @@ export async function generateStudyPackStep(input: {
         throw new GenerationError("token_limit", "Locked In was cut off. Try again.", false);
       }
       // Framing is removed in code: the free model writes "This guide..." despite the prompt rule.
-      const lockedIn = stripDocumentFraming(result.text);
+      // The free model sometimes writes the outline as "#" headings; sections must be "##".
+      const lockedIn = demoteShiftedHeadings(stripDocumentFraming(result.text));
       if (!lockedIn.trim()) throw emptyStudyContentError();
       const grounded = await groundGeneratedDocument({
         markdown: lockedIn,

@@ -1,6 +1,65 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeStudyHeadings } from "@/lib/study-headings";
+import { demoteShiftedHeadings, sanitizeStudyHeadings } from "@/lib/study-headings";
+
+describe("demoteShiftedHeadings", () => {
+  it("demotes every heading one level when several # headings exist (MIC LAB shape)", () => {
+    const markdown = [
+      "# Bacterial Structure [S1 p.1]",
+      "Body line. [S1 p.1]",
+      "## Cell wall",
+      "### Peptidoglycan",
+      "# Staining",
+      "## Gram stain",
+      "#### Deep",
+      "##### Deeper",
+      "###### Deepest",
+    ].join("\n");
+    expect(demoteShiftedHeadings(markdown)).toBe(
+      [
+        "## Bacterial Structure [S1 p.1]",
+        "Body line. [S1 p.1]",
+        "### Cell wall",
+        "#### Peptidoglycan",
+        "## Staining",
+        "### Gram stain",
+        "##### Deep",
+        "###### Deeper",
+        "###### Deepest",
+      ].join("\n"),
+    );
+  });
+
+  it.each([
+    ["one # title", "# Title\n\n## One\n\n### Sub\n"],
+    ["no # heading", "## One\n\n### Sub\n\nBody.\n"],
+    ["empty text", ""],
+  ])("leaves a document with %s byte for byte", (_name, markdown) => {
+    expect(demoteShiftedHeadings(markdown)).toBe(markdown);
+  });
+
+  it("ignores # lines inside fenced code, both when counting and when demoting", () => {
+    const code = "```bash\n# comment one\n# comment two\n## code heading\n```";
+    const single = `# Title\n${code}\n## One\n`;
+    expect(demoteShiftedHeadings(single)).toBe(single);
+    expect(demoteShiftedHeadings(`# A\n${code}\n# B\n`)).toBe(`## A\n${code}\n## B\n`);
+  });
+
+  it("leaves Setext headings, indented, quoted, no-space and seven-hash lines alone", () => {
+    const other = [
+      "Setext one",
+      "==========",
+      "Setext two",
+      "----------",
+      " # Indented",
+      "> # Quoted",
+      "#No space",
+      "####### Seven",
+    ].join("\n");
+    expect(demoteShiftedHeadings(other)).toBe(other);
+    expect(demoteShiftedHeadings(`# A\n${other}\n# B`)).toBe(`## A\n${other}\n## B`);
+  });
+});
 
 describe("sanitizeStudyHeadings", () => {
   it.each([

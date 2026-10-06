@@ -1364,6 +1364,29 @@ describe("grounded generation", () => {
     });
   });
 
+  it("demotes a Locked In whose outline headings came back one level too high", async () => {
+    generateText.mockResolvedValueOnce({
+      text: [
+        "# Antimicrobials",
+        "",
+        "Propranolol can cause bronchospasm in patients with asthma. [S1 p.2]",
+        "",
+        "## Mechanisms",
+        "",
+        "# Resistance",
+      ].join("\n"),
+      response: { modelId: "provider/model" },
+    });
+
+    const result = await generateStudyPackStep({
+      step: "locked_in",
+      extractedTexts: [{ sourceId: "src-1", filename: "pharm.pdf", text: PHARM_SOURCE }],
+    });
+
+    const headings = (result.payload.content as string).split("\n").filter((line) => line.startsWith("#"));
+    expect(headings).toEqual(["## Antimicrobials", "### Mechanisms", "## Resistance"]);
+  });
+
   it("verifies lexical misses in one call and tags unsupported sentences", async () => {
     generateText
       .mockResolvedValueOnce({
