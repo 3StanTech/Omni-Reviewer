@@ -4,6 +4,7 @@ import { MAX_GENERATED_JSON_CHARS } from "@/lib/learning-limits";
 import { studyItemTarget } from "@/lib/ai-budgets";
 import { hasPageMarkers, pageCount } from "@/lib/source-markers";
 import { splitSections } from "@/lib/study-sections";
+import { detectOutline } from "@/lib/transcript-outline";
 
 export const PROMPT_LIMITS = {
   maxSources: 50,
@@ -122,6 +123,9 @@ export const FAITHFUL_RESTATEMENT =
 export const PHARMACY_GUIDANCE =
   "Drug tables apply only if the sources actually describe specific drugs or drug classes. If they do, give each drug class a GFM table with the columns Drug(s) | Mechanism | Key uses | Adverse effects | Interactions or contraindications, fill every cell only from the sources, cite each row, and write \"Not in sources\" in any cell the sources do not cover. If the sources do not describe drugs, skip this entirely: write no drug table, no placeholder rows, and no note about topics the sources do not cover.";
 
+export const COMPARISON_TABLES =
+  "Comparison tables apply only if the sources themselves compare three or more items of one kind (organisms, tests, stains, specimens, diseases, drug classes) on two or more of the same attributes. If they do, add one GFM table for that comparison inside the section it belongs to, with the items as rows and only the attributes the sources give as columns; fill every cell only from the sources, cite each row, and write \"Not in sources\" in a cell the sources do not cover. Do not repeat a drug table already required above. Otherwise write no comparison table and no note about it.";
+
 const SECTION_COVERAGE =
   "Cover every ## section in proportion to its length; every section with factual content gets at least one item. Do not cluster items in the opening sections.";
 
@@ -148,11 +152,29 @@ function sourceBlocks(sources: PromptSource[]): { block: string; hasPages: boole
   return { block, hasPages: anyPages };
 }
 
+/** One paragraph and list per source that opens with a lecturer outline; empty when none does. */
+function outlineBlocks(sources: PromptSource[]): string {
+  const blocks: string[] = [];
+  sources.forEach((source, i) => {
+    const outline = detectOutline(source.text);
+    if (!outline) return;
+    const items = outline.sections.flatMap((section) => [
+      `- ${section.heading}`,
+      ...section.subs.map((sub) => `  - ${sub}`),
+    ]);
+    blocks.push(
+      `Source S${i + 1} has the lecturer's outline below. Use its top-level entries, in this order and wording (without numerals), as the ## headings for that source's material, and its sub-entries as ### headings. Put material that fits no entry under the nearest entry. This order overrides the chronological and topic rules above.\n\n${items.join("\n")}`,
+    );
+  });
+  return blocks.length > 0 ? `# Lecturer outlines\n\n${blocks.join("\n\n")}\n\n` : "";
+}
+
 export function lockedInPrompt(
   extractedTexts: PromptSource[],
 ): string {
   const validatedSources = validatePromptSources(extractedTexts);
   const { block: sourcesBlock, hasPages } = sourceBlocks(validatedSources);
+  const outlinesBlock = outlineBlocks(validatedSources);
 
   return assertPromptWithinLimit(`You are writing a comprehensive study document called "Locked In" from the extracted source materials below.
 
@@ -165,6 +187,7 @@ Requirements:
 - ${CITE_EVERY_CLAIM}
 - ${FAITHFUL_RESTATEMENT}
 - ${PHARMACY_GUIDANCE}
+- ${COMPARISON_TABLES}
 - ${NO_AUTOMATIC_HIGHLIGHTING}
 - ${NO_INVENT_CITATIONS}
 - ${NO_META_TEXT}
@@ -172,7 +195,7 @@ Requirements:
 - Do not describe this document or its purpose.
 - Output Markdown only. No preamble or closing remarks outside the document.
 
-# Source materials
+${outlinesBlock}# Source materials
 ${hasPages ? `\n${PAGE_MARKER_NOTE}\n` : ""}
 ${sourcesBlock}`
   );

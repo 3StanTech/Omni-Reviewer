@@ -73,6 +73,7 @@ import { GenerationError, classifyGenerationError } from "@/lib/generation-error
 import { stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import {
   CITE_EVERY_CLAIM,
+  COMPARISON_TABLES,
   FAITHFUL_RESTATEMENT,
   NO_META_TEXT,
   PHARMACY_GUIDANCE,
@@ -83,6 +84,7 @@ import {
   summaryPrompt,
   testMePrompt,
 } from "@/lib/prompts";
+import { sanitizeStudyHeadings } from "@/lib/study-headings";
 import { hasMeaningfulText, joinPages, withSlideImageText } from "@/lib/source-markers";
 import { citedPageCount, studyItemTarget } from "@/lib/ai-budgets";
 import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
@@ -1229,6 +1231,83 @@ describe("grounded generation", () => {
     expect(CITE_EVERY_CLAIM).not.toContain("you may include it");
     expect(CITE_EVERY_CLAIM).not.toContain("\u2014");
     expect(FAITHFUL_RESTATEMENT).not.toContain("\u2014");
+  });
+
+  it("adds the comparison-table rule to Locked In only, right after the pharmacy line", () => {
+    const lockedIn = lockedInPrompt([{ filename: "a.pdf", text: PHARM_SOURCE }]);
+    expect(lockedIn).toContain(`- ${PHARMACY_GUIDANCE}\n- ${COMPARISON_TABLES}\n`);
+    const half = { targetChars: 1000, bulletLimits: [] };
+    const others = [
+      summaryPrompt("Body [S1 p.1]"),
+      summaryHalfPrompt("Body [S1 p.1]", { ...half, part: 1, parts: 2 }),
+      testMePrompt("Body [S1 p.1]"),
+      cardedPrompt("Body [S1 p.1]"),
+    ];
+    for (const prompt of others) expect(prompt).not.toContain(COMPARISON_TABLES);
+    expect(COMPARISON_TABLES).not.toContain("—");
+  });
+
+  describe("lecturer outlines in Locked In", () => {
+    const outlineFixture = (name: string) =>
+      readFileSync(path.join(root, "tests/fixtures/outlines", `${name}.txt`), "utf8");
+    const SOURCES_HEAD = "- Output Markdown only. No preamble or closing remarks outside the document.\n\n# Source materials\n";
+
+    it("lists the outline entries as ## headings and sub-entries as ### headings, before the sources", () => {
+      const prompt = lockedInPrompt([{ filename: "pha.pdf", text: outlineFixture("pha-le2-05") }]);
+      const block = prompt.slice(prompt.indexOf("# Lecturer outlines"), prompt.indexOf("# Source materials"));
+      expect(block.startsWith("# Lecturer outlines\n\nSource S1 has the lecturer's outline below.")).toBe(true);
+      expect(block).toContain("as the ## headings for that source's material, and its sub-entries as ### headings.");
+      expect(block).toContain("This order overrides the chronological and topic rules above.");
+      expect(block).toContain(
+        "\n\n- Introduction\n- Definition of Terms\n  - Antibiotics\n  - Chemotherapy\n",
+      );
+      expect(block).toContain("  - Post-Antibiotic Effect (PAE)\n  - Mutant-Preventing Concentration (MPC)\n");
+      expect(block).toContain("- Factors to Consider in the Rational Choice of Antimicrobials\n");
+      expect(block.indexOf("- Weapons and Ammunition Against Infectious Organisms")).toBeGreaterThan(
+        block.indexOf("- Factors to Consider in the Rational Choice of Antimicrobials"),
+      );
+      expect(block).not.toMatch(/^- [IVX]+\./m);
+      expect(block).not.toContain("—");
+      expect(prompt.indexOf("# Lecturer outlines")).toBeGreaterThan(prompt.indexOf(PHARMACY_GUIDANCE));
+    });
+
+    it("keeps outline wording intact through heading cleanup", () => {
+      const markdown = "## Post-Antibiotic Effect (PAE)\n\n### Mutant-Preventing Concentration (MPC)\n";
+      expect(sanitizeStudyHeadings(markdown)).toBe(markdown);
+    });
+
+    it("names only the source that has an outline", () => {
+      const prompt = lockedInPrompt([
+        { filename: "notes.docx", text: "Plain notes without an outline." },
+        { filename: "pha.pdf", text: outlineFixture("pha-le2-05") },
+      ]);
+      expect(prompt).toContain("Source S2 has the lecturer's outline below.");
+      expect(prompt).not.toContain("Source S1 has the lecturer's outline");
+      expect(prompt.match(/Source S\d has the lecturer's outline/g)).toHaveLength(1);
+    });
+
+    it("gives each outlined source its own paragraph and list, in source order", () => {
+      const prompt = lockedInPrompt([
+        { filename: "pha.pdf", text: outlineFixture("pha-le2-05") },
+        { filename: "mic.pdf", text: outlineFixture("mic-lab-le3-01") },
+      ]);
+      const first = prompt.indexOf("Source S1 has the lecturer's outline below.");
+      const second = prompt.indexOf("Source S2 has the lecturer's outline below.");
+      expect(first).toBeGreaterThan(prompt.indexOf("# Lecturer outlines"));
+      expect(second).toBeGreaterThan(first);
+      expect(second).toBeLessThan(prompt.indexOf("# Source materials"));
+      expect(prompt.match(/# Lecturer outlines/g)).toHaveLength(1);
+    });
+
+    it("leaves the prompt unchanged when no source has an outline", () => {
+      const prompt = lockedInPrompt([
+        { filename: "a.pdf", text: PHARM_SOURCE },
+        { filename: "b.txt", text: outlineFixture("no-outline") },
+      ]);
+      expect(prompt).not.toContain("Lecturer outlines");
+      expect(prompt).not.toContain("lecturer's outline");
+      expect(prompt).toContain(`\n${SOURCES_HEAD}`);
+    });
   });
 
   it("requests citations and pharmacy tables and labels sources S1..Sn in the given order", () => {
