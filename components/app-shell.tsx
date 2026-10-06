@@ -42,14 +42,16 @@ export function AppShell({
     <TopicNavProvider>
       <div className="flex min-h-full flex-1">
         {topics && showTopicShelf ? (
-          <TopicShelf
-            topics={topics}
-            selectedId={selectedTopicId}
-            dueTodayCount={dueTodayCount}
-          />
+          <div data-focus-hide className="contents">
+            <TopicShelf
+              topics={topics}
+              selectedId={selectedTopicId}
+              dueTodayCount={dueTodayCount}
+            />
+          </div>
         ) : null}
         <div className="flex min-h-full min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-40 border-b border-border/70 bg-chrome/90 backdrop-blur-md">
+          <header data-focus-hide className="sticky top-0 z-40 border-b border-border/70 bg-chrome/90 backdrop-blur-md">
             <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
               <div className="flex min-w-0 items-center gap-3">
                 {topics && showTopicShelf ? <TopicShelfToggle /> : null}

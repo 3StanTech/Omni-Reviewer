@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -53,5 +56,62 @@ describe("timed Test Me session claims", () => {
       reviewerId: "r",
       viewRevision: 1,
     })).toThrow(/32 bytes/i);
+  });
+});
+
+describe("Test Me keys and recap contract", () => {
+  const root = path.resolve(__dirname, "..");
+  const untimed = readFileSync(path.join(root, "components/test-me-view.tsx"), "utf8");
+  const timed = readFileSync(path.join(root, "components/timed-test-me.tsx"), "utf8");
+
+  it("guards keys with isStudyKeyTarget and handles 1-4 and Enter in both runners", () => {
+    for (const src of [untimed, timed]) {
+      expect(src).toContain('import { isStudyKeyTarget } from "@/lib/study-keys";');
+      expect(src).toContain("if (!isStudyKeyTarget(event)");
+      expect(src).toContain('event.key === "Enter"');
+      expect(src).toContain('if (event.target instanceof HTMLButtonElement && event.target.getAttribute("role") !== "radio") return;');
+      expect(src).toContain('if (event.key !== "Enter" || event.nativeEvent.isComposing) return;');
+      expect(src).toContain('item.choices ? "1-4 choose · Enter submit · F focus" : "Enter submit · F focus"');
+      expect(src).toContain("/^[1-4]$/.test(event.key)");
+      expect(src).toContain("void submitAnswer();");
+      expect(src).toContain("nextQuestion();");
+    }
+  });
+
+  it("ends both runners with SittingRecap and its focus section", () => {
+    expect(untimed).toContain('<SittingRecap\n          title="Sitting complete"');
+    expect(timed).toContain('title="Timed run complete"');
+    for (const src of [untimed, timed]) {
+      expect(src).toContain("<SittingRecap");
+      expect(src).toContain("recapFocusSection(");
+      expect(src).toContain("formatSittingDuration(");
+      expect(src).toContain("Start again");
+    }
+    expect(untimed).toContain("Retry missed");
+    expect(untimed).toContain("Timed run");
+    expect(timed).toContain("Back to study list");
+  });
+
+  it("guards timed submits against a double Enter", () => {
+    expect(timed).toContain("const inFlight = useRef(false);");
+    expect(timed).toContain("inFlight.current) return;");
+    expect(timed).toContain("inFlight.current = false;");
+  });
+
+  it("omits the study time when the sitting was already complete on load", () => {
+    expect(untimed).toContain("useState<number | null>(() => (initialView.finished ? null : Date.now()))");
+    expect(untimed).toContain("...(openedAt !== null && finishedAt !== null");
+    expect(timed).toContain("...(finishedAt !== null");
+    expect(timed).not.toContain("setFinishedAt(nextIndex === -1 ? Date.now()");
+  });
+
+  it("shows fine-pointer key hints without em dashes", () => {
+    for (const src of [untimed, timed]) {
+      expect(src).toContain('className="study-key-hint text-xs text-muted-foreground"');
+      expect(src).toContain("1-4 choose · Enter submit · F focus");
+      expect(src).toContain("Enter next · F focus");
+      expect(src).toContain("@media (pointer: fine)");
+      expect(src).not.toContain("\u2014");
+    }
   });
 });

@@ -147,8 +147,10 @@ describe("tutor wiring", () => {
   });
 
   it("keeps Carded and Test Me keys out of the Ask panel", () => {
-    expect(read("components/carded-view.tsx")).toContain("[contenteditable='true'], [data-ask-panel]");
-    expect(read("components/test-me-view.tsx")).toContain("[contenteditable='true'], [data-ask-panel]");
+    expect(read("lib/study-keys.ts")).toContain("[contenteditable='true'], [data-ask-panel]");
+    for (const view of ["components/carded-view.tsx", "components/test-me-view.tsx", "components/timed-test-me.tsx"]) {
+      expect(read(view)).toContain("isStudyKeyTarget(event)");
+    }
   });
 
   it("offers Explain this on missed Test Me items, timed misses and flipped durable cards", () => {

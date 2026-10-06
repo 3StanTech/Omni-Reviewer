@@ -11,6 +11,7 @@ import {
   type SourceListItem,
 } from "@/components/source-panel";
 import { AskProvider } from "@/components/ask-provider";
+import { FocusModeProvider } from "@/components/focus-mode";
 import { useSectionMastery } from "@/components/study-side-panel";
 import { ViewTabs } from "@/components/view-tabs";
 import { GenerationControls, type FreeRequestQuota } from "@/components/generation-controls";
@@ -475,7 +476,7 @@ export function ReviewerWorkspace({
   }
 
   const sourcePanel = (
-    <div className="print-hide">
+    <div data-focus-hide className="print-hide">
     <SourcePanel
       userId={userId}
       reviewerId={reviewerId}
@@ -488,7 +489,7 @@ export function ReviewerWorkspace({
   );
 
   const generateSection = (
-    <section className="print-hide space-y-3" aria-labelledby="generate-heading">
+    <section data-focus-hide className="print-hide space-y-3" aria-labelledby="generate-heading">
       <div>
         <h2
           id="generate-heading"
@@ -525,6 +526,7 @@ export function ReviewerWorkspace({
     <section className="space-y-3" aria-labelledby="views-heading">
       <h2
         id="views-heading"
+        data-focus-hide
         className="print-hide text-sm font-semibold tracking-tight text-foreground"
       >
         Study modes
@@ -575,8 +577,9 @@ export function ReviewerWorkspace({
 
   return (
     <AskProvider reviewerId={reviewerId} sections={sectionMastery} initialSavedCount={savedAnswerCount} onCardCreated={refreshCards}>
+    <FocusModeProvider>
     <div data-draft-guarded className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
-      <div className="space-y-1">
+      <div data-focus-hide className="space-y-1">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 space-y-1">
             <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
@@ -693,6 +696,7 @@ export function ReviewerWorkspace({
         </DialogContent>
       </Dialog>
     </div>
+    </FocusModeProvider>
     </AskProvider>
   );
 }

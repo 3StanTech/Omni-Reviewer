@@ -14,6 +14,7 @@ import {
 import { ExplainThisButton } from "@/components/ask-provider";
 import { EmptyState } from "@/components/empty-state";
 import { useSourceViewer } from "@/components/source-modal";
+import { SittingRecap } from "@/components/sitting-recap";
 import { MarkdownBody } from "@/components/study-markdown";
 import { firstPageCitation } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,8 @@ import {
   reconcileDueSession,
 } from "@/lib/practice-session";
 import { selectTodayCards } from "@/lib/pacing";
+import { formatSittingDuration, nextReturnCopy, recapFocusSection } from "@/lib/sitting-recap";
+import { isStudyKeyTarget } from "@/lib/study-keys";
 import type { CardedItem } from "@/lib/types";
 import { cn, readApiError } from "@/lib/utils";
 
@@ -52,6 +55,8 @@ type CardedViewProps = {
   durableCards: DurableCardView[];
   examDate?: string | null;
   onCardsChange: (cards: DurableCardView[]) => void;
+  /** Locked In markdown; names the most-missed section in the recap. */
+  lockedIn?: string | null;
 };
 
 function parseCards(
@@ -108,6 +113,7 @@ export function CardedView({
   durableCards,
   examDate = null,
   onCardsChange,
+  lockedIn = null,
 }: CardedViewProps) {
   const generatedCards = useMemo(
     () => parseCards(contentJson, content),
@@ -127,6 +133,11 @@ export function CardedView({
     return captureDueQueue(todayCards(durableCards, examDate, now), now);
   });
   const [ratedIds, setRatedIds] = useState<string[]>([]);
+  const [tally, setTally] = useState({ again: 0, good: 0 });
+  const [againIds, setAgainIds] = useState<string[]>([]);
+  const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
+  // Set when a rating saves, so the recap duration stops at the last rating.
+  const [lastRatedAt, setLastRatedAt] = useState<number | null>(null);
   const [browseIndex, setBrowseIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [clozeRevealed, setClozeRevealed] = useState(false);
@@ -153,6 +164,10 @@ export function CardedView({
     const now = Date.now();
     setQueue(captureDueQueue(todayCards(durableCards, examDate, now), now));
     setRatedIds([]);
+    setTally({ again: 0, good: 0 });
+    setAgainIds([]);
+    setSessionStartedAt(now);
+    setLastRatedAt(null);
     setFlipped(false);
     setClozeRevealed(false);
     setScheduleHint(null);
@@ -243,6 +258,9 @@ export function CardedView({
       const data = (await response.json()) as { card: DurableCardView };
       onCardsChange(durableCards.map((item) => item.id === data.card.id ? data.card : item));
       setRatedIds((current) => current.includes(card.id) ? current : [...current, card.id]);
+      setTally((current) => ({ ...current, [rating]: current[rating] + 1 }));
+      if (rating === "again") setAgainIds((current) => current.includes(card.id) ? current : [...current, card.id]);
+      setLastRatedAt(Date.now());
       requestIds.current.delete(card.id);
       setScheduleHint(`Next review ${intervalCopy(data.card.intervalDays)}`);
       if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
@@ -263,23 +281,38 @@ export function CardedView({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target;
-      if (target instanceof HTMLElement && (target.closest("input, textarea, [contenteditable='true'], [data-ask-panel]"))) return;
-      if (browsing || editing || busy || dueStale || !isDurableCard(card)) return;
-      if (event.key === " " && !flipped) {
+      if (!isStudyKeyTarget(event)) return;
+      if (!card || editing || busy || dueStale) return;
+      // A focused control owns Space (Tab to Good, then Space grades); arrows still step.
+      const onControl = event.target instanceof Element
+        && Boolean(event.target.closest("button, a, [role='button'], summary"));
+      if (onControl && event.key === " ") return;
+      if (event.key === " ") {
         event.preventDefault();
-        setFlipped(true);
+        toggleFlip();
+        return;
       }
-      if (!flipped) return;
+      if (browsing) {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          go(-1);
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          go(1);
+        }
+        return;
+      }
+      // Grading needs a saved card; generated cards only flip.
+      if (!flipped || !isDurableCard(card)) return;
       if (event.key === "1") void review("again");
       if (event.key === "2") void review("good");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-    // review is recreated each render; the listener only needs the latest closure.
+    // review, go and toggleFlip are recreated each render; the listener only needs the latest closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browsing, busy, card, dueStale, editing, flipped]);
+  }, [browsing, browseCards.length, busy, card, dueStale, editing, flipped, scheduleHint]);
 
   async function saveEdit() {
     if (!isDurableCard(card)) return;
@@ -338,6 +371,18 @@ export function CardedView({
   const backCitation = card && flipped ? firstPageCitation([card.back]) : null;
   const backPage = backCitation?.pageStart ?? null;
 
+  const cardById = new Map(durableCards.map((item) => [item.id, item]));
+  const recapEndedAt = lastRatedAt ?? sessionStartedAt;
+  const recapFocus = dueSession.finished
+    ? recapFocusSection({
+        lockedIn,
+        missedTexts: againIds.flatMap((id) => cardById.get(id)?.back ?? []),
+      })?.title ?? null
+    : null;
+  const recapReturns = dueSession.finished
+    ? nextReturnCopy(ratedIds.flatMap((id) => cardById.get(id)?.dueAt ?? []), new Date(recapEndedAt))
+    : null;
+
   if (packEmpty) {
     return (
       <EmptyState
@@ -355,7 +400,7 @@ export function CardedView({
       : `${dueSession.completed} of ${dueSession.total}`;
 
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col gap-4">
+    <div data-carded-root className="mx-auto flex w-full max-w-lg flex-col gap-4">
       <div className="flex items-start justify-between gap-2 text-sm text-muted-foreground">
         <div className="space-y-1">
           <p className="text-foreground">Memorize. No choices.</p>
@@ -389,11 +434,17 @@ export function CardedView({
         />
       ) : null}
       {!browsing && dueSession.finished ? (
-        <EmptyState
-          icon={<Cards weight="duotone" className="size-5" />}
+        <SittingRecap
           title="Session complete"
-          description={`${dueSession.completed} of ${dueSession.total} cards rated. Newly due cards wait for the next session.`}
-        />
+          lines={[
+            `${dueSession.completed} cards · ${tally.good} Good · ${tally.again} Again`,
+            `Studied for ${formatSittingDuration(recapEndedAt - sessionStartedAt)}`,
+          ]}
+          focusSection={recapFocus}
+          returns={recapReturns}
+        >
+          <p className="text-sm text-muted-foreground">Newly due cards wait for the next session.</p>
+        </SittingRecap>
       ) : null}
 
       {card ? (
@@ -489,6 +540,12 @@ export function CardedView({
       </div>
       ) : null}
 
+      {card ? (
+        <p className="carded-key-hint text-xs text-muted-foreground">
+          {browsing ? "← → move · Space flip · F focus" : "Space flip · 1 Again · 2 Good · F focus"}
+        </p>
+      ) : null}
+
       {browsing ? (
       <div className="flex items-center justify-between gap-3">
         <Button
@@ -520,8 +577,15 @@ export function CardedView({
           <Button type="button" onClick={() => void saveEdit()} disabled={busy || !frontDraft.trim() || !backDraft.trim()}>{busy ? "Saving" : "Save card"}</Button>
         </div>
       ) : null}
+      {!browsing && isDurableCard(card) && !flipped && !dueStale ? (
+        <div className="carded-thumb-bar sm:hidden">
+          <Button type="button" variant="outline" className="w-full" onClick={toggleFlip} disabled={busy}>
+            Show answer
+          </Button>
+        </div>
+      ) : null}
       {!browsing && isDurableCard(card) && flipped && !dueStale ? (
-        <div className="flex flex-wrap gap-2 rounded-xl border border-border/80 bg-surface/50 p-4">
+        <div className="carded-thumb-bar flex flex-wrap gap-2 rounded-xl border border-border/80 bg-surface/50 p-4">
           {scheduleHint ? (
             <p className="w-full text-sm text-foreground">{scheduleHint}</p>
           ) : (
@@ -538,6 +602,27 @@ export function CardedView({
       ) : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       <style>{`
+        .carded-key-hint {
+          display: none;
+        }
+        @media (pointer: fine) {
+          .carded-key-hint {
+            display: block;
+          }
+        }
+        @media (max-width: 639px) {
+          .carded-thumb-bar {
+            position: sticky;
+            bottom: 0;
+            z-index: 10;
+            padding-bottom: max(1rem, env(safe-area-inset-bottom));
+            background: var(--background);
+          }
+          .carded-thumb-bar button {
+            min-height: 3rem;
+            flex: 1 1 0;
+          }
+        }
         .carded-scene {
           perspective: 1400px;
         }

@@ -629,3 +629,35 @@
     color: #555;
   }
 }
+
+/* Phase 3 block A: sitting recap */
+@media (prefers-reduced-motion: no-preference) {
+  .recap-check {
+    animation: recap-check-in 300ms ease-out both;
+  }
+}
+
+@keyframes recap-check-in {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Phase 3 block B: focus mode */
+html[data-focus="on"] [data-focus-hide] {
+  display: none !important;
+}
+
+html[data-focus="on"] [data-carded-root] {
+  max-width: 36rem;
+  margin-inline: auto;
+}
+
+html[data-focus="on"] main {
+  padding-top: 2.5rem;
+}

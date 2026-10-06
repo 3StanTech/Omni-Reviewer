@@ -12,10 +12,13 @@ import {
 } from "@phosphor-icons/react";
 
 import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
+import { SittingRecap } from "@/components/sitting-recap";
 import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
 import { Button } from "@/components/ui/button";
 import { parseCitations, stripCitations, type Citation } from "@/lib/citations";
+import { formatSittingDuration, recapFocusSection } from "@/lib/sitting-recap";
+import { isStudyKeyTarget } from "@/lib/study-keys";
 import { DEFAULT_TIMED_TEST_SECONDS } from "@/lib/test-timing-constants";
 import type { TestMeItem } from "@/lib/types";
 import { readApiError, cn } from "@/lib/utils";
@@ -44,8 +47,11 @@ type TimedTestMeProps = {
   reviewerId: string;
   viewRevision: number;
   onAttemptStatsChange: (stats: AttemptStats[]) => void;
+  lockedIn?: string | null;
   onExit: () => void;
 };
+
+const KEY_HINT_STYLE = `.study-key-hint{display:none}@media (pointer: fine){.study-key-hint{display:block}}`;
 
 type TimedSession = TimedSessionResponse & {
   expiresAtMs: number;
@@ -68,6 +74,7 @@ export function TimedTestMe({
   reviewerId,
   viewRevision,
   onAttemptStatsChange,
+  lockedIn = null,
   onExit,
 }: TimedTestMeProps) {
   const [session, setSession] = useState<TimedSession | null>(null);
@@ -81,6 +88,8 @@ export function TimedTestMe({
   const [message, setMessage] = useState<string | null>(null);
   const [complete, setComplete] = useState(false);
   const [loadingSession, setLoadingSession] = useState(true);
+  const [finishedAt, setFinishedAt] = useState<number | null>(null);
+  const inFlight = useRef(false);
   const itemsRef = useRef(items);
   useEffect(() => {
     itemsRef.current = items;
@@ -106,6 +115,8 @@ export function TimedTestMe({
     setSession({ ...data, expiresAtMs, answeredItemIds });
     setStarted(true);
     setComplete(nextIndex === -1);
+    // A run already complete on load has no known end time.
+    setFinishedAt(null);
     setIndex(nextIndex === -1 ? Math.max(0, currentItems.length - 1) : nextIndex);
     setSelected("");
     setSubmitted(false);
@@ -188,12 +199,13 @@ export function TimedTestMe({
   }
 
   async function submitAnswer() {
-    if (!session || !item || submitted || secondsRemaining <= 0) return;
+    if (!session || !item || submitted || secondsRemaining <= 0 || inFlight.current) return;
     const answer = selected.trim();
     if (!answer) {
       setMessage("Choose or enter an answer before continuing.");
       return;
     }
+    inFlight.current = true;
     setBusy(true);
     setMessage(null);
     try {
@@ -238,6 +250,7 @@ export function TimedTestMe({
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Could not save this answer.");
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -250,6 +263,7 @@ export function TimedTestMe({
     );
     if (nextIndex === -1) {
       setComplete(true);
+      setFinishedAt((current) => current ?? Date.now());
       return;
     }
     setIndex(nextIndex);
@@ -268,7 +282,37 @@ export function TimedTestMe({
     setResults({});
     setMessage(null);
     setLoadingSession(false);
+    setFinishedAt(null);
   }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isStudyKeyTarget(event) || !started || !session || complete || !item) return;
+      if (event.key === "Enter") {
+        // A focused button already activates on Enter; let that click run once.
+        // Choice radios are the exception: Enter there submits or advances.
+        if (event.target instanceof HTMLButtonElement && event.target.getAttribute("role") !== "radio") return;
+        if (submitted) {
+          event.preventDefault();
+          nextQuestion();
+        } else if (!busy && secondsRemaining > 0 && selected.trim()) {
+          event.preventDefault();
+          void submitAnswer();
+        }
+        return;
+      }
+      if (submitted || busy || secondsRemaining <= 0) return;
+      const choice = item.choices?.[Number(event.key) - 1];
+      if (/^[1-4]$/.test(event.key) && choice) {
+        setSelected(choice);
+        setMessage(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // submitAnswer and nextQuestion are recreated each render; the listener only needs the latest closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, complete, item, secondsRemaining, selected, session, started, submitted]);
 
   if (!started || !session) {
     return (
@@ -295,20 +339,27 @@ export function TimedTestMe({
   }
 
   if (complete || !item) {
+    const missedTexts = items
+      .filter((candidate) => results[candidate.id] === false)
+      .map((missed) => [missed.explanation, missed.answer].filter(Boolean).join("\n"));
+    const startedAtMs = Date.parse(session.startedAt);
     return (
-      <section className="space-y-4 rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6" aria-labelledby="timed-complete-title">
-        <div className="flex items-start gap-3">
-          <CheckCircle weight="duotone" className="mt-0.5 size-6 shrink-0 text-success" />
-          <div>
-            <h2 id="timed-complete-title" className="text-base font-semibold text-foreground">Timed run complete</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{score} of {items.length} correct. Your attempts and misses are saved.</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <SittingRecap
+        title="Timed run complete"
+        lines={[
+          `${score} of ${items.length} correct`,
+          ...(finishedAt !== null
+            ? [`Studied for ${formatSittingDuration(Math.max(0, finishedAt - startedAtMs))}`]
+            : []),
+        ]}
+        focusSection={recapFocusSection({ lockedIn, missedTexts })?.title ?? null}
+      >
+        <p className="text-sm text-muted-foreground">Your attempts and misses are saved.</p>
+        <div className="mt-4 flex flex-wrap gap-2">
           <Button type="button" onClick={reset}><ArrowCounterClockwise weight="bold" />Start again</Button>
           <Button type="button" variant="ghost" onClick={onExit}>Back to study list</Button>
         </div>
-      </section>
+      </SittingRecap>
     );
   }
 
@@ -361,6 +412,11 @@ export function TimedTestMe({
               value={selected}
               disabled={submitted || expired || busy}
               onChange={(event) => { setSelected(event.target.value); setMessage(null); }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                if (selected.trim()) void submitAnswer();
+              }}
               className="min-h-11 rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
             />
           </label>
@@ -381,6 +437,10 @@ export function TimedTestMe({
           </div>
         ) : null}
       </article>
+      <style>{KEY_HINT_STYLE}</style>
+      <p className="study-key-hint text-xs text-muted-foreground">
+        {submitted ? "Enter next · F focus" : item.choices ? "1-4 choose · Enter submit · F focus" : "Enter submit · F focus"}
+      </p>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button type="button" variant="ghost" onClick={onExit} disabled={busy}>Exit run</Button>

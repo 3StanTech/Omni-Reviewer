@@ -12,10 +12,13 @@ import {
 
 import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
 import { EmptyState } from "@/components/empty-state";
+import { SittingRecap } from "@/components/sitting-recap";
 import { MarkdownBody } from "@/components/study-markdown";
 import { OpenCitedSlide, TimedTestMe } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
 import { parseTestMeItems } from "@/lib/learning";
+import { formatSittingDuration, recapFocusSection } from "@/lib/sitting-recap";
+import { isStudyKeyTarget } from "@/lib/study-keys";
 import {
   canRetryMissed,
   sittingItemsForIds,
@@ -45,7 +48,10 @@ type TestMeViewProps = {
   viewRevision: number;
   attemptStats: AttemptStats[];
   onAttemptStatsChange: (stats: AttemptStats[]) => void;
+  lockedIn?: string | null;
 };
+
+const KEY_HINT_STYLE = `.study-key-hint{display:none}@media (pointer: fine){.study-key-hint{display:block}}`;
 
 function controlId(itemId: string, suffix: string): string {
   const trimmed = itemId.trim();
@@ -71,6 +77,7 @@ export function TestMeView({
   viewRevision,
   attemptStats,
   onAttemptStatsChange,
+  lockedIn = null,
 }: TestMeViewProps) {
   const items = useMemo(
     () => parseTestMeItems(contentJson, content ?? ""),
@@ -104,6 +111,7 @@ export function TestMeView({
         reviewerId={reviewerId}
         viewRevision={viewRevision}
         onAttemptStatsChange={onAttemptStatsChange}
+        lockedIn={lockedIn}
         onExit={() => setTimed(false)}
       />
     );
@@ -123,6 +131,7 @@ export function TestMeView({
         viewRevision={viewRevision}
         attemptStats={attemptStats}
         onAttemptStatsChange={onAttemptStatsChange}
+        lockedIn={lockedIn}
         onStartTimed={() => setTimed(true)}
       />
     </Suspense>
@@ -159,6 +168,7 @@ function UntimedSitting({
   viewRevision,
   attemptStats,
   onAttemptStatsChange,
+  lockedIn,
   onStartTimed,
 }: {
   load: Promise<UntimedSittingLoadResult>;
@@ -167,6 +177,7 @@ function UntimedSitting({
   viewRevision: number;
   attemptStats: AttemptStats[];
   onAttemptStatsChange: (stats: AttemptStats[]) => void;
+  lockedIn: string | null;
   onStartTimed: () => void;
 }) {
   const loaded = use(load);
@@ -184,6 +195,9 @@ function UntimedSitting({
       : null,
   );
   const [finished, setFinished] = useState(initialView.finished);
+  // Null when the sitting was already complete on load: its study time is unknown.
+  const [openedAt, setOpenedAt] = useState<number | null>(() => (initialView.finished ? null : Date.now()));
+  const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const inFlight = useRef(false);
 
   const sittingItems = useMemo(
@@ -215,24 +229,45 @@ function UntimedSitting({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.metaKey || event.ctrlKey || event.altKey || submitted || !item) return;
-      const target = event.target;
-      if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable='true'], [data-ask-panel]")) return;
+      if (!isStudyKeyTarget(event) || !item || complete) return;
+      if (event.key === "Enter") {
+        // A focused button already activates on Enter; let that click run once.
+        // Choice radios are the exception: Enter there submits or advances.
+        if (event.target instanceof HTMLButtonElement && event.target.getAttribute("role") !== "radio") return;
+        if (!submitted && selected.trim() && !saveBusy) {
+          event.preventDefault();
+          void submitAnswer();
+        } else if (submitted) {
+          event.preventDefault();
+          nextQuestion();
+        }
+        return;
+      }
+      if (submitted) return;
       const choice = item.choices?.[Number(event.key) - 1];
-      if (/^[1-4]$/.test(event.key) && choice) {
+      if (/^[1-4]$/.test(event.key) && choice && !saveBusy) {
         setSelected(choice);
         setSaveMessage(null);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [item, submitted]);
+    // submitAnswer and nextQuestion are recreated each render; the listener only needs the latest closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [complete, item, saveBusy, selected, session, submitted, viewIndex]);
+
+  function markFinished() {
+    setFinishedAt((current) => current ?? Date.now());
+  }
 
   function applySession(payload: UntimedSittingPayload) {
     const next = sittingView(payload, items);
+    const now = Date.now();
     setSession(payload);
     setViewIndex(next.viewIndex);
     setFinished(next.finished);
+    setOpenedAt(next.finished ? null : now);
+    setFinishedAt(null);
     setSelected(next.selected);
     setSaveMessage(null);
   }
@@ -299,6 +334,8 @@ function UntimedSitting({
         selectedAnswer: answer,
         correct: isCorrect(answer, item.answer),
       };
+      const answeredIds = new Set([...session.answers.map((entry) => entry.itemId), accepted.itemId]);
+      if (data.completed === true || session.itemIds.every((itemId) => answeredIds.has(itemId))) markFinished();
       setSession((current) => {
         if (!current) return current;
         const answers = current.answers.some((entry) => entry.itemId === accepted.itemId)
@@ -335,6 +372,7 @@ function UntimedSitting({
     const next = sittingProgress(session.itemIds, session.answers);
     if (next.complete || viewIndex >= sittingItems.length - 1) {
       setFinished(true);
+      markFinished();
       return;
     }
     setViewIndex(next.nextIndex);
@@ -365,20 +403,24 @@ function UntimedSitting({
   }
 
   if (complete || !item) {
+    const focusSection = recapFocusSection({
+      lockedIn,
+      missedTexts: missedItems.map((missed) => [missed.explanation, missed.answer].filter(Boolean).join("\n")),
+    })?.title ?? null;
     return (
-      <section className="space-y-4" aria-labelledby="test-me-complete-title">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <h2 id="test-me-complete-title" className="text-base font-semibold text-foreground">
-            Sitting complete
-          </h2>
-          {timedRunButton}
-        </div>
-
-        <div className="rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6">
-          <p className="text-sm font-medium text-foreground">
-            {score} of {sittingItems.length} correct.
-          </p>
-          <p className="mt-1 text-sm text-muted-foreground">
+      <div className="space-y-4">
+        <div className="flex justify-end">{timedRunButton}</div>
+        <SittingRecap
+          title="Sitting complete"
+          lines={[
+            `${score} of ${sittingItems.length} correct`,
+            ...(openedAt !== null && finishedAt !== null
+              ? [`Studied for ${formatSittingDuration(finishedAt - openedAt)}`]
+              : []),
+          ]}
+          focusSection={focusSection}
+        >
+          <p className="text-sm text-muted-foreground">
             Attempts and misses are saved.
             {savedMisses > 0
               ? ` ${savedMisses} saved miss${savedMisses === 1 ? "" : "es"} to revisit.`
@@ -407,25 +449,25 @@ function UntimedSitting({
               </ol>
             )}
           </div>
-        </div>
 
-        <div className="flex flex-wrap gap-2">
-          {retryAvailable ? (
-            <Button type="button" variant="outline" onClick={() => void mutateSession("retry_missed")} disabled={saveBusy}>
-              Retry missed
+          <div className="mt-4 flex flex-wrap gap-2">
+            {retryAvailable ? (
+              <Button type="button" variant="outline" onClick={() => void mutateSession("retry_missed")} disabled={saveBusy}>
+                Retry missed
+              </Button>
+            ) : null}
+            <Button type="button" onClick={() => void mutateSession("start_again")} disabled={saveBusy}>
+              <ArrowCounterClockwise weight="bold" />
+              Start again
             </Button>
+          </div>
+          {saveMessage ? (
+            <p role="alert" className="mt-2 text-sm text-destructive">
+              {saveMessage}
+            </p>
           ) : null}
-          <Button type="button" onClick={() => void mutateSession("start_again")} disabled={saveBusy}>
-            <ArrowCounterClockwise weight="bold" />
-            Start again
-          </Button>
-        </div>
-        {saveMessage ? (
-          <p role="alert" className="text-sm text-destructive">
-            {saveMessage}
-          </p>
-        ) : null}
-      </section>
+        </SittingRecap>
+      </div>
     );
   }
 
@@ -457,7 +499,14 @@ function UntimedSitting({
           setSelected(value);
           setSaveMessage(null);
         }}
+        onEnter={() => {
+          if (selected.trim()) void submitAnswer();
+        }}
       />
+      <style>{KEY_HINT_STYLE}</style>
+      <p className="study-key-hint text-xs text-muted-foreground">
+        {submitted ? "Enter next · F focus" : item.choices ? "1-4 choose · Enter submit · F focus" : "Enter submit · F focus"}
+      </p>
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         {submitted ? (
@@ -492,6 +541,7 @@ function SittingItem({
   saveBusy,
   correct,
   onSelect,
+  onEnter,
 }: {
   item: TestMeItem;
   questionId: string;
@@ -500,6 +550,7 @@ function SittingItem({
   saveBusy: boolean;
   correct: boolean | undefined;
   onSelect: (value: string) => void;
+  onEnter: () => void;
 }) {
   const locked = submitted || saveBusy;
 
@@ -556,6 +607,11 @@ function SittingItem({
             value={selected}
             disabled={locked}
             onChange={(event) => onSelect(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              onEnter();
+            }}
             className="min-h-11 rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
             aria-labelledby={`${questionId} ${controlId(item.id, "answer-label")}`}
           />

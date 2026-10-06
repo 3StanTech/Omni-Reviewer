@@ -27,6 +27,35 @@ describe("Carded recall flip", () => {
     expect(src).toContain("toggleFlip()");
   });
 
+  it("routes window keys through isStudyKeyTarget: Space toggles, arrows browse, 1/2 grade, Enter never grades", () => {
+    expect(src).toContain("if (!isStudyKeyTarget(event)) return;");
+    const effect = src.slice(src.indexOf("function onKeyDown(event: KeyboardEvent)"), src.indexOf('window.addEventListener("keydown", onKeyDown)'));
+    expect(effect).toContain('event.key === " "');
+    expect(effect).toContain("toggleFlip();");
+    expect(effect).not.toContain("setFlipped(true)");
+    expect(effect).toContain('event.key === "ArrowLeft"');
+    expect(effect).toContain("go(-1)");
+    expect(effect).toContain('event.key === "ArrowRight"');
+    expect(effect).toContain("go(1)");
+    expect(effect).toContain('event.key === "1"');
+    expect(effect).toContain('event.key === "2"');
+    expect(effect).not.toContain('"Enter"');
+    const controlGuard = effect.indexOf(`closest("button, a, [role='button'], summary")`);
+    expect(controlGuard).toBeGreaterThan(-1);
+    expect(controlGuard).toBeLessThan(effect.indexOf("toggleFlip();"));
+  });
+
+  it("shows a fine-pointer key hint, a phone thumb bar, and a focus-mode root", () => {
+    expect(src).toContain("data-carded-root");
+    expect(src).toContain("carded-key-hint");
+    expect(src).toContain("@media (pointer: fine)");
+    expect(src).toContain("Space flip · 1 Again · 2 Good · F focus");
+    expect(src).toContain("← → move · Space flip · F focus");
+    expect(src).toContain("carded-thumb-bar");
+    expect(src).toContain("Show answer");
+    expect(src).toContain("env(safe-area-inset-bottom)");
+  });
+
   it("keeps Again and Good out of the tree until the card is flipped", () => {
     expect(src).toContain("isDurableCard(card) && flipped");
     const gradesBlock = src.slice(src.indexOf("isDurableCard(card) && flipped"));

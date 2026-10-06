@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
+import { FocusToggle, useFocusMode } from "@/components/focus-mode";
 import { LOW_QUOTA_THRESHOLD, type FreeRequestQuota } from "@/components/generation-controls";
 import { LockedInView } from "@/components/locked-in-view";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
@@ -197,6 +198,13 @@ export function ViewTabs({
   const [uncontrolledTab, setUncontrolledTab] = useState<ViewKind>("locked_in");
   const tab = value ?? uncontrolledTab;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const { setAllowed: setFocusAllowed } = useFocusMode();
+
+  // Focus mode only applies to the one-item-at-a-time modes.
+  useEffect(() => {
+    setFocusAllowed(tab === "carded" || tab === "test_me");
+  }, [setFocusAllowed, tab]);
+  useEffect(() => () => setFocusAllowed(false), [setFocusAllowed]);
 
   function selectTab(next: ViewKind) {
     if (next !== tab && onNavigateRequest && !onNavigateRequest(next)) return;
@@ -240,7 +248,7 @@ export function ViewTabs({
       onValueChange={(next) => selectTab(next as ViewKind)}
       className="w-full gap-4"
     >
-      <div className="print-hide sticky top-14 z-20 -mx-1 overflow-x-auto bg-background/95 px-1 py-2 backdrop-blur">
+      <div data-focus-hide className="print-hide sticky top-14 z-20 -mx-1 overflow-x-auto bg-background/95 px-1 py-2 backdrop-blur">
         <TabsList
           variant="line"
           className={cn(
@@ -265,11 +273,11 @@ export function ViewTabs({
         </TabsList>
       </div>
       {compact ? null : (
-        <p className="print-hide text-xs text-muted-foreground">{copy.jobLine}</p>
+        <p data-focus-hide className="print-hide text-xs text-muted-foreground">{copy.jobLine}</p>
       )}
 
       {showRedo ? (
-        <div className="print-hide flex flex-col gap-2 sm:flex-row sm:items-start">
+        <div data-focus-hide className="print-hide flex flex-col gap-2 sm:flex-row sm:items-start">
           <div className="flex shrink-0 items-center gap-2">
             <Button
               type="button"
@@ -309,10 +317,14 @@ export function ViewTabs({
       ) : null}
 
       {views.staleKinds?.includes(tab) && modeHasContent(tab, views) ? (
-        <p role="status" className="print-hide max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+        <p role="status" data-focus-hide className="print-hide max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           This mode is from an older generation. Redo it when you are ready.
         </p>
       ) : null}
+
+      <div className="print-hide flex justify-end empty:hidden">
+        <FocusToggle />
+      </div>
 
       <TabsContent value={tab} className="outline-none">
         {viewsLoading && !modeHasContent(tab, views) ? (
@@ -363,6 +375,7 @@ export function ViewTabs({
             viewRevision={views.test_me?.revision ?? 1}
             attemptStats={testAttemptStats}
             onAttemptStatsChange={onTestAttemptStatsChange}
+            lockedIn={views.locked_in?.content ?? null}
           />
         ) : (
           <CardedView
@@ -372,6 +385,7 @@ export function ViewTabs({
             durableCards={cards}
             examDate={examDate}
             onCardsChange={onCardsChange}
+            lockedIn={views.locked_in?.content ?? null}
           />
         )}
       </TabsContent>

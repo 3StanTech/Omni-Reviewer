@@ -17,6 +17,11 @@ describe("Carded finite session UI", () => {
     expect(src).toContain("Browse all");
     expect(src).toContain("No cards due");
     expect(src).toContain("Session complete");
+    expect(src).toContain("<SittingRecap");
+    expect(src).toContain("formatSittingDuration(recapEndedAt - sessionStartedAt)");
+    expect(src).toContain("recapFocusSection({");
+    expect(src).toContain("nextReturnCopy(");
+    expect(src).toContain("Newly due cards wait for the next session.");
     expect(src).toContain("${dueSession.completed} of ${dueSession.total}");
   });
 

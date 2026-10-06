@@ -110,7 +110,7 @@ export function sectionsFromLockedIn(markdown: string): MasterySection[] {
 }
 
 /** Item pages match section pages on the same page, or when either side cites its whole source. */
-function pagesOverlap(item: Set<string>, section: Set<string>): boolean {
+export function pagesOverlap(item: Set<string>, section: Set<string>): boolean {
   for (const itemKey of item) {
     if (section.has(itemKey)) return true;
     const [source, page] = itemKey.split(":");
