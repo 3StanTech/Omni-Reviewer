@@ -347,6 +347,10 @@
     overflow-x: auto;
   }
 
+  .prose-study math {
+    font-family: var(--font-math), math;
+  }
+
   .touch-target {
     min-height: 2.75rem;
     min-width: 2.75rem;
@@ -690,5 +694,22 @@ html[data-focus="on"] main {
 
   .packet-section + .packet-section {
     break-before: page;
+  }
+
+  .packet-page {
+    background: #fff !important;
+    padding: 0 !important;
+  }
+
+  /* Tables fit the page width (no scroll box) so every column prints and headers repeat. */
+  .prose-study table {
+    display: table;
+    overflow: visible;
+  }
+
+  .prose-study th,
+  .prose-study td {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 }

@@ -4,6 +4,7 @@ import {
   IBM_Plex_Mono,
   IBM_Plex_Sans,
   Source_Serif_4,
+  STIX_Two_Math,
 } from "next/font/google";
 
 import { LookProvider } from "@/components/look-provider";
@@ -20,6 +21,13 @@ const readingSerif = Source_Serif_4({
   variable: "--font-serif",
   subsets: ["latin"],
   weight: ["400", "600", "700"],
+});
+
+// MathML needs a math font; many systems (and the PDF renderer) have none. Loaded only where math shows.
+const mathFont = STIX_Two_Math({
+  variable: "--font-math",
+  weight: "400",
+  adjustFontFallback: false,
 });
 
 const uiMono = IBM_Plex_Mono({
@@ -56,7 +64,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       data-look="night"
-      className={`dark ${uiSans.variable} ${readingSerif.variable} ${uiMono.variable} h-full antialiased`}
+      className={`dark ${uiSans.variable} ${readingSerif.variable} ${uiMono.variable} ${mathFont.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="flex min-h-full flex-col font-sans">

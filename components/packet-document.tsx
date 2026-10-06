@@ -65,7 +65,7 @@ function CardItem({ card }: { card: PacketCard }) {
 /** The study packet document that the PDF download renders. */
 export function PacketDocument({ packName, topicName, generatedOn, lockedIn, summary, cards }: PacketDocumentProps) {
   return (
-    <main className="min-h-dvh bg-background px-4 py-6 sm:py-10">
+    <main className="packet-page min-h-dvh bg-background px-4 py-6 sm:py-10">
       <div className="mx-auto flex max-w-4xl flex-col gap-6">
         <article className="print-document reading-surface space-y-10 rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8">
           <div className="space-y-1 border-b border-border/80 pb-4">

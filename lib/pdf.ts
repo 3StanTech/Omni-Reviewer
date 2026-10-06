@@ -47,9 +47,12 @@ export async function renderPdf({ url, cookieHeader, bodyData }: RenderPdfInput)
   try {
     await browser.setCookie(...parseCookies(cookieHeader, url));
     const page = await browser.newPage();
+    // Print the day look; with no saved look the app starts in night.
+    await page.evaluateOnNewDocument(() => localStorage.setItem("omni-look", "day"));
     await page.goto(url.toString(), { waitUntil: "networkidle2", timeout: LOAD_TIMEOUT_MS });
     if (new URL(page.url()).pathname.startsWith("/login")) throw new PdfSignedOutError();
     await page.waitForSelector(CONTENT_SELECTOR, { timeout: LOAD_TIMEOUT_MS });
+    await page.emulateMediaType("print");
     await page.evaluate(async (data) => {
       Object.assign(document.body.dataset, data);
       await document.fonts.ready;
