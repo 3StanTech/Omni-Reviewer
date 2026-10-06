@@ -189,6 +189,12 @@ export function lexicalSupport(sentence: string, candidateText: string): number 
   return scoreTerms(sentenceTerms(sentence), indexText(candidateText));
 }
 
+/** The grounding window scorer for one sentence, its terms computed once for many candidates. */
+export function passageScorer(sentence: string): (candidateText: string) => number {
+  const forms = [sentenceTerms(sentence)];
+  return (candidateText) => scoreForms(forms, indexText(candidateText));
+}
+
 // ---------------------------------------------------------------------------
 // Claim extraction
 
