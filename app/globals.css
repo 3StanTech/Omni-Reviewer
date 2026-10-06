@@ -341,7 +341,9 @@
     font-family: var(--font-mono), ui-monospace, monospace;
   }
 
-  .prose-study math {
+  /* Only display equations scroll. On inline math, overflow-x makes overflow-y auto too,
+     and a glyph taller than the line box then shows a scrollbar after every formula. */
+  .prose-study math[display="block"] {
     overflow-x: auto;
   }
 
