@@ -202,6 +202,10 @@
     font-family: var(--font-reading), ui-serif, Georgia, serif;
     font-size: 1.0625rem;
     line-height: 1.7;
+  }
+
+  /* Text keeps a readable measure; tables may use the card's full width before scrolling. */
+  .prose-study > :not(table) {
     max-width: 72ch;
   }
 
@@ -551,7 +555,8 @@
     padding: 0 !important;
   }
 
-  .prose-study {
+  .prose-study,
+  .prose-study > :not(table) {
     max-width: none;
   }
 
