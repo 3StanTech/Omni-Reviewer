@@ -1,7 +1,7 @@
 "use client";
 
 import Link, { useLinkStatus } from "next/link";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   CaretRight,
@@ -11,6 +11,7 @@ import {
   PencilSimple,
   Plus,
   Trash,
+  UploadSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
 
@@ -34,6 +35,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatStampLocal, formatStampUtc } from "@/lib/format-generated-at";
+import { BATCH_ACCEPT } from "@/lib/generation-queue";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
 
@@ -75,6 +77,9 @@ type ReviewerListProps = {
   topicId: string | null;
   topicName: string | null;
   reviewers: ReviewerListItem[];
+  /** Make one queued pack per picked file. Absent hides the batch button. */
+  onAddFiles?: (files: File[]) => void;
+  addingFiles?: boolean;
 };
 
 const LIST_LOCAL_STAMP: Intl.DateTimeFormatOptions = {
@@ -122,8 +127,11 @@ export function ReviewerList({
   topicId,
   topicName,
   reviewers,
+  onAddFiles,
+  addingFiles = false,
 }: ReviewerListProps) {
   const router = useRouter();
+  const filesRef = useRef<HTMLInputElement>(null);
   const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -246,17 +254,50 @@ export function ReviewerList({
               : "Select a topic to see its packs."}
           </p>
         </div>
-        <Button
-          type="button"
-          onClick={() => {
-            setError(null);
-            setName("");
-            setCreateOpen(true);
-          }}
-        >
-          <Plus weight="bold" />
-          New reviewer
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {onAddFiles ? (
+            <>
+              <input
+                ref={filesRef}
+                type="file"
+                multiple
+                accept={BATCH_ACCEPT}
+                className="sr-only"
+                tabIndex={-1}
+                aria-hidden
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  event.target.value = "";
+                  if (files.length > 0) onAddFiles(files);
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={addingFiles}
+                onClick={() => filesRef.current?.click()}
+              >
+                {addingFiles ? (
+                  <CircleNotch className="animate-spin" weight="bold" />
+                ) : (
+                  <UploadSimple weight="bold" />
+                )}
+                New packs from files
+              </Button>
+            </>
+          ) : null}
+          <Button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setName("");
+              setCreateOpen(true);
+            }}
+          >
+            <Plus weight="bold" />
+            New reviewer
+          </Button>
+        </div>
       </div>
 
       {reviewers.length === 0 ? (

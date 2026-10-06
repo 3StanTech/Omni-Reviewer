@@ -12,6 +12,7 @@ import {
   eq,
   gt,
   inArray,
+  isNotNull,
   isNull,
   lt,
   max,
@@ -89,6 +90,8 @@ import {
   type FsrsCardState,
 } from "@/lib/fsrs";
 import { newCardAllowance } from "@/lib/pacing";
+import { queuedRunOutcome } from "@/lib/generation-queue";
+import { hasMeaningfulText } from "@/lib/source-markers";
 import {
   computeMastery,
   MASTERY_WEAK_THRESHOLD,
@@ -290,6 +293,7 @@ export async function listReviewersByTopic(
       lastGeneratedAt: reviewers.lastGeneratedAt,
       examDate: reviewers.examDate,
       deletingAt: reviewers.deletingAt,
+      queuedAt: reviewers.queuedAt,
       ...pacedCountFields(reviewers.id, now),
     })
     .from(reviewers)
@@ -597,6 +601,7 @@ export async function getReviewer(
       lastGeneratedAt: reviewers.lastGeneratedAt,
       examDate: reviewers.examDate,
       deletingAt: reviewers.deletingAt,
+      queuedAt: reviewers.queuedAt,
     })
     .from(reviewers)
     .innerJoin(topics, eq(reviewers.topicId, topics.id))
@@ -3552,6 +3557,148 @@ export async function updateReviewerExamDate(
     .where(eq(reviewers.id, reviewerId))
     .returning();
   return row ?? null;
+}
+
+export type QueuedPack = {
+  id: string;
+  topicId: string;
+  name: string;
+  queuedAt: Date;
+  /** At least one ready source holds meaningful text to generate from. */
+  ready: boolean;
+  activeJobId: string | null;
+  /** The pack's run stopped (failed or partial) after it was queued: Retry only. */
+  failed: boolean;
+  lastError: string | null;
+};
+
+/**
+ * The owner's generation queue, oldest first. Deleting packs and topics drop
+ * out; readiness mirrors the generate route's Locked In source check. A pack
+ * stays queued while the desk runs it and is cleared when the run succeeds.
+ */
+export async function listQueuedPacks(userId: string): Promise<QueuedPack[]> {
+  const rows = await db
+    .select({
+      id: reviewers.id,
+      topicId: reviewers.topicId,
+      name: reviewers.name,
+      queuedAt: reviewers.queuedAt,
+    })
+    .from(reviewers)
+    .innerJoin(topics, eq(reviewers.topicId, topics.id))
+    .where(
+      and(
+        eq(topics.userId, userId),
+        isNull(topics.deletingAt),
+        isNull(reviewers.deletingAt),
+        isNotNull(reviewers.queuedAt),
+      ),
+    )
+    .orderBy(asc(reviewers.queuedAt), asc(reviewers.createdAt));
+  if (rows.length === 0) return [];
+  const ids = rows.map((row) => row.id);
+  const [readySources, activeJobs, latestJobs] = await Promise.all([
+    db
+      .select({ reviewerId: sources.reviewerId, extractedText: sources.extractedText })
+      .from(sources)
+      .where(
+        and(
+          inArray(sources.reviewerId, ids),
+          eq(sources.ingestStatus, "ready"),
+          isNull(sources.deletingAt),
+        ),
+      ),
+    db
+      .select({ id: generationJobs.id, reviewerId: generationJobs.reviewerId })
+      .from(generationJobs)
+      .where(
+        and(
+          inArray(generationJobs.reviewerId, ids),
+          eq(generationJobs.userId, userId),
+          eq(generationJobs.active, true),
+          inArray(generationJobs.status, ["queued", "running"]),
+        ),
+      ),
+    db
+      .selectDistinctOn([generationJobs.reviewerId], {
+        reviewerId: generationJobs.reviewerId,
+        status: generationJobs.status,
+        active: generationJobs.active,
+        finishedAt: generationJobs.finishedAt,
+        errorMessage: generationJobs.errorMessage,
+      })
+      .from(generationJobs)
+      .where(and(inArray(generationJobs.reviewerId, ids), eq(generationJobs.userId, userId)))
+      .orderBy(generationJobs.reviewerId, desc(generationJobs.createdAt), desc(generationJobs.updatedAt)),
+  ]);
+  const readyIds = new Set(
+    readySources
+      .filter((source) => hasMeaningfulText(source.extractedText))
+      .map((source) => source.reviewerId),
+  );
+  const activeByReviewer = new Map(activeJobs.map((job) => [job.reviewerId, job.id]));
+  const latestByReviewer = new Map(latestJobs.map((job) => [job.reviewerId, job]));
+  // A run that succeeded since queueing is done even if its dequeue was lost
+  // (tab closed at the last step); the next manual start clears the flag.
+  return rows.flatMap((row) => {
+    const latest = latestByReviewer.get(row.id) ?? null;
+    const outcome = queuedRunOutcome(latest, row.queuedAt!);
+    if (outcome === "succeeded") return [];
+    const failed = outcome === "stopped";
+    return [{
+      id: row.id,
+      topicId: row.topicId,
+      name: row.name,
+      queuedAt: row.queuedAt!,
+      ready: readyIds.has(row.id),
+      activeJobId: activeByReviewer.get(row.id) ?? null,
+      failed,
+      lastError: failed ? latest?.errorMessage ?? null : null,
+    }];
+  });
+}
+
+/**
+ * Queue or dequeue an owned, live pack. Queueing keeps an existing timestamp
+ * so FIFO order survives repeat requests; `requeue` (Retry) stamps a new one
+ * so a stopped run becomes runnable again. Null when not owned or deleting.
+ */
+export async function setReviewerQueued(
+  reviewerId: string,
+  userId: string,
+  queued: boolean,
+  requeue = false,
+): Promise<{ queuedAt: Date | null } | null> {
+  const [row] = await db
+    .update(reviewers)
+    .set({
+      queuedAt: !queued
+        ? null
+        : requeue
+          ? sql`NOW()`
+          : sql`COALESCE(${reviewers.queuedAt}, NOW())`,
+    })
+    .where(
+      and(
+        eq(reviewers.id, reviewerId),
+        isNull(reviewers.deletingAt),
+        inArray(
+          reviewers.topicId,
+          db.select({ id: topics.id }).from(topics).where(eq(topics.userId, userId)),
+        ),
+      ),
+    )
+    .returning({ queuedAt: reviewers.queuedAt });
+  return row ?? null;
+}
+
+/** Drop a pack from the queue once a generation job starts for it. */
+export async function clearReviewerQueued(reviewerId: string): Promise<void> {
+  await db
+    .update(reviewers)
+    .set({ queuedAt: null })
+    .where(and(eq(reviewers.id, reviewerId), isNotNull(reviewers.queuedAt)));
 }
 
 export async function protectedContentForGeneration(

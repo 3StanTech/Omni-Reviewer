@@ -85,6 +85,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
         topicName={selectedTopic?.name ?? null}
         reviewers={serializedReviewers}
         today={today ? { plan: today.plan, packTopicIds: today.packTopicIds } : null}
+        userId={userId}
       />
     </AppShell>
   );

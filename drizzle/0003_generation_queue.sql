@@ -1,0 +1,2 @@
+ALTER TABLE "reviewers" ADD COLUMN "queued_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "reviewers_queued_idx" ON "reviewers" USING btree ("queued_at") WHERE "reviewers"."queued_at" IS NOT NULL;

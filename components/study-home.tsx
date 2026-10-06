@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
+import { GenerationQueuePanel } from "@/components/generation-queue-panel";
 import {
   ReviewerList,
   type ReviewerListItem,
@@ -15,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { outlineHeadingHref } from "@/lib/study-outline";
 import type { TodayPlan } from "@/lib/today-plan";
+import { useGenerationQueue } from "@/lib/use-generation-queue";
 
 export type StudyHomeToday = {
   plan: TodayPlan;
@@ -42,6 +44,8 @@ type StudyHomeProps = {
   reviewers: ReviewerListItem[];
   /** Null while the user has no packs; the Today bar is then hidden. */
   today: StudyHomeToday | null;
+  /** Session user, for the batch upload's Blob paths. Absent hides the batch button. */
+  userId?: string | null;
 };
 
 function ReviewerListSkeleton() {
@@ -70,8 +74,10 @@ export function StudyHome({
   topicName,
   reviewers,
   today,
+  userId = null,
 }: StudyHomeProps) {
   const topicNav = useTopicNav();
+  const queue = useGenerationQueue({ userId });
   const [todayOpen, setTodayOpen] = useState(false);
   const packTopicIds = today?.packTopicIds;
   const hrefs = useMemo(() => todayHrefs(packTopicIds ?? {}), [packTopicIds]);
@@ -127,6 +133,13 @@ export function StudyHome({
           onOptimisticSelect={setOptimisticId}
         />
       </div>
+      <GenerationQueuePanel
+        rows={queue.rows}
+        status={queue.status}
+        remove={queue.remove}
+        retry={queue.retry}
+        checkAgain={queue.checkAgain}
+      />
       {topicPending ? (
         <ReviewerListSkeleton />
       ) : (
@@ -134,6 +147,10 @@ export function StudyHome({
           topicId={selectedId}
           topicName={topicName}
           reviewers={reviewers}
+          onAddFiles={userId && selectedId
+            ? (files) => void queue.enqueueFiles(files, selectedId)
+            : undefined}
+          addingFiles={queue.status.uploading}
         />
       )}
     </div>

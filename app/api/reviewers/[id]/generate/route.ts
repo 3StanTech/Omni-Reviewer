@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { missingUpstreamMessage, parseGenerateBody } from "@/lib/generate-request";
 import { planGeneration, type GenerateKind } from "@/lib/generation-plan";
 import {
+  clearReviewerQueued,
   createOrReuseGenerationJob,
   getGenerationExistingKinds,
   getGenerationUpstreamRevisions,
@@ -64,6 +65,10 @@ export async function POST(
     return NextResponse.json({ error: message }, { status });
   }
   const parsed = parseGenerateBody(rawBody);
+  // The desk's queue starts with ?queue=1: the pack stays queued while its run
+  // is active, so a closed desk resumes it, and lists as failed if it stops.
+  // A manual Generate always dequeues, so a pack never generates twice.
+  const fromQueue = new URL(request.url).searchParams.get("queue") === "1";
   if (!parsed.ok) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
@@ -108,6 +113,7 @@ export async function POST(
         userId,
       });
       if (resumed) {
+        if (!fromQueue) await clearReviewerQueued(reviewerId);
         const resumedBaseline = resumed.mode === "single"
           ? await getLatestFullGenerationJobForReviewer(reviewerId, userId)
           : null;
@@ -249,6 +255,7 @@ export async function POST(
     finishedAt: null,
     expectedProtected: forceOverwrite ? protectedRevisions : null,
   });
+  if (!fromQueue) await clearReviewerQueued(reviewerId);
 
   const fullBaseline = job.mode === "single"
     ? await getLatestFullGenerationJobForReviewer(reviewerId, userId)

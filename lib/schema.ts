@@ -182,7 +182,13 @@ export const reviewers = pgTable("reviewers", {
   examDate: date("exam_date", { mode: "string" }),
   /** Set before external Blob cleanup so source creation cannot race deletion. */
   deletingAt: timestamp("deleting_at", { withTimezone: true }),
-});
+  /** Set when the student queues the pack for generation; cleared when a generation job starts. */
+  queuedAt: timestamp("queued_at", { withTimezone: true }),
+}, (table) => [
+  index("reviewers_queued_idx")
+    .on(table.queuedAt)
+    .where(sql`${table.queuedAt} IS NOT NULL`),
+]);
 
 export const sources = pgTable("sources", {
   id: uuid("id").defaultRandom().primaryKey(),
