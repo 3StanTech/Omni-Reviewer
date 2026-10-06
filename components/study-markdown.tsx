@@ -60,6 +60,9 @@ const MATH_TAGS = [
   "munder",
   "munderover",
   "none",
+  // KaTeX wraps each formula as <semantics><mrow/><annotation/></semantics>.
+  // Without it the TeX annotation sits loose in <math> and Chrome draws it as a box.
+  "semantics",
 ] as const;
 
 const SAFE_STUDY_SPAN_CLASS =
