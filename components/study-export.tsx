@@ -8,8 +8,8 @@ import { cn } from "@/lib/utils";
 import { buildMarkdownExport, exportFilename, type ExportAnnotation } from "@/lib/study-export";
 
 type StudyExportProps = {
-  topicId: string;
   reviewerId: string;
+  kind: "locked_in" | "summary";
   reviewerName: string;
   modeLabel: string;
   markdown: string;
@@ -21,12 +21,20 @@ const ITEM_CLASS = cn(
   "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground",
 );
 
-function clearPrintFlags() {
-  delete document.body.dataset.exportCitations;
-  delete document.body.dataset.exportAnnotations;
+function saveFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, markdown, annotations }: StudyExportProps) {
+export function StudyExport({ reviewerId, kind, reviewerName, modeLabel, markdown, annotations }: StudyExportProps) {
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -34,6 +42,8 @@ export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, mark
   const [open, setOpen] = useState(false);
   const [includeNotes, setIncludeNotes] = useState(true);
   const [keepCitations, setKeepCitations] = useState(true);
+  const [preparing, setPreparing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const close = useCallback((returnFocus: boolean) => {
     setOpen(false);
@@ -76,18 +86,25 @@ export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, mark
     }
   }
 
-  function exportPdf() {
+  async function downloadPdf(pdfKind: StudyExportProps["kind"] | "packet") {
     close(true);
-    const body = document.body;
-    body.dataset.exportCitations = keepCitations ? "on" : "off";
-    body.dataset.exportAnnotations = includeNotes ? "on" : "off";
-    window.addEventListener("afterprint", clearPrintFlags, { once: true });
-    window.print();
-  }
-
-  function openPacket() {
-    close(true);
-    window.open(`/topics/${topicId}/reviewers/${reviewerId}/packet?print=1`, "_blank", "noopener");
+    setError(null);
+    setPreparing(true);
+    const query = new URLSearchParams({
+      kind: pdfKind,
+      citations: keepCitations ? "on" : "off",
+      notes: includeNotes ? "on" : "off",
+    });
+    try {
+      const response = await fetch(`/api/reviewers/${reviewerId}/pdf?${query}`);
+      if (!response.ok) throw new Error("PDF export failed");
+      const label = pdfKind === "packet" ? "Study packet" : modeLabel;
+      saveFile(await response.blob(), exportFilename(reviewerName, label, ".pdf"));
+    } catch {
+      setError("Could not make the PDF. Try again.");
+    } finally {
+      setPreparing(false);
+    }
   }
 
   function exportMarkdown() {
@@ -100,16 +117,7 @@ export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, mark
       includeNotes,
       annotations,
     });
-    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = exportFilename(reviewerName, modeLabel);
-    link.rel = "noopener";
-    link.style.display = "none";
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    saveFile(new Blob([text], { type: "text/markdown;charset=utf-8" }), exportFilename(reviewerName, modeLabel));
   }
 
   return (
@@ -122,6 +130,7 @@ export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, mark
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
+        disabled={preparing}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" && !open) {
@@ -131,8 +140,13 @@ export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, mark
         }}
       >
         <DownloadSimple />
-        Download
+        {preparing ? "Preparing PDF" : "Download"}
       </Button>
+      {error ? (
+        <span role="alert" className="absolute top-full left-0 mt-1 text-xs whitespace-nowrap text-destructive">
+          {error}
+        </span>
+      ) : null}
       <div hidden={!open} className="absolute top-full left-0 z-50 pt-2">
         <div
           ref={menuRef}
@@ -142,13 +156,13 @@ export function StudyExport({ topicId, reviewerId, reviewerName, modeLabel, mark
           className="min-w-64 rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-[0_10px_30px_oklch(0_0_0/40%)]"
           onKeyDown={onMenuKeyDown}
         >
-          <button type="button" role="menuitem" className={ITEM_CLASS} onClick={exportPdf}>
+          <button type="button" role="menuitem" className={ITEM_CLASS} onClick={() => void downloadPdf(kind)}>
             PDF
           </button>
           <button type="button" role="menuitem" className={ITEM_CLASS} onClick={exportMarkdown}>
             Markdown (.md)
           </button>
-          <button type="button" role="menuitem" className={ITEM_CLASS} onClick={openPacket}>
+          <button type="button" role="menuitem" className={ITEM_CLASS} onClick={() => void downloadPdf("packet")}>
             Study packet (PDF)
           </button>
           <div role="separator" className="my-1 h-px bg-border" />

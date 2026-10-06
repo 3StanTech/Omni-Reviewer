@@ -119,6 +119,7 @@ const SAFE_LOG_CONTEXTS = new Set([
   "Blob verification failed",
   "Could not save source",
   "Password reset email failed",
+  "PDF export failed",
 ]);
 
 const SAFE_LOG_DETAIL_KEYS = new Set([

@@ -1,11 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { ArrowLeft, Printer } from "@phosphor-icons/react";
-import { useEffect, useRef } from "react";
-
 import { MarkdownBody } from "@/components/study-markdown";
-import { Button, buttonVariants } from "@/components/ui/button";
 import { stripCitations, UNSOURCED_TOKEN } from "@/lib/citations";
 import { isClozeCardFront, renderClozeText } from "@/lib/learning";
 import { stripPageMarkers } from "@/lib/source-markers";
@@ -14,15 +9,12 @@ import { UNSOURCED_EXPORT_TEXT } from "@/lib/study-export";
 export type PacketCard = { id: string; front: string; back: string };
 
 type PacketDocumentProps = {
-  topicId: string;
-  reviewerId: string;
   packName: string;
   topicName: string;
   generatedOn: string;
   lockedIn: string;
   summary: string;
   cards: PacketCard[];
-  autoPrint: boolean;
 };
 
 const EMPTY_TEXT = "Not generated yet";
@@ -70,49 +62,11 @@ function CardItem({ card }: { card: PacketCard }) {
   );
 }
 
-export function PacketDocument({
-  topicId,
-  reviewerId,
-  packName,
-  topicName,
-  generatedOn,
-  lockedIn,
-  summary,
-  cards,
-  autoPrint,
-}: PacketDocumentProps) {
-  const printedRef = useRef(false);
-
-  useEffect(() => {
-    if (!autoPrint || printedRef.current) return;
-    printedRef.current = true;
-    let cancelled = false;
-    void document.fonts.ready.then(() => {
-      if (!cancelled) window.print();
-    });
-    return () => {
-      cancelled = true;
-      printedRef.current = false;
-    };
-  }, [autoPrint]);
-
+/** The study packet document that the PDF download renders. */
+export function PacketDocument({ packName, topicName, generatedOn, lockedIn, summary, cards }: PacketDocumentProps) {
   return (
     <main className="min-h-dvh bg-background px-4 py-6 sm:py-10">
       <div className="mx-auto flex max-w-4xl flex-col gap-6">
-        <div className="print-hide flex flex-wrap items-center justify-between gap-2">
-          <Link
-            href={`/topics/${topicId}/reviewers/${reviewerId}`}
-            className={buttonVariants({ variant: "outline", size: "sm" })}
-          >
-            <ArrowLeft />
-            Back to pack
-          </Link>
-          <Button type="button" size="sm" onClick={() => window.print()}>
-            <Printer />
-            Print or save as PDF
-          </Button>
-        </div>
-
         <article className="print-document reading-surface space-y-10 rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8">
           <div className="space-y-1 border-b border-border/80 pb-4">
             <p className="text-sm text-muted-foreground">{topicName}</p>

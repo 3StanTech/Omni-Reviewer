@@ -18,6 +18,10 @@
     },
     "app/api/reviewers/[id]/ask/route.ts": {
       "maxDuration": 120
+    },
+    "app/api/reviewers/[id]/pdf/route.ts": {
+      "maxDuration": 60,
+      "memory": 2048
     }
   }
 }

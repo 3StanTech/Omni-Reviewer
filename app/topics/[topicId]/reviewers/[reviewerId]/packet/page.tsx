@@ -8,10 +8,9 @@ export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: Promise<{ topicId: string; reviewerId: string }>;
-  searchParams: Promise<{ print?: string }>;
 };
 
-export default async function StudyPacketPage({ params, searchParams }: PageProps) {
+export default async function StudyPacketPage({ params }: PageProps) {
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) {
@@ -19,7 +18,6 @@ export default async function StudyPacketPage({ params, searchParams }: PageProp
   }
 
   const { topicId, reviewerId } = await params;
-  const { print } = await searchParams;
 
   const topic = await getTopic(topicId, userId);
   if (!topic) notFound();
@@ -46,15 +44,12 @@ export default async function StudyPacketPage({ params, searchParams }: PageProp
 
   return (
     <PacketDocument
-      topicId={topic.id}
-      reviewerId={reviewer.id}
       packName={reviewer.name}
       topicName={topic.name}
       generatedOn={generatedOn}
       lockedIn={lockedIn?.content ?? ""}
       summary={summary?.content ?? ""}
       cards={packetCards}
-      autoPrint={print === "1"}
     />
   );
 }

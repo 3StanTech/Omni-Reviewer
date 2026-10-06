@@ -509,7 +509,7 @@
   }
 }
 
-/* Export: browser print for Locked In and Summary PDF. */
+/* PDF export: print CSS that the server's headless Chrome applies to Locked In and Summary. */
 @media print {
   @page {
     margin: 18mm 16mm;

@@ -9,6 +9,8 @@ const read = (file: string) => readFileSync(path.join(root, file), "utf8");
 const page = read("app/topics/[topicId]/reviewers/[reviewerId]/packet/page.tsx");
 const packet = read("components/packet-document.tsx");
 const exportMenu = read("components/study-export.tsx");
+const pdfRoute = read("app/api/reviewers/[id]/pdf/route.ts");
+const pdfRenderer = read("lib/pdf.ts");
 const css = read("app/globals.css");
 
 function packetPrintBlock(): string {
@@ -68,14 +70,10 @@ describe("study packet document", () => {
     expect(packet).toContain("Answer:");
   });
 
-  it("offers a print-hidden toolbar and prints once after fonts load", () => {
-    expect(packet).toContain("print-hide");
-    expect(packet).toContain("Print or save as PDF");
-    expect(packet).toContain("Back to pack");
-    expect(packet).toContain("Printer");
-    expect(packet).toContain("document.fonts.ready");
-    expect(packet).toContain("window.print()");
-    expect(page).toContain('print === "1"');
+  it("never opens the browser print dialog", () => {
+    expect(packet).not.toContain("window.print");
+    expect(packet).not.toContain("Print or save as PDF");
+    expect(page).not.toContain("print");
     expect(packet).not.toMatch(/—/);
   });
 });
@@ -95,10 +93,42 @@ describe("study packet print CSS", () => {
 });
 
 describe("export menu", () => {
-  it("opens the study packet in a new tab ready to print", () => {
+  it("downloads the PDFs as files instead of printing", () => {
     expect(exportMenu).toContain("Study packet (PDF)");
-    expect(exportMenu).toContain("/topics/${topicId}/reviewers/${reviewerId}/packet?print=1");
-    expect(exportMenu).toContain('"_blank", "noopener"');
-    expect(exportMenu).toMatch(/role="menuitem"[^>]*onClick=\{openPacket\}/);
+    expect(exportMenu).toContain("/api/reviewers/${reviewerId}/pdf?${query}");
+    expect(exportMenu).toMatch(/role="menuitem"[^>]*onClick=\{\(\) => void downloadPdf\(kind\)\}/);
+    expect(exportMenu).toMatch(/role="menuitem"[^>]*onClick=\{\(\) => void downloadPdf\("packet"\)\}/);
+    expect(exportMenu).toContain('exportFilename(reviewerName, label, ".pdf")');
+    expect(exportMenu).toContain("Preparing PDF");
+    expect(exportMenu).not.toContain("window.print");
+    expect(exportMenu).not.toContain("window.open");
+  });
+});
+
+describe("PDF download route", () => {
+  it("requires a session and scopes the pack to the owner", () => {
+    expect(pdfRoute).toContain("await auth()");
+    expect(pdfRoute).toContain("getReviewer(reviewerId, userId)");
+    expect(pdfRoute).toContain("reviewer.deletingAt");
+    expect(pdfRoute).toContain('z.enum(["locked_in", "summary", "packet"])');
+  });
+
+  it("renders this app's own pages and returns an attachment", () => {
+    expect(pdfRoute).toContain("requestUrl.origin");
+    expect(pdfRoute).toContain("`${packPath}/packet`");
+    expect(pdfRoute).toContain("`${packPath}?mode=${kind}`");
+    expect(pdfRoute).toContain("exportCitations: citations, exportAnnotations: notes");
+    expect(pdfRoute).toContain('"Content-Type": "application/pdf"');
+    expect(pdfRoute).toContain("attachment; filename*=UTF-8''");
+    expect(pdfRoute).toContain("PdfSignedOutError");
+  });
+
+  it("replays the requester's cookies only for the app's host and closes Chrome", () => {
+    expect(pdfRenderer).toContain('import "server-only"');
+    expect(pdfRenderer).toContain("domain: url.hostname");
+    expect(pdfRenderer).toContain('pathname.startsWith("/login")');
+    expect(pdfRenderer).toContain('format: "A4"');
+    expect(pdfRenderer).toContain("printBackground: true");
+    expect(pdfRenderer).toMatch(/finally \{\s*await browser\.close\(\);/);
   });
 });

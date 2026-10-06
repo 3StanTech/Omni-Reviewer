@@ -80,6 +80,7 @@ describe("buildMarkdownExport", () => {
 describe("exportFilename", () => {
   it("builds name - mode.md", () => {
     expect(exportFilename("Biology 101", "Summary")).toBe("Biology 101 - Summary.md");
+    expect(exportFilename("Biology 101", "Study packet", ".pdf")).toBe("Biology 101 - Study packet.pdf");
   });
 
   it("strips path, control, and reserved characters", () => {
