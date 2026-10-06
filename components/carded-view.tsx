@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { ExplainThisButton } from "@/components/ask-provider";
+import { CardExport } from "@/components/card-export";
 import { EmptyState } from "@/components/empty-state";
 import { useSourceViewer } from "@/components/source-modal";
 import { SittingRecap } from "@/components/sitting-recap";
@@ -57,6 +58,8 @@ type CardedViewProps = {
   onCardsChange: (cards: DurableCardView[]) => void;
   /** Locked In markdown; names the most-missed section in the recap. */
   lockedIn?: string | null;
+  /** Pack name, used for card export filenames. */
+  reviewerName?: string;
 };
 
 function parseCards(
@@ -114,6 +117,7 @@ export function CardedView({
   examDate = null,
   onCardsChange,
   lockedIn = null,
+  reviewerName = "Reviewer",
 }: CardedViewProps) {
   const generatedCards = useMemo(
     () => parseCards(contentJson, content),
@@ -412,6 +416,7 @@ export function CardedView({
           <p>Remaining {remainingDue} due</p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
+          <CardExport cards={cards} reviewerName={reviewerName} />
           {browsing ? (
             <Button type="button" variant="ghost" size="sm" onClick={enterDue}>
               Study due

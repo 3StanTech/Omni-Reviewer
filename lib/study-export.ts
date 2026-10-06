@@ -72,7 +72,7 @@ export function buildMarkdownExport({
   return `${parts.join("\n\n")}\n`;
 }
 
-function safeSegment(value: string): string {
+export function safeSegment(value: string): string {
   return value
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/[\\/:*?"<>|]/g, " ")

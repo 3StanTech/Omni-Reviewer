@@ -386,6 +386,7 @@ export function ViewTabs({
             examDate={examDate}
             onCardsChange={onCardsChange}
             lockedIn={views.locked_in?.content ?? null}
+            reviewerName={reviewerName}
           />
         )}
       </TabsContent>
