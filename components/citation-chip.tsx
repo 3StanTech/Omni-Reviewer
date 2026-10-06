@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import { useSourceViewer } from "@/components/source-modal";
+import { lastSentence } from "@/lib/passage-tint";
 import { cn } from "@/lib/utils";
 
 type CitationChipProps = {
@@ -21,6 +22,23 @@ export function citationAriaLabel(source: number, pageStart: number | null, page
   if (pageStart === null) return `Open source ${source}`;
   if (pageEnd !== null && pageEnd !== pageStart) return `Open source pages ${pageStart} to ${pageEnd}`;
   return `Open source page ${pageStart}`;
+}
+
+/**
+ * The sentence a chip cites: the last sentence of its block's text before the
+ * chip, without other chips or unsourced tags. A table cell reads its whole row.
+ */
+function claimTextForChip(chip: HTMLElement): string | null {
+  const block = chip.closest("li, p, td, th, blockquote");
+  if (!block) return null;
+  const container = block.matches("td, th") ? block.closest("tr") ?? block : block;
+  const range = document.createRange();
+  range.setStart(container, 0);
+  range.setEndBefore(chip);
+  const before = range.cloneContents();
+  before.querySelectorAll("[data-study-skip]").forEach((skipped) => skipped.remove());
+  before.querySelectorAll("td, th").forEach((cell) => cell.append(" "));
+  return lastSentence(before.textContent ?? "");
 }
 
 /**
@@ -50,7 +68,7 @@ export function CitationChip({ source, pageStart, pageEnd, inert = false, childr
       onClick={(event) => {
         // Carded fronts flip on click; a citation opens the source instead.
         event.stopPropagation();
-        openSource({ source, page: pageStart });
+        openSource({ source, page: pageStart, pageEnd, claim: claimTextForChip(event.currentTarget) });
       }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") event.stopPropagation();

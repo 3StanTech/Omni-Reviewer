@@ -411,7 +411,12 @@ export function CardedView({
             type="button"
             variant="ghost"
             size="sm"
-            onClick={() => sourceViewer.openSource({ source: backCitation.source, page: backPage })}
+            onClick={() => sourceViewer.openSource({
+              source: backCitation.source,
+              page: backPage,
+              pageEnd: backCitation.pageEnd,
+              claim: stripCitations(card.back).trim() || null,
+            })}
           >
             <Presentation weight="bold" />
             Slide {backPage}

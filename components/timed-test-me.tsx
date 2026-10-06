@@ -15,7 +15,7 @@ import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-pr
 import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
 import { Button } from "@/components/ui/button";
-import { parseCitations, type Citation } from "@/lib/citations";
+import { parseCitations, stripCitations, type Citation } from "@/lib/citations";
 import { DEFAULT_TIMED_TEST_SECONDS } from "@/lib/test-timing-constants";
 import type { TestMeItem } from "@/lib/types";
 import { readApiError, cn } from "@/lib/utils";
@@ -417,12 +417,13 @@ export function OpenCitedSlide({ texts }: { texts: ReadonlyArray<string | null |
   const citation = firstPageCitation(texts);
   if (!available || !citation || citation.pageStart === null) return null;
   const page = citation.pageStart;
+  const claim = texts.map((text) => (text ? stripCitations(text).trim() : "")).find(Boolean) ?? null;
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
-      onClick={() => openSource({ source: citation.source, page })}
+      onClick={() => openSource({ source: citation.source, page, pageEnd: citation.pageEnd, claim })}
     >
       <Presentation weight="bold" />
       Open slide {page}
