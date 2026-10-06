@@ -710,6 +710,12 @@ html[data-focus="on"] main {
   .prose-study th,
   .prose-study td {
     min-width: 0;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
+    hyphens: auto;
+  }
+
+  /* A closing rule would otherwise spill onto a page of its own. */
+  .prose-study > hr:last-child {
+    display: none;
   }
 }
