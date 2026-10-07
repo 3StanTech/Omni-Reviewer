@@ -1,9 +1,10 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { ArrowCounterClockwise, Presentation, SealCheck } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, PencilSimple, SealCheck } from "@phosphor-icons/react";
 
 import { AnnotationMenu } from "@/components/annotation-menu";
+import { ModeActions, useModeMenuItems, type ModeMenuItem } from "@/components/mode-toolbar";
 import { StudyEditor } from "@/components/study-editor";
 import { MarkdownBody } from "@/components/study-markdown";
 import { SOURCE_LIST_UNAVAILABLE, useSourceViewer } from "@/components/source-modal";
@@ -32,7 +33,7 @@ import type { SerializedView, StudyViewSavePatch } from "@/lib/serialize-view";
 import { buildStudyDomTextIndex, rangeOffsetsForStudyDom } from "@/lib/study-dom-text";
 import { readApiError } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { StudySidePanel } from "@/components/study-side-panel";
+import { StudySidePanel, type PanelOpenRequest } from "@/components/study-side-panel";
 import { readReadingPosition, readingPositionKey, writeReadingPosition } from "@/lib/reading-position";
 import { getLocalStorage } from "@/lib/safe-storage";
 import { clearStudyDraft, readStudyDraft, studyDraftKey, writeStudyDraft, type StudyDraft } from "@/lib/study-draft";
@@ -103,6 +104,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   // Tagged or unchecked claims can both be sent back through the checker.
   const canRecheck = claims.unsourced > 0 || unchecked > 0;
   const [checking, setChecking] = useState(false);
+  const [panelRequest, setPanelRequest] = useState<PanelOpenRequest | null>(null);
   const viewIdentity = `${view.id}:${view.contentRevision}:${view.annotationRevision}`;
   const [appliedIdentity, setAppliedIdentity] = useState(viewIdentity);
   const draftIsStale = draftRevision !== view.revision;
@@ -560,64 +562,95 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
 
   const activeAnnotations = annotations.filter((annotation) => !annotation.archivedAt);
   const earlierAnnotations = annotations.filter((annotation) => annotation.archivedAt);
+  const sourcedClaims = claims.total - claims.unsourced - unchecked;
+  const claimsSentence = `${sourcedClaims} of ${claims.total} claims from your sources`;
+  const uncheckedNote = unchecked > 0 ? `${unchecked} ${unchecked === 1 ? "claim" : "claims"} could not be checked` : null;
+  const claimsLabel = uncheckedNote ? `${claimsSentence}. ${uncheckedNote}.` : claimsSentence;
+  const slidesUnavailable = !sourcesAvailable ? SOURCE_LIST_UNAVAILABLE : !firstCitation ? "This version has no source citations." : null;
+
+  // Rare document actions live in the strip's More menu.
+  const menuItems: ModeMenuItem[] = [];
+  if (canRecheck && showClaimCount) {
+    menuItems.push({
+      id: "check-again",
+      label: checking ? "Checking" : "Check again",
+      hint: claimsLabel,
+      disabled: busy || checking || editing,
+      onSelect: () => void recheckClaims(),
+    });
+  }
+  menuItems.push({
+    id: "open-slides",
+    label: "Open slides",
+    hint: slidesUnavailable ?? undefined,
+    disabled: Boolean(slidesUnavailable),
+    onSelect: () => {
+      if (!sourcesAvailable || !firstCitation) return;
+      openSource({ source: firstCitation.source, page: firstCitation.pageStart });
+    },
+  });
+  if (kind === "locked_in" && !editing) {
+    menuItems.push({
+      id: "pin",
+      label: view.isPinned ? "Unpin" : "Pin",
+      hint: view.isPinned ? "Pinned and protected from silent overwrite" : "Protect from silent overwrite",
+      disabled: busy,
+      onSelect: () => void togglePinned(),
+    });
+  }
+  if (!editing && (earlierAnnotations.length || earlierCursor)) {
+    menuItems.push({
+      id: "earlier",
+      label: `Earlier version (${earlierAnnotations.length})`,
+      onSelect: () => setPanelRequest({ kind: "earlier", nonce: Date.now() }),
+    });
+  }
+  useModeMenuItems(`doc:${kind}`, menuItems);
+
   return (
     <div className="space-y-3">
-      {showClaimCount ? (
-        <div className="print-hide flex flex-wrap items-center gap-2">
-          <p className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-foreground">
-            <SealCheck weight="bold" className="size-3.5 text-primary" aria-hidden />
-            {claims.total - claims.unsourced - unchecked} of {claims.total} claims from your sources
-          </p>
-          {unchecked > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {unchecked} {unchecked === 1 ? "claim" : "claims"} could not be checked
-            </p>
-          ) : null}
-          {canRecheck ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => void recheckClaims()} disabled={busy || checking || editing}>
-              {checking ? "Checking" : "Check again"}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      {!editing ? (
-        <StudySidePanel
-          markdown={view.content}
-          annotations={annotations}
-          earlierCursor={earlierCursor}
-          earlierBusy={earlierBusy}
-          onLoadEarlier={() => void loadEarlier()}
-        />
-      ) : null}
-      <div className="print-hide flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => { if (editing) forgetDraft(); setError(null); setDraft(view.content); setDraftRevision(view.revision); setSelection(null); setSelectionAnchor(null); setEditing((current) => !current); }} disabled={busy}>
-          {editing ? "Cancel edit" : `Edit ${kind === "summary" ? "Summary" : "Locked In"}`}
-        </Button>
-        {kind === "locked_in" && !editing ? <Button type="button" variant="outline" size="sm" onClick={() => void togglePinned()} disabled={busy}>{view.isPinned ? "Unpin" : "Pin"}</Button> : null}
-        {!editing ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            aria-disabled={!sourcesAvailable || !firstCitation}
-            title={!sourcesAvailable ? SOURCE_LIST_UNAVAILABLE : !firstCitation ? "This version has no source citations." : "Open the first cited page"}
-            className={!sourcesAvailable || !firstCitation ? "cursor-not-allowed opacity-50" : undefined}
-            onClick={() => {
-              if (!sourcesAvailable || !firstCitation) return;
-              openSource({ source: firstCitation.source, page: firstCitation.pageStart });
-            }}
+      <ModeActions>
+        {showClaimCount && !editing ? (
+          <p
+            className="inline-flex min-h-11 items-center gap-1.5 px-2 text-xs font-medium text-foreground"
+            title={claimsLabel}
           >
-            <Presentation />
-            Sources
-          </Button>
+            <SealCheck weight="bold" className="size-3.5 text-primary" aria-hidden />
+            <span aria-hidden>{sourcedClaims}/{claims.total} sourced</span>
+            <span className="sr-only">{claimsLabel}</span>
+          </p>
         ) : null}
+        {!editing ? (
+          <StudySidePanel
+            markdown={view.content}
+            annotations={annotations}
+            earlierCursor={earlierCursor}
+            earlierBusy={earlierBusy}
+            onLoadEarlier={() => void loadEarlier()}
+            openRequest={panelRequest}
+          />
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={editing ? "min-h-11" : "min-h-11 max-sm:w-11 max-sm:px-0"}
+          aria-label={editing ? undefined : `Edit ${modeLabel}`}
+          onClick={() => { if (editing) forgetDraft(); setError(null); setDraft(view.content); setDraftRevision(view.revision); setSelection(null); setSelectionAnchor(null); setEditing((current) => !current); }}
+          disabled={busy}
+        >
+          {editing ? "Cancel edit" : (
+            <>
+              <PencilSimple weight="bold" aria-hidden />
+              <span className="max-sm:sr-only">Edit</span>
+            </>
+          )}
+        </Button>
         {!editing ? (
           <StudyExport reviewerId={reviewerId} kind={kind} reviewerName={reviewerName || modeLabel} modeLabel={modeLabel} markdown={view.content} annotations={annotations} />
         ) : null}
-        {editing ? <Button type="button" size="sm" onClick={() => void save(draft)} disabled={busy || !draft.trim() || draftIsStale}>{busy ? "Saving" : "Save changes"}</Button> : null}
-        {kind === "locked_in" && view.isPinned ? <span className="text-xs text-warning">Pinned and protected from silent overwrite</span> : null}
-        {!editing ? <span className="text-xs text-muted-foreground">Select text to highlight or add a note.</span> : null}
-      </div>
+        {editing ? <Button type="button" size="sm" className="min-h-11" onClick={() => void save(draft)} disabled={busy || !draft.trim() || draftIsStale}>{busy ? "Saving" : "Save changes"}</Button> : null}
+      </ModeActions>
       {restored && editing ? (
         <div role="status" className="print-hide flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
           <ArrowCounterClockwise weight="bold" className="size-3.5 text-primary" aria-hidden />
@@ -655,7 +688,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
             className="print-document reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8"
           >
             <UnsourcedActionsProvider value={unsourcedActions}>
-              <MarkdownBody source={view.content} annotations={activeAnnotations} />
+              <MarkdownBody source={view.content} annotations={activeAnnotations} hideModePrefix />
             </UnsourcedActionsProvider>
           </article>
           {selection ? (

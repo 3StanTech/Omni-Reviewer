@@ -125,8 +125,9 @@ export function StudyExport({ reviewerId, kind, reviewerName, modeLabel, markdow
       <Button
         ref={triggerRef}
         type="button"
-        variant="outline"
+        variant="ghost"
         size="sm"
+        className="min-h-11 max-sm:w-11 max-sm:px-0"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
@@ -139,15 +140,15 @@ export function StudyExport({ reviewerId, kind, reviewerName, modeLabel, markdow
           }
         }}
       >
-        <DownloadSimple />
-        {preparing ? "Preparing PDF" : "Download"}
+        <DownloadSimple weight="bold" aria-hidden />
+        <span className="max-sm:sr-only">{preparing ? "Preparing PDF" : "Download"}</span>
       </Button>
       {error ? (
-        <span role="alert" className="absolute top-full left-0 mt-1 text-xs whitespace-nowrap text-destructive">
+        <span role="alert" className="absolute top-full right-0 mt-1 text-xs whitespace-nowrap text-destructive">
           {error}
         </span>
       ) : null}
-      <div hidden={!open} className="absolute top-full left-0 z-50 pt-2">
+      <div hidden={!open} className="absolute top-full right-0 z-50 pt-2">
         <div
           ref={menuRef}
           id={menuId}

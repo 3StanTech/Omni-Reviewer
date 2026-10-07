@@ -9,18 +9,21 @@ describe("study document interaction contracts", () => {
   it("offers Check again for unsourced claims as well as unchecked claims", () => {
     const document = read("components/study-document.tsx");
     expect(document).toContain("const canRecheck = claims.unsourced > 0 || unchecked > 0;");
-    const start = document.indexOf("{canRecheck ? (");
+    // Check again is a More item registered by the document, not a toolbar button.
+    const start = document.indexOf('id: "check-again"');
     expect(start).toBeGreaterThan(-1);
-    const control = document.slice(start, document.indexOf(") : null}", start));
-    expect(control).toContain("<Button");
-    expect(control).toContain("onClick={() => void recheckClaims()}");
-    expect(control).toContain('{checking ? "Checking" : "Check again"}');
-    // The failure notice still describes only unchecked claims.
-    const noticeStart = document.indexOf("{unchecked > 0 ? (");
+    const item = document.slice(start, document.indexOf("});", start));
+    expect(item).toContain('label: checking ? "Checking" : "Check again"');
+    expect(item).toContain("disabled: busy || checking || editing");
+    expect(item).toContain("onSelect: () => void recheckClaims()");
+    expect(document.slice(document.lastIndexOf("if (", start), start)).toContain("canRecheck");
+    // The unchecked note describes only unchecked claims and rides on the claims chip.
+    const noticeStart = document.indexOf("const uncheckedNote = unchecked > 0 ?");
     expect(noticeStart).toBeGreaterThan(-1);
-    const notice = document.slice(noticeStart, document.indexOf(") : null}", noticeStart));
+    const notice = document.slice(noticeStart, document.indexOf("\n", noticeStart));
     expect(notice).toContain("could not be checked");
     expect(notice).not.toContain("Check again");
+    expect(document).toContain("title={claimsLabel}");
   });
 
   it("refreshes annotations after saves and preserves the Locked In pin control", () => {

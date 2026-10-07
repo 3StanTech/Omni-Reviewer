@@ -453,6 +453,26 @@
     max-width: 100%;
   }
 
+  /* Desktop: Contents, Notes and Earlier version open as a popover under the strip. */
+  @media (min-width: 641px) {
+    .study-side-panel-drawer {
+      position: absolute;
+      top: calc(100% + 0.5rem);
+      right: 0;
+      z-index: 30;
+      width: min(24rem, calc(100vw - 2rem));
+      max-height: min(70vh, 36rem);
+      overflow-y: auto;
+      background: var(--popover);
+      box-shadow: 0 18px 48px oklch(0 0 0 / 32%);
+    }
+  }
+
+  /* The document title reads without "Locked In:" or "Summary:" on screen; print keeps it. */
+  .study-mode-prefix {
+    display: none;
+  }
+
   .study-side-panel-backdrop,
   .annotation-menu-backdrop {
     display: none;
@@ -543,6 +563,10 @@
   .annotation-menu-anchor,
   .annotation-menu-backdrop {
     display: none !important;
+  }
+
+  .study-mode-prefix {
+    display: inline;
   }
 
   .reading-surface,

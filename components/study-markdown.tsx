@@ -220,6 +220,48 @@ function remarkNumberUnsourced() {
   };
 }
 
+type HastNode = {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+
+const MODE_PREFIX = /^(Locked In|Summary)\s*:\s*/;
+
+function firstElement(node: HastNode, tagName: string): HastNode | null {
+  for (const child of node.children ?? []) {
+    if (child.type === "element" && child.tagName === tagName) return child;
+    const nested = firstElement(child, tagName);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+/**
+ * Wrap the "Locked In:" or "Summary:" prefix of the document's first H1 in a
+ * span that CSS hides on screen and shows in print. The text stays in the DOM,
+ * so annotation offsets and copied text are unchanged.
+ */
+function rehypeHideModePrefix() {
+  return (tree: HastNode) => {
+    const h1 = firstElement(tree, "h1");
+    const first = h1?.children?.[0];
+    if (!h1 || !first || first.type !== "text" || typeof first.value !== "string") return;
+    const match = MODE_PREFIX.exec(first.value);
+    if (!match) return;
+    const rest = first.value.slice(match[0].length);
+    const prefix: HastNode = {
+      type: "element",
+      tagName: "span",
+      properties: { className: ["study-mode-prefix"] },
+      children: [{ type: "text", value: match[0] }],
+    };
+    h1.children = [prefix, ...(rest ? [{ type: "text", value: rest }] : []), ...(h1.children ?? []).slice(1)];
+  };
+}
+
 type SpanProps = ComponentProps<"span"> & ExtraProps;
 type DataAttributes = Record<`data-${string}`, string | undefined>;
 
@@ -349,7 +391,18 @@ const inlineComponents: Components = {
   hr: () => <span aria-hidden="true" />,
 };
 
-export function MarkdownBody({ source, inline = false, annotations }: { source: string; inline?: boolean; annotations?: AnnotationRecord[] }) {
+export function MarkdownBody({
+  source,
+  inline = false,
+  annotations,
+  hideModePrefix = false,
+}: {
+  source: string;
+  inline?: boolean;
+  annotations?: AnnotationRecord[];
+  /** Hide the "Locked In:"/"Summary:" prefix of the first H1 on screen (print keeps it). */
+  hideModePrefix?: boolean;
+}) {
   const prepared = prepareStudyMarkdown(source);
   if (!prepared) {
     return (
@@ -405,6 +458,8 @@ export function MarkdownBody({ source, inline = false, annotations }: { source: 
             },
           ],
           [rehypeSanitize, studySanitizeSchema],
+          // After sanitize: the prefix span is ours, not user Markdown.
+          ...(hideModePrefix && !inline ? [rehypeHideModePrefix] : []),
         ]}
         components={renderedComponents}
       >

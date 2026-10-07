@@ -1,15 +1,18 @@
 "use client";
 
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { ListBullets, NotePencil } from "@phosphor-icons/react";
 
 import { useOptionalAsk } from "@/components/ask-provider";
 import { MasteryBar } from "@/components/mastery-bar";
 import { SourceViewerProvider } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
 import { UnsourcedActionsProvider } from "@/components/unsourced-tag";
+import { buttonVariants } from "@/components/ui/button";
 import type { AnnotationRecord } from "@/lib/annotations";
 import type { SectionMastery } from "@/lib/mastery";
 import { outlineHeadingHref, studyOutline, type StudyHeading } from "@/lib/study-outline";
+import { cn } from "@/lib/utils";
 
 const SectionMasteryContext = createContext<SectionMastery[] | null>(null);
 
@@ -103,24 +106,38 @@ export function ContentsList({ headings, sections, onNavigate }: { headings: Stu
   );
 }
 
+export type PanelKind = "contents" | "notes" | "earlier";
+
+/** Opens a panel from outside the strip (Earlier version lives in More); a new nonce reopens it. */
+export type PanelOpenRequest = { kind: PanelKind; nonce: number };
+
 type StudySidePanelProps = {
   markdown: string;
   annotations: AnnotationRecord[];
   earlierCursor?: string | null;
   earlierBusy?: boolean;
   onLoadEarlier?: () => void;
+  openRequest?: PanelOpenRequest | null;
 };
 
-type PanelKind = "contents" | "notes" | "earlier";
+const TRIGGER_CLASS = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 max-sm:w-11 max-sm:px-0");
 
-export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBusy = false, onLoadEarlier }: StudySidePanelProps) {
+export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBusy = false, onLoadEarlier, openRequest = null }: StudySidePanelProps) {
   const [open, setOpen] = useState<PanelKind | null>(null);
+  // A request made before this panel mounted (e.g. before an edit) does not reopen it.
+  const [seenRequest, setSeenRequest] = useState<number | null>(() => openRequest?.nonce ?? null);
+  if (openRequest && openRequest.nonce !== seenRequest) {
+    setSeenRequest(openRequest.nonce);
+    setOpen(openRequest.kind);
+  }
   const headings = useMemo(() => studyOutline(markdown), [markdown]);
   const sectionMastery = useContext(SectionMasteryContext);
   const savedAnswerCount = useOptionalAsk()?.savedCount ?? 0;
   const active = annotations.filter((annotation) => !annotation.archivedAt);
   const earlier = annotations.filter((annotation) => annotation.archivedAt);
+  const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const notesTriggerRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelHeadingId = useId();
   const [compactSheet, setCompactSheet] = useState(false);
@@ -135,6 +152,8 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
 
   useEffect(() => {
     if (open) {
+      // Opened from More: closing returns focus to the nearest strip control.
+      if (!triggerRef.current) triggerRef.current = notesTriggerRef.current;
       panelRef.current?.focus();
       return;
     }
@@ -188,6 +207,21 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node) || rootRef.current?.contains(target)) return;
+      // A source viewer or menu opened from the panel is not an outside click.
+      if (target instanceof Element && target.closest("[role='dialog'], [role='menu']")) return;
+      // Leave focus where the reader clicked.
+      triggerRef.current = null;
+      setOpen(null);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
   function toggle(kind: PanelKind, event: MouseEvent<HTMLButtonElement>) {
     if (open === kind) {
       setOpen(null);
@@ -198,10 +232,15 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
   }
 
   return (
-    <div className="study-side-panel flex flex-wrap gap-2" aria-label="Study navigation">
-      <button type="button" className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" aria-expanded={open === "contents"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("contents", event)}>Contents</button>
-      <button type="button" className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" aria-expanded={open === "notes"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("notes", event)}>Notes ({active.length + savedAnswerCount})</button>
-      {earlier.length || earlierCursor ? <button type="button" className="min-h-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" aria-expanded={open === "earlier"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("earlier", event)}>Earlier version ({earlier.length})</button> : null}
+    <div ref={rootRef} className="study-side-panel relative flex items-center gap-1" aria-label="Study navigation">
+      <button type="button" className={TRIGGER_CLASS} aria-expanded={open === "contents"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("contents", event)}>
+        <ListBullets weight="bold" aria-hidden />
+        <span className="max-sm:sr-only">Contents</span>
+      </button>
+      <button ref={notesTriggerRef} type="button" className={TRIGGER_CLASS} aria-expanded={open === "notes"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("notes", event)}>
+        <NotePencil weight="bold" aria-hidden />
+        <span className="max-sm:sr-only">Notes ({active.length + savedAnswerCount})</span>
+      </button>
       {open ? (
         <>
         <button
@@ -214,7 +253,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
         <div
           ref={panelRef}
           id={`${panelHeadingId}-panel`}
-          className="study-side-panel-drawer basis-full rounded-lg border border-border/70 bg-muted/20 p-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+          className="study-side-panel-drawer rounded-lg border border-border/70 bg-popover p-3 text-sm text-popover-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
           role="dialog"
           aria-modal={compactSheet}
           aria-labelledby={panelHeadingId}
@@ -227,7 +266,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
           {open === "contents" ? <nav className="mt-3" aria-label="Document contents"><ContentsList headings={headings} sections={sectionMastery} onNavigate={() => setOpen(null)} /></nav> : null}
           {open === "notes" ? (
             <>
-              <ul className="mt-3 space-y-2">{active.length ? active.map((annotation) => <li key={annotation.id}><span className={`user-annotation-${annotation.color} rounded px-1`}>{annotation.quote}</span>{annotation.note ? <span className="text-muted-foreground"> · {annotation.note}</span> : null}</li>) : <li className="text-muted-foreground">No highlights or notes yet.</li>}</ul>
+              <ul className="mt-3 space-y-2">{active.length ? active.map((annotation) => <li key={annotation.id}><span className={`user-annotation-${annotation.color} rounded px-1`}>{annotation.quote}</span>{annotation.note ? <span className="text-muted-foreground"> · {annotation.note}</span> : null}</li>) : <li className="text-muted-foreground">No highlights or notes yet. Select text in the document to highlight or add a note.</li>}</ul>
               <FromAsk />
             </>
           ) : null}
