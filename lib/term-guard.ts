@@ -6,6 +6,7 @@
  * details did not.
  */
 
+import { ACRONYM_ALIASES } from "@/lib/acronym-aliases";
 import { citationPattern, UNSOURCED_TOKEN } from "@/lib/citations";
 
 /**
@@ -58,6 +59,9 @@ export function buildSourceVocabulary(texts: readonly string[]): SourceVocabular
 }
 
 const ALLOWLIST = new Set(["gram", "table", "figure", "note", "example", "type", "class"]);
+
+/** Word prefixes written as a hyphenated first part ("De-escalation"); a capital on one is style, not a name. */
+const HYPHEN_PREFIXES = new Set(["de", "re", "co", "non", "pre", "post", "anti", "sub", "semi", "multi", "inter", "intra", "self", "over", "under", "pro"]);
 
 const MEDICAL_SUFFIXES = [
   "emia", "itis", "osis", "ase", "mycin", "cillin", "cycline", "azole", "floxacin", "vir", "cide", "penem", "dependent",
@@ -174,9 +178,13 @@ function findTerms(sentence: string): FoundTerm[] {
       const abbreviated = parts.some((part) => !/\p{N}/u.test(part) && isExactToken(part));
       const whole = (!inLabel && /\p{N}/u.test(word)) || abbreviated || hasMedicalSuffix(word);
       if (whole) add(word);
-      const specificParts = parts.map(
-        (part, index) => !isRomanNumeral(part) && !isAllowlisted(part) && specificWord(part, atBoundary && index === 0, inLabel),
-      );
+      // A capitalized prefix part ("De" of "De-escalation") reads as at a boundary, so the
+      // compound is judged the same mid-sentence as at the start of a sentence.
+      const specificParts = parts.map((part, index) => {
+        if (isRomanNumeral(part) || isAllowlisted(part)) return false;
+        const prefix = index === 0 && parts.length > 1 && HYPHEN_PREFIXES.has(part.toLowerCase());
+        return specificWord(part, (atBoundary && index === 0) || prefix, inLabel);
+      });
       // Ordinary parts of 4+ letters count only beside a specific one ("calcium" of
       // "calcium-dependent"), never in a compound of ordinary words ("peptide-chain").
       const specificCompound = whole || specificParts.some(Boolean);
@@ -275,6 +283,11 @@ function expansionPresent(acronym: string, sentence: string, vocab: SourceVocabu
   return false;
 }
 
+/** An acronym with a listed synonym ("PCP" for "Pneumocystis jiroveci pneumonia") that the source has. */
+function aliasPresent(term: string, vocab: SourceVocabulary): boolean {
+  return (ACRONYM_ALIASES[term.toUpperCase()] ?? []).some((alias) => termPresent(alias, vocab));
+}
+
 /**
  * Specific terms of the sentence that the source text never mentions. A part
  * of a hyphenated word ("SC" of "DSB-SC") is not reported on its own when the
@@ -283,7 +296,7 @@ function expansionPresent(acronym: string, sentence: string, vocab: SourceVocabu
 export function absentTerms(sentence: string, vocab: SourceVocabulary): string[] {
   return findTerms(sentence)
     .filter(({ term, standalone, compounds }) => {
-      if (termPresent(term, vocab) || expansionPresent(term, sentence, vocab)) return false;
+      if (termPresent(term, vocab) || expansionPresent(term, sentence, vocab) || aliasPresent(term, vocab)) return false;
       return standalone || !compounds.some((compound) => termPresent(compound, vocab));
     })
     .map(({ term }) => term);

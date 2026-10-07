@@ -187,6 +187,13 @@ describe("absentTerms", () => {
     expect(absentTerms("- De-escalation follows once specimens are collected.", vocabulary)).toEqual([]);
   });
 
+  it("judges a capitalized prefix compound mid-sentence the same as at the start", () => {
+    const vocabulary = buildSourceVocabulary(["Collect appropriate specimens before therapy; narrow coverage once culture results return."]);
+    expect(absentTerms("Collect specimens before therapy, then De-escalation narrows coverage.", vocabulary)).toEqual([]);
+    expect(absentTerms("Patients on Non-invasive ventilation need specimens.", vocabulary)).toEqual([]);
+    expect(absentTerms("Collect specimens, then give TMP-SMX.", vocabulary)).toEqual(["TMP-SMX", "TMP", "SMX"]);
+  });
+
   describe("acronyms", () => {
     const vocabulary = buildSourceVocabulary(["TMP-SMX treats Pneumocystis jiroveci pneumonia."]);
 
@@ -195,11 +202,20 @@ describe("absentTerms", () => {
     });
 
     it("flags an acronym the sentence does not spell out", () => {
-      expect(absentTerms("TMP-SMX is used for PCP.", vocabulary)).toEqual(["PCP"]);
+      expect(absentTerms("TMP-SMX is used for VAP.", vocabulary)).toEqual(["VAP"]);
     });
 
     it("flags an acronym whose spelled-out phrase the source lacks", () => {
-      expect(absentTerms("Pneumocystis carinii pneumonia (PCP) responds to TMP-SMX.", vocabulary)).toEqual(["PCP"]);
+      expect(absentTerms("Ventilator associated pneumonia (VAP) responds to TMP-SMX.", vocabulary)).toEqual(["VAP"]);
+    });
+
+    it("accepts a listed synonym acronym when the source has its alias", () => {
+      expect(absentTerms("TMP-SMX is used for PCP.", vocabulary)).toEqual([]);
+      expect(absentTerms("TMP-SMX is used for PCP.", buildSourceVocabulary(["PJP prophylaxis uses TMP-SMX."]))).toEqual([]);
+    });
+
+    it("still flags a listed synonym acronym when the source has no alias", () => {
+      expect(absentTerms("TMP-SMX is used for PCP.", buildSourceVocabulary(["TMP-SMX treats urinary infections."]))).toEqual(["PCP"]);
     });
   });
 
