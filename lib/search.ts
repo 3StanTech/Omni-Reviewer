@@ -21,9 +21,15 @@ export type SnippetSegment = { text: string; mark: boolean };
 
 const PAGE_MARKER_LINES = /^<<<(?:page \d{1,4}|slide image)>>>$/gm;
 
-/** A citation `ts_headline` cut at the fragment's end (`[S1 p.12`) or start (`p.4]`). */
-const CUT_CITATION_END = /\[\[?(?:S\d*(?:\s*p\.?\s*\d*)?|unsourced)?\s*$/;
-const CUT_CITATION_START = /^\s*(?:S?\d*\s*p\.?\s*\d+|unsourced)?\]\]?/;
+/**
+ * A citation `ts_headline` cut at the fragment's end (`[S1 p.11, p.15`, `[S1 p.3-4,`) or the
+ * tail of one cut at its start (`p.4]`, `, p.15]`, `p.11, p.15]`). Page lists follow the
+ * citation grammar in `lib/citations.ts`.
+ */
+const CUT_CITATION_END =
+  /\[\[?(?:S\d*(?:\s*pp?\.?\s*\d*(?:\s*-\s*\d*)?(?:\s*,\s*(?:pp?\.?\s*\d*(?:\s*-\s*\d*)?)?)*)?|unsourced)?\s*$/;
+const CUT_CITATION_START =
+  /^\s*(?:unsourced|S?\d*(?:\s*,?\s*pp?\.?\s*\d+(?:\s*-\s*\d+)?)*)\s*\]\]?/;
 
 const ELLIPSIS = "…";
 

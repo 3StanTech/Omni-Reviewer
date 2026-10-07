@@ -82,6 +82,18 @@ describe("cleanSnippet", () => {
     expect(cleanSnippet("S2 p.10]] Binds «30S».").map((s) => s.text).join("")).toBe("Binds 30S.");
   });
 
+  it("drops a cut citation with several pages at either edge", () => {
+    const joined = (raw: string) => cleanSnippet(raw).map((s) => s.text).join("");
+    expect(joined("Allergic «sensitivity» [S1 p.11, p.15")).toBe("Allergic sensitivity…");
+    expect(joined("Allergic «sensitivity» [S1 p.11, p.")).toBe("Allergic sensitivity…");
+    expect(joined("Allergic «sensitivity» [S1 p.3-4,")).toBe("Allergic sensitivity…");
+    expect(joined("Allergic «sensitivity» [S1 pp.3-")).toBe("Allergic sensitivity…");
+    expect(joined("p.15] Penicillin «binds» PBPs.")).toBe("Penicillin binds PBPs.");
+    expect(joined(", p.15] Penicillin «binds» PBPs.")).toBe("Penicillin binds PBPs.");
+    expect(joined("p.11, p.15] Penicillin «binds» PBPs.")).toBe("Penicillin binds PBPs.");
+    expect(joined("S1 pp.3-4, p.9] Penicillin «binds» PBPs.")).toBe("Penicillin binds PBPs.");
+  });
+
   it("adds ellipses only where the fragment is cut", () => {
     expect(cleanSnippet("Binds the «30S» subunit.")).toEqual([
       { text: "Binds the ", mark: false },
