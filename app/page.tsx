@@ -9,6 +9,7 @@ import { greetingFor } from "@/lib/greeting";
 import {
   getTodayPlan,
   listActiveUntimedReviewerIds,
+  listDueByTopic,
   listReviewersByTopic,
   listTopics,
   packMasterySummary,
@@ -45,10 +46,11 @@ export default async function HomePage({ searchParams }: HomeProps) {
   const selectedTopic =
     topics.find((t) => t.id === selectedId) ?? null;
 
-  const [reviewers, activeUntimed, today] = await Promise.all([
+  const [reviewers, activeUntimed, today, dueCounts] = await Promise.all([
     selectedId ? listReviewersByTopic(selectedId, userId) : [],
     selectedId ? listActiveUntimedReviewerIds(userId) : [],
     getTodayPlan(userId),
+    listDueByTopic(userId),
   ]);
   const activeUntimedIds = new Set(activeUntimed);
 
@@ -66,10 +68,8 @@ export default async function HomePage({ searchParams }: HomeProps) {
     mastery: packMasterySummary(today?.mastery.get(r.id)),
   }));
 
-  const dueTodayCount = serializedReviewers.reduce(
-    (sum, reviewer) => sum + reviewer.dueTodayCount,
-    0,
-  );
+  const dueByTopic = Object.fromEntries(dueCounts);
+  const dueTodayTotal = [...dueCounts.values()].reduce((sum, count) => sum + count, 0);
 
   return (
     <AppShell
@@ -77,7 +77,8 @@ export default async function HomePage({ searchParams }: HomeProps) {
       subtitle="Pick a topic, open a study pack, attach sources, then generate when you are ready."
       topics={serializedTopics}
       selectedTopicId={selectedId}
-      dueTodayCount={dueTodayCount}
+      dueByTopic={dueByTopic}
+      dueTodayTotal={dueTodayTotal}
     >
       <StudyHome
         topics={serializedTopics}

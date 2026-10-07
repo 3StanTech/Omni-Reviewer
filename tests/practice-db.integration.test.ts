@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 vi.mock("server-only", () => ({}));
 const authMock = vi.hoisted(() => vi.fn());
@@ -14,7 +14,9 @@ import { db } from "@/lib/db";
 import {
   createOrResumeTimedTestSession,
   createOrResumeUntimedPracticeSession,
+  getTodayPlan,
   getUntimedPracticeSession,
+  listDueByTopic,
   recordUntimedTestAttempt,
   restartUntimedPracticeSession,
   retryMissedUntimedPracticeSession,
@@ -556,5 +558,55 @@ describeDb("practice session SQL integration", () => {
       expiresAt: null,
       itemIds: [],
     })).rejects.toThrow();
+  }, 30_000);
+  it("counts due cards per live topic for the owner only, matching the Today plan", async () => {
+    const ownerId = randomUUID();
+    const otherOwnerId = randomUUID();
+    await db.insert(users).values([
+      { id: ownerId, email: `due-topics-${ownerId}@example.invalid`, passwordHash: "integration-only" },
+      { id: otherOwnerId, email: `due-topics-${otherOwnerId}@example.invalid`, passwordHash: "integration-only" },
+    ]);
+    try {
+      const past = new Date(Date.now() - 60_000);
+      async function seedTopic(owner: string, cardCount: number, deleting = false) {
+        const topicId = randomUUID();
+        const reviewerId = randomUUID();
+        await db.insert(topics).values({
+          id: topicId,
+          userId: owner,
+          name: `Due ${topicId}`,
+          deletingAt: deleting ? new Date() : null,
+        });
+        await db.insert(reviewers).values({ id: reviewerId, topicId, name: "Due integration" });
+        await db.insert(cards).values(
+          Array.from({ length: cardCount }, (_, index) => ({
+            reviewerId,
+            sourceKey: `c${index}`,
+            front: `Front ${index}`,
+            back: `Back ${index}`,
+            dueAt: past,
+          })),
+        );
+        return topicId;
+      }
+      const first = await seedTopic(ownerId, 2);
+      const second = await seedTopic(ownerId, 3);
+      const deleting = await seedTopic(ownerId, 4, true);
+      const foreign = await seedTopic(otherOwnerId, 5);
+
+      const now = new Date();
+      const byTopic = await listDueByTopic(ownerId, now);
+      expect([...byTopic.keys()].sort()).toEqual([first, second].sort());
+      expect(byTopic.get(first)).toBeGreaterThan(0);
+      expect(byTopic.get(second)).toBeGreaterThan(0);
+      expect(byTopic.has(deleting)).toBe(false);
+      expect(byTopic.has(foreign)).toBe(false);
+
+      const today = await getTodayPlan(ownerId, now);
+      const total = [...byTopic.values()].reduce((sum, count) => sum + count, 0);
+      expect(total).toBe(today?.plan.bar.dueCards);
+    } finally {
+      await db.delete(users).where(inArray(users.id, [ownerId, otherOwnerId]));
+    }
   }, 30_000);
 });

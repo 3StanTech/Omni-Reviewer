@@ -214,7 +214,7 @@ export function TopicTabs({
                         variant="ghost"
                         size="icon-sm"
                         className={cn(
-                          "mr-1 size-8 opacity-70 group-hover:opacity-100",
+                          "mr-1 size-8 opacity-70 group-hover:opacity-100 pointer-coarse:size-11",
                           selected && "opacity-100",
                         )}
                         aria-label={`Topic actions for ${topic.name}`}

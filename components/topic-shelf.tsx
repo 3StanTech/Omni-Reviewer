@@ -22,6 +22,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { readLocalStorage, writeLocalStorage } from "@/lib/safe-storage";
+import { useIsClient } from "@/lib/use-is-client";
 
 import type { TopicListItem } from "@/components/topic-tabs";
 import { Button } from "@/components/ui/button";
@@ -56,12 +57,19 @@ type TopicNavValue = {
 const TopicNavContext = createContext<TopicNavValue | null>(null);
 const TOPIC_SHELF_TOGGLE_ID = "topic-shelf-toggle";
 const shelfListeners = new Set<() => void>();
+// Below 768px the shelf is a drawer that starts closed on every load; the
+// stored preference belongs to the desktop shelf only.
+let drawerOpen = false;
+
+function isDesktopShelf(): boolean {
+  return window.matchMedia("(min-width: 768px)").matches;
+}
 
 function readShelfOpen(): boolean {
+  if (!isDesktopShelf()) return drawerOpen;
   const stored = readLocalStorage(TOPIC_SHELF_STORAGE_KEY);
-  if (stored === "open") return true;
   if (stored === "closed") return false;
-  return window.matchMedia("(min-width: 768px)").matches;
+  return true;
 }
 
 function subscribeShelf(listener: () => void) {
@@ -85,7 +93,11 @@ export function TopicNavProvider({ children }: { children: ReactNode }) {
     () => true,
   );
   const setShelfOpen = useCallback((open: boolean) => {
-    writeLocalStorage(TOPIC_SHELF_STORAGE_KEY, open ? "open" : "closed");
+    if (isDesktopShelf()) {
+      writeLocalStorage(TOPIC_SHELF_STORAGE_KEY, open ? "open" : "closed");
+    } else {
+      drawerOpen = open;
+    }
     emitShelf();
   }, []);
 
@@ -125,16 +137,21 @@ export function useTopicNav(): TopicNavValue | null {
 type TopicShelfProps = {
   topics: TopicListItem[];
   selectedId: string | null;
-  dueTodayCount: number;
+  dueByTopic?: Record<string, number>;
+  dueTodayTotal: number;
 };
 
 export function TopicShelf({
   topics,
   selectedId,
-  dueTodayCount,
+  dueByTopic,
+  dueTodayTotal,
 }: TopicShelfProps) {
   const router = useRouter();
   const topicNav = useTopicNav();
+  // The server snapshot reads the shelf as open (desktop); until hydration the
+  // phone drawer and its backdrop stay out of the render.
+  const isClient = useIsClient();
   const shelfOpen = topicNav?.shelfOpen ?? true;
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -251,6 +268,7 @@ export function TopicShelf({
 
   return (
     <>
+    {isClient ? (
     <button
       type="button"
       className="fixed inset-0 z-40 bg-black/40 md:hidden"
@@ -260,9 +278,13 @@ export function TopicShelf({
         focusShelfToggle();
       }}
     />
+    ) : null}
     <aside
       id={TOPIC_SHELF_ID}
-      className="fixed inset-y-0 left-0 z-50 flex h-svh w-[min(228px,86vw)] shrink-0 flex-col overflow-y-auto border-r border-border bg-chrome md:sticky md:z-auto md:w-[228px]"
+      className={cn(
+        "fixed inset-y-0 left-0 z-50 flex h-svh w-[min(228px,86vw)] shrink-0 flex-col overflow-y-auto border-r border-border bg-chrome md:sticky md:z-auto md:w-[228px]",
+        !isClient && "max-md:hidden",
+      )}
       aria-label="Topic shelf"
     >
       <div className="flex flex-col gap-1 p-3">
@@ -270,7 +292,7 @@ export function TopicShelf({
           <CalendarBlank className="size-4 shrink-0" />
           <span>Due today</span>
           <span className="ml-auto tabular-nums text-foreground">
-            {dueTodayCount}
+            {dueTodayTotal}
           </span>
         </div>
 
@@ -301,6 +323,7 @@ export function TopicShelf({
           <nav aria-label="Topics" className="flex flex-col gap-0.5">
             {topics.map((topic) => {
               const selected = topic.id === selectedId;
+              const due = dueByTopic?.[topic.id] ?? 0;
               return (
                 <div
                   key={topic.id}
@@ -321,6 +344,14 @@ export function TopicShelf({
                   >
                     {topic.name}
                   </Link>
+                  {due > 0 ? (
+                    <span
+                      className="ml-auto pl-1 tabular-nums text-xs text-muted-foreground"
+                      aria-label={`${due} due today`}
+                    >
+                      {due}
+                    </span>
+                  ) : null}
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       render={
@@ -329,7 +360,7 @@ export function TopicShelf({
                           variant="ghost"
                           size="icon-xs"
                           className={cn(
-                            "mr-1 opacity-70 group-hover:opacity-100",
+                            "mr-1 opacity-70 group-hover:opacity-100 pointer-coarse:size-11",
                             selected && "opacity-100",
                           )}
                           aria-label={`Topic actions for ${topic.name}`}

@@ -11,7 +11,7 @@ import {
   getCardsForReviewer,
   getMasteryForReviewer,
   getTopic,
-  listReviewersByTopic,
+  listDueByTopic,
   listTestAttemptStats,
   listSourcesForUi,
   listTopics,
@@ -47,21 +47,19 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
   const reviewer = await getReviewer(reviewerId, userId);
   if (!reviewer || reviewer.topicId !== topicId) notFound();
 
-  const [sourceRows, viewMeta, cards, testAttemptStats, topics, topicPacks, mastery, savedAnswerCount] =
+  const [sourceRows, viewMeta, cards, testAttemptStats, topics, dueCounts, mastery, savedAnswerCount] =
     await Promise.all([
       listSourcesForUi(reviewerId, userId),
       listViewMetaByReviewer(reviewerId, userId),
       getCardsForReviewer(reviewerId, userId),
       listTestAttemptStats(reviewerId, userId),
       listTopics(userId),
-      listReviewersByTopic(topicId, userId),
+      listDueByTopic(userId),
       getMasteryForReviewer(reviewerId, userId),
       countSavedAnswers(reviewerId, userId),
     ]);
-  const dueTodayCount = topicPacks.reduce(
-    (sum, pack) => sum + pack.dueTodayCount,
-    0,
-  );
+  const dueByTopic = Object.fromEntries(dueCounts);
+  const dueTodayTotal = [...dueCounts.values()].reduce((sum, count) => sum + count, 0);
   const initialSources: SourceListItem[] = sourceRows.map((s) => ({
     id: s.id,
     reviewerId: s.reviewerId,
@@ -116,7 +114,8 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
         createdAt: item.createdAt.toISOString(),
       }))}
       selectedTopicId={topic.id}
-      dueTodayCount={dueTodayCount}
+      dueByTopic={dueByTopic}
+      dueTodayTotal={dueTodayTotal}
     >
       <SectionMasteryProvider sections={mastery?.sections ?? null}>
         <ReviewerWorkspace

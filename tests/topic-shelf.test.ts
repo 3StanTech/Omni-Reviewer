@@ -30,14 +30,38 @@ describe("topic shelf", () => {
     expect(shell).toContain("TopicShelf");
     expect(shell).toContain("MoodControl");
     expect(shell).toContain("topics={topics}");
-    expect(shell).toContain("dueTodayCount={dueTodayCount}");
+    expect(shell).toContain("dueByTopic={dueByTopic}");
+    expect(shell).toContain("dueTodayTotal={dueTodayTotal}");
   });
 
-  it("sums selected-topic dueTodayCount on home and labels Due today", () => {
-    expect(page).toContain("dueTodayCount={dueTodayCount}");
-    expect(page).toContain("sum + reviewer.dueTodayCount");
+  it("totals Due today across every topic from listDueByTopic, on home and on a pack", () => {
+    for (const source of [page, reviewer]) {
+      expect(source).toContain("listDueByTopic(userId)");
+      expect(source).toContain("dueByTopic={dueByTopic}");
+      expect(source).toContain("dueTodayTotal={dueTodayTotal}");
+      expect(source).not.toContain("dueTodayCount={");
+    }
+    expect(page).not.toContain("sum + reviewer.dueTodayCount");
     expect(shelf).toContain("Due today");
-    expect(shelf).toContain("{dueTodayCount}");
+    expect(shelf).toContain("{dueTodayTotal}");
+  });
+
+  it("shows each topic's own due count and a 44px actions button on touch", () => {
+    expect(shelf).toContain("dueByTopic?.[topic.id]");
+    expect(shelf).toContain("aria-label={`${due} due today`}");
+    expect(shelf).toContain("pointer-coarse:size-11");
+    expect(read("components/topic-tabs.tsx")).toContain("pointer-coarse:size-11");
+  });
+
+  it("starts the phone drawer closed and keeps it out of the server render", () => {
+    const readFn = shelf.slice(shelf.indexOf("function readShelfOpen"), shelf.indexOf("function subscribeShelf"));
+    const desktopFn = shelf.slice(shelf.indexOf("function isDesktopShelf"), shelf.indexOf("function readShelfOpen"));
+    expect(desktopFn).toContain("(min-width: 768px)");
+    expect(readFn.indexOf("isDesktopShelf()")).toBeGreaterThan(-1);
+    expect(readFn.indexOf("isDesktopShelf()")).toBeLessThan(readFn.indexOf("readLocalStorage"));
+    expect(shelf).toContain("let drawerOpen = false;");
+    expect(shelf).toContain("useIsClient()");
+    expect(shelf).toContain('!isClient && "max-md:hidden"');
   });
 
   it("keeps TopicTabs on the home surface and the shelf on a study pack", () => {

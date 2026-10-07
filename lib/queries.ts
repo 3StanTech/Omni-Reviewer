@@ -335,6 +335,26 @@ export async function listPacedDueCounts(
   );
 }
 
+/** Paced due cards per topic for this owner, live topics and packs only. Matches the Today plan's total. */
+export async function listDueByTopic(userId: string, now = new Date()): Promise<Map<string, number>> {
+  const rows = await db
+    .select({
+      topicId: reviewers.topicId,
+      examDate: reviewers.examDate,
+      deletingAt: reviewers.deletingAt,
+      ...pacedCountFields(reviewers.id, now),
+    })
+    .from(reviewers)
+    .innerJoin(topics, eq(reviewers.topicId, topics.id))
+    .where(and(eq(topics.userId, userId), isNull(topics.deletingAt), isNull(reviewers.deletingAt)));
+  const byTopic = new Map<string, number>();
+  for (const row of rows) {
+    const { dueToday } = pacedDueCounts(row, { examDate: row.examDate, deletingAt: row.deletingAt, now });
+    byTopic.set(row.topicId, (byTopic.get(row.topicId) ?? 0) + dueToday);
+  }
+  return byTopic;
+}
+
 type OwnedPack = {
   id: string;
   name: string;

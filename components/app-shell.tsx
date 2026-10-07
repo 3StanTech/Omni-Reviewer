@@ -22,7 +22,8 @@ type AppShellProps = {
   className?: string;
   topics?: TopicListItem[];
   selectedTopicId?: string | null;
-  dueTodayCount?: number;
+  dueByTopic?: Record<string, number>;
+  dueTodayTotal?: number;
   showTopicShelf?: boolean;
 };
 
@@ -35,7 +36,8 @@ export function AppShell({
   className,
   topics,
   selectedTopicId = null,
-  dueTodayCount = 0,
+  dueByTopic,
+  dueTodayTotal = 0,
   showTopicShelf = true,
 }: AppShellProps) {
   return (
@@ -46,7 +48,8 @@ export function AppShell({
             <TopicShelf
               topics={topics}
               selectedId={selectedTopicId}
-              dueTodayCount={dueTodayCount}
+              dueByTopic={dueByTopic}
+              dueTodayTotal={dueTodayTotal}
             />
           </div>
         ) : null}
