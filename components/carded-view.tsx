@@ -27,7 +27,7 @@ import {
   type CapturedCard,
   reconcileDueSession,
 } from "@/lib/practice-session";
-import { selectTodayCards } from "@/lib/pacing";
+import { dueLabel, selectTodayCards } from "@/lib/pacing";
 import { formatSittingDuration, nextReturnCopy, recapFocusSection } from "@/lib/sitting-recap";
 import { isStudyKeyTarget } from "@/lib/study-keys";
 import type { CardedItem } from "@/lib/types";
@@ -458,7 +458,7 @@ export function CardedView({
 
       {card ? (
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {isDurableCard(card) ? <span>Due {new Date(card.dueAt).toLocaleDateString()}</span> : null}
+        {isDurableCard(card) ? <span>{dueLabel(new Date(card.dueAt), new Date(sessionStartedAt))}</span> : null}
         {isDurableCard(card) && (card.isEdited || card.isPinned) ? <span className="text-warning">Protected from silent overwrite</span> : null}
         {dueStale ? <span className="text-warning">This card changed. Start a new due session before rating it.</span> : null}
         {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}

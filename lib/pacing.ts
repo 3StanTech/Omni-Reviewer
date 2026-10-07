@@ -61,3 +61,14 @@ export function selectTodayCards<
     .slice(0, allowance === Infinity ? undefined : allowance);
   return [...reviews, ...fresh];
 }
+
+/**
+ * A card's due line: "Due today" for any card due by the end of the local day,
+ * overdue and never-reviewed cards included (a new card is due from creation),
+ * otherwise the due date.
+ */
+export function dueLabel(dueAt: Date, now: Date): string {
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+  return dueAt.getTime() <= endOfToday.getTime() ? "Due today" : `Due ${dueAt.toLocaleDateString()}`;
+}

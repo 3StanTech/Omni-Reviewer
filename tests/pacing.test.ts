@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { daysUntilExam, newCardAllowance, selectTodayCards } from "@/lib/pacing";
+import { daysUntilExam, dueLabel, newCardAllowance, selectTodayCards } from "@/lib/pacing";
 
 const DAY = 24 * 60 * 60 * 1000;
 const now = new Date("2026-09-01T08:00:00.000Z");
@@ -75,5 +75,20 @@ describe("selectTodayCards", () => {
       "r-early",
       "r-late",
     ]);
+  });
+});
+
+describe("dueLabel", () => {
+  const today = new Date(2026, 9, 7, 14, 0);
+
+  it("says Due today for overdue, new and later-today cards", () => {
+    expect(dueLabel(new Date(2026, 9, 3, 9, 0), today)).toBe("Due today");
+    expect(dueLabel(new Date(2026, 9, 7, 14, 0), today)).toBe("Due today");
+    expect(dueLabel(new Date(2026, 9, 7, 23, 30), today)).toBe("Due today");
+  });
+
+  it("shows the date for a card due after today", () => {
+    const tomorrow = new Date(2026, 9, 8, 0, 5);
+    expect(dueLabel(tomorrow, today)).toBe(`Due ${tomorrow.toLocaleDateString()}`);
   });
 });
