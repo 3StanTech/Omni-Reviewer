@@ -115,6 +115,7 @@ describe("side panel and export trigger", () => {
     expect(rule).toContain("top: calc(100% + 0.5rem);");
     expect(rule).toContain("right: 0;");
     expect(rule).toContain("width: min(24rem, calc(100vw - 2rem));");
+    expect(rule).toContain("max-width: none;");
     expect(rule).toContain("max-height: min(70vh, 36rem);");
     expect(rule).toContain("background: var(--popover);");
     const phone = css.slice(css.indexOf("@media (max-width: 640px) {"));

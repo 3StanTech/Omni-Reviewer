@@ -461,6 +461,8 @@
       right: 0;
       z-index: 30;
       width: min(24rem, calc(100vw - 2rem));
+      /* The positioned container is only the trigger group; do not cap the popover to it. */
+      max-width: none;
       max-height: min(70vh, 36rem);
       overflow-y: auto;
       background: var(--popover);
