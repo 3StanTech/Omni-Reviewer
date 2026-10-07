@@ -25,6 +25,8 @@ type AppShellProps = {
   dueByTopic?: Record<string, number>;
   dueTodayTotal?: number;
   showTopicShelf?: boolean;
+  /** The pack page uses the desktop width (90rem) for its document and rail; other pages stay at 64rem. */
+  wide?: boolean;
 };
 
 export function AppShell({
@@ -39,6 +41,7 @@ export function AppShell({
   dueByTopic,
   dueTodayTotal = 0,
   showTopicShelf = true,
+  wide = false,
 }: AppShellProps) {
   return (
     <TopicNavProvider>
@@ -55,7 +58,7 @@ export function AppShell({
         ) : null}
         <div className="flex min-h-full min-w-0 flex-1 flex-col">
           <header data-focus-hide className="sticky top-0 z-40 border-b border-border/70 bg-chrome/90 backdrop-blur-md">
-            <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
+            <div className={cn("mx-auto flex h-14 w-full items-center justify-between gap-3 px-4 sm:px-6", wide ? "max-w-[90rem]" : "max-w-5xl")}>
               <div className="flex min-w-0 items-center gap-3">
                 {topics && showTopicShelf ? <TopicShelfToggle /> : null}
                 <Link
@@ -87,7 +90,8 @@ export function AppShell({
 
           <main
             className={cn(
-              "mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8",
+              "mx-auto flex w-full flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8",
+              wide ? "max-w-[90rem]" : "max-w-5xl",
               className,
             )}
           >

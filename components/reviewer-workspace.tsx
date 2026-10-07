@@ -470,21 +470,40 @@ export function ReviewerWorkspace({
   }
 
   // Sources sit inline before the first generate, so the dialog entry only appears once views exist.
+  const sourcesLabel = `Sources (${sources.length})`;
+  const unreadableHint = unreadablePages > 0
+    ? unreadablePages === 1 ? "1 page unreadable" : `${unreadablePages} pages unreadable`
+    : undefined;
+  const examDateLabel = currentExamDate ? `Exam date: ${currentExamDate}` : "Set exam date";
   const packMenuItems: ModeMenuItem[] = [
     ...(hasViews ? [{
       id: "sources",
-      label: `Sources (${sources.length})`,
-      hint: unreadablePages > 0
-        ? unreadablePages === 1 ? "1 page unreadable" : `${unreadablePages} pages unreadable`
-        : undefined,
+      label: sourcesLabel,
+      hint: unreadableHint,
       onSelect: () => setSourcesOpen(true),
     }] : []),
     {
       id: "exam-date",
-      label: currentExamDate ? `Exam date: ${currentExamDate}` : "Set exam date",
+      label: examDateLabel,
       onSelect: () => setExamDateOpen(true),
     },
   ];
+
+  // The rail repeats the pack items (More keeps them: the rail is not always visible).
+  const railPack = hasViews ? (
+    <section aria-labelledby="rail-pack-heading" className="space-y-1">
+      <h3 id="rail-pack-heading" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Pack
+      </h3>
+      <Button type="button" variant="ghost" size="sm" className="h-9 min-h-9 w-full justify-start" onClick={() => setSourcesOpen(true)}>
+        {sourcesLabel}
+      </Button>
+      {unreadableHint ? <p className="px-3 text-xs text-muted-foreground">{unreadableHint}</p> : null}
+      <Button type="button" variant="ghost" size="sm" className="h-9 min-h-9 w-full justify-start" onClick={() => setExamDateOpen(true)}>
+        {examDateLabel}
+      </Button>
+    </section>
+  ) : null;
 
   // Client only: the countdown and the stamp depend on the viewer's clock and zone.
   const headerMeta = [
@@ -585,6 +604,7 @@ export function ReviewerWorkspace({
         value={activeMode}
         onValueChange={setActiveMode}
         packMenuItems={packMenuItems}
+        railPack={railPack}
       />
     </section>
   );

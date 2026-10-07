@@ -116,6 +116,7 @@ export default async function ReviewerPage({ params, searchParams }: PageProps) 
       selectedTopicId={topic.id}
       dueByTopic={dueByTopic}
       dueTodayTotal={dueTodayTotal}
+      wide
     >
       <SectionMasteryProvider sections={mastery?.sections ?? null}>
         <ReviewerWorkspace

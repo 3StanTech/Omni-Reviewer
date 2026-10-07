@@ -30,12 +30,17 @@ import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import {
   ModeToolbarProvider,
   useModeMenuItemsValue,
+  useModeToolbarRailRef,
   useModeToolbarSlotRef,
+  useRailActive,
   type ModeMenuItem,
 } from "@/components/mode-toolbar";
+import { SectionMasteryList } from "@/components/section-mastery-list";
 import { SourceViewerProvider, useSourceViewer, type PackSourceRef } from "@/components/source-modal";
 import { StudyPackContext } from "@/components/study-document";
+import { useSectionMastery } from "@/components/study-side-panel";
 import { citationSourcesForMode } from "@/lib/citations";
+import { studyOutline } from "@/lib/study-outline";
 import { SummaryView } from "@/components/summary-view";
 import { TestMeView } from "@/components/test-me-view";
 import { cn } from "@/lib/utils";
@@ -76,6 +81,8 @@ type ViewTabsProps = {
   onValueChange?: (kind: ViewKind) => void;
   /** Pack-level More items from the workspace (Sources, Exam date). */
   packMenuItems?: ModeMenuItem[];
+  /** The rail's Pack section from the workspace (Sources, Exam date). */
+  railPack?: ReactNode;
 };
 
 const MODE_JOB_LINES = Object.fromEntries(
@@ -210,11 +217,17 @@ export function ViewTabs({
   value,
   onValueChange,
   packMenuItems = [],
+  railPack = null,
 }: ViewTabsProps) {
   const [uncontrolledTab, setUncontrolledTab] = useState<ViewKind>("locked_in");
   const tab = value ?? uncontrolledTab;
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const { setAllowed: setFocusAllowed } = useFocusMode();
+  const { active: focusActive, setAllowed: setFocusAllowed } = useFocusMode();
+  // The rail shows only with Ask closed and outside Focus mode; container width decides the rest in CSS.
+  const railActive = useRailActive() && !focusActive;
+  const sectionMastery = useSectionMastery();
+  const lockedInContent = views.locked_in?.content ?? "";
+  const lockedInHeadings = useMemo(() => studyOutline(lockedInContent), [lockedInContent]);
 
   // Focus mode only applies to the one-item-at-a-time modes.
   useEffect(() => {
@@ -265,6 +278,9 @@ export function ViewTabs({
       onValueChange={(next) => selectTab(next as ViewKind)}
       className="w-full gap-4"
     >
+      {/* The pack container: its width (not the viewport's) decides whether the rail fits, so the topic
+          shelf and the Ask padding count. Mode tools hide strip duplicates with the same breakpoint. */}
+      <div className="@container/pack flex flex-col gap-4">
       {/* One sticky strip: tabs left; the active mode's tools (portaled into the slot), Focus and More right.
           No overflow here: it would clip the menus and the Contents popover. The tab list scrolls instead. */}
       {/* The wrapper stays in Focus mode so the Focus toggle (the way out, and where focus lands) stays visible;
@@ -317,6 +333,8 @@ export function ViewTabs({
         <p data-focus-hide className="print-hide text-xs text-muted-foreground">{copy.jobLine}</p>
       )}
 
+      <div className={cn("grid gap-8", railActive && "@min-[64rem]/pack:grid-cols-[minmax(0,1fr)_17.5rem]")}>
+      <div className="flex min-w-0 flex-col gap-4">
       {views.staleKinds?.includes(tab) && modeHasContent(tab, views) ? (
         <p role="status" data-focus-hide className="print-hide max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           This mode is from an older generation. Redo it when you are ready.
@@ -389,6 +407,18 @@ export function ViewTabs({
       </TabsContent>
       {/* Scroll jump's "Jump to end" target: the end of the study content, above the sources footer. */}
       <div data-study-end aria-hidden className="h-px" />
+      </div>
+      <aside aria-label="Study rail" className={cn("print-hide hidden", railActive && "@min-[64rem]/pack:block")}>
+        <div className="sticky top-[7.5rem] flex max-h-[calc(100vh-8.5rem)] flex-col gap-4 overflow-y-auto pb-4">
+          <ModeRailSlot />
+          {tab === "test_me" || tab === "carded" ? (
+            <SectionMasteryList headings={lockedInHeadings} sections={sectionMastery} />
+          ) : null}
+          {railPack}
+        </div>
+      </aside>
+      </div>
+      </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
@@ -429,6 +459,12 @@ export function ViewTabs({
 function ModeToolsSlot() {
   const slotRef = useModeToolbarSlotRef();
   return <div ref={slotRef} data-focus-hide className="relative flex items-center gap-1 empty:hidden" />;
+}
+
+/** The rail element the active mode's rail section renders into (Contents and Notes for the documents). */
+function ModeRailSlot() {
+  const railRef = useModeToolbarRailRef();
+  return <div ref={railRef} className="flex flex-col gap-4 empty:hidden" />;
 }
 
 type RedoMenuEntry = {

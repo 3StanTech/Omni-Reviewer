@@ -12,6 +12,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { useOptionalAsk } from "@/components/ask-provider";
+
 /**
  * The pack page's sticky strip holds the mode tabs, the active mode's tools and
  * one More menu. Tools keep their state in the mode that owns them: they render
@@ -63,6 +65,8 @@ type ModeMenuStore = ReturnType<typeof createModeMenuStore>;
 type ModeToolbarValue = {
   actionsSlot: HTMLElement | null;
   setActionsSlot: (element: HTMLElement | null) => void;
+  railSlot: HTMLElement | null;
+  setRailSlot: (element: HTMLElement | null) => void;
   store: ModeMenuStore;
   /** Bumped only when the visible menu changes. */
   version: number;
@@ -73,12 +77,13 @@ const ModeToolbarContext = createContext<ModeToolbarValue | null>(null);
 
 export function ModeToolbarProvider({ children }: { children: ReactNode }) {
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
+  const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   const [store] = useState(createModeMenuStore);
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((current) => current + 1), []);
   const value = useMemo(
-    () => ({ actionsSlot, setActionsSlot, store, version, bump }),
-    [actionsSlot, store, version, bump],
+    () => ({ actionsSlot, setActionsSlot, railSlot, setRailSlot, store, version, bump }),
+    [actionsSlot, railSlot, store, version, bump],
   );
   return <ModeToolbarContext.Provider value={value}>{children}</ModeToolbarContext.Provider>;
 }
@@ -87,6 +92,12 @@ export function ModeToolbarProvider({ children }: { children: ReactNode }) {
 export function useModeToolbarSlotRef(): (element: HTMLElement | null) => void {
   const value = useContext(ModeToolbarContext);
   return value?.setActionsSlot ?? noopRef;
+}
+
+/** Callback ref for the rail element the active mode's rail section renders into. */
+export function useModeToolbarRailRef(): (element: HTMLElement | null) => void {
+  const value = useContext(ModeToolbarContext);
+  return value?.setRailSlot ?? noopRef;
 }
 
 function noopRef() {}
@@ -102,6 +113,24 @@ export function ModeActions({ children }: { children: ReactNode }) {
     return <div className="print-hide flex flex-wrap items-center gap-1">{children}</div>;
   }
   return value.actionsSlot ? createPortal(children, value.actionsSlot) : null;
+}
+
+/**
+ * Renders the mode's rail section into the pack page's rail. The rail exists
+ * only on the pack page, so outside a provider, and until the slot mounts, it
+ * renders nothing.
+ */
+export function ModeRail({ children }: { children: ReactNode }) {
+  const value = useContext(ModeToolbarContext);
+  return value?.railSlot ? createPortal(children, value.railSlot) : null;
+}
+
+/**
+ * Whether the rail may show: Ask closed. Width is decided by the pack
+ * container query in CSS, so no resize listeners are needed.
+ */
+export function useRailActive(): boolean {
+  return !useOptionalAsk()?.isOpen;
 }
 
 /**

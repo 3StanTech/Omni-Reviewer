@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { ModeActions, ModeToolbarProvider, createModeMenuStore, menuSignature, type ModeMenuItem } from "@/components/mode-toolbar";
+import { ModeActions, ModeRail, ModeToolbarProvider, createModeMenuStore, menuSignature, type ModeMenuItem } from "@/components/mode-toolbar";
 
 const item = (id: string, extra: Partial<ModeMenuItem> = {}): ModeMenuItem => ({ id, label: id, onSelect: () => undefined, ...extra });
 
@@ -54,6 +54,19 @@ describe("ModeActions", () => {
   it("renders nothing inside a strip until the slot mounts", () => {
     const html = renderToStaticMarkup(
       createElement(ModeToolbarProvider, null, createElement(ModeActions, null, createElement("button", null, "Edit"))),
+    );
+    expect(html).toBe("");
+  });
+});
+
+describe("ModeRail", () => {
+  it("renders nothing outside a strip", () => {
+    expect(renderToStaticMarkup(createElement(ModeRail, null, createElement("nav", null, "Contents")))).toBe("");
+  });
+
+  it("renders nothing inside a strip until the rail slot mounts", () => {
+    const html = renderToStaticMarkup(
+      createElement(ModeToolbarProvider, null, createElement(ModeRail, null, createElement("nav", null, "Contents"))),
     );
     expect(html).toBe("");
   });
