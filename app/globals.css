@@ -347,6 +347,17 @@
     overflow-x: auto;
   }
 
+  /* An inline formula wider than the text column scrolls inside it. lib/wide-math.ts
+     measures and adds the class, so ordinary inline formulas never become scroll boxes. */
+  .prose-study .katex.math-overflow {
+    display: inline-block;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    vertical-align: middle;
+    padding-bottom: 0.25rem;
+  }
+
   .prose-study math {
     font-family: var(--font-math), math;
   }
@@ -694,6 +705,13 @@ html[data-focus="on"] main {
 
 /* Phase 4: study packet print */
 @media print {
+  .prose-study .katex.math-overflow {
+    display: inline;
+    overflow: visible;
+    max-width: none;
+    padding-bottom: 0;
+  }
+
   .print-document {
     --muted-foreground: #555;
   }

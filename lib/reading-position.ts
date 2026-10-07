@@ -25,3 +25,24 @@ export function writeReadingPosition(storage: Pick<Storage, "setItem"> | null, k
   if (!storage || !parseReadingPosition(position)) return false;
   try { storage.setItem(key, JSON.stringify(position)); return true; } catch { return false; }
 }
+
+/** Index of the last heading whose top is at or above `threshold` (px from the viewport top), or -1. */
+export function currentHeadingIndex(tops: readonly number[], threshold: number): number {
+  let index = -1;
+  for (let i = 0; i < tops.length; i += 1) {
+    if (tops[i] <= threshold) index = i;
+    else break;
+  }
+  return index;
+}
+
+/**
+ * Percent of the document read: 0 before `start` reaches the top, 100 once `end` is in view.
+ * `start` is the document's top and `end` the study-end sentinel's top, both relative to the viewport.
+ */
+export function readingProgress({ start, end, viewport }: { start: number; end: number; viewport: number }): number {
+  if (end <= viewport) return 100;
+  const span = end - start - viewport;
+  if (span <= 0) return 100;
+  return Math.min(100, Math.max(0, Math.round((-start / span) * 100)));
+}

@@ -88,21 +88,36 @@ function FromAsk() {
   );
 }
 
-/** The Contents list: a mastery bar beside each section heading, or a muted note when it has no score yet. */
-export function ContentsList({ headings, sections, onNavigate }: { headings: StudyHeading[]; sections: SectionMastery[] | null; onNavigate?: () => void }) {
+/**
+ * The Contents list: a mastery bar beside each section heading, or a muted note when it has no score yet.
+ * `currentId` marks the section being read (the rail tracks it while scrolling).
+ */
+export function ContentsList({ headings, sections, onNavigate, currentId }: { headings: StudyHeading[]; sections: SectionMastery[] | null; onNavigate?: () => void; currentId?: string | null }) {
   const byId = new Map((sections ?? []).map((section) => [section.id, section]));
   return (
     <ol className="space-y-1">
       {headings.length ? headings.map((heading) => {
         const section = byId.get(heading.id);
+        const current = currentId === heading.id;
         return (
-          <li key={heading.id} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5" style={{ paddingLeft: `${Math.max(0, heading.level - 1) * 0.75}rem` }}>
-            <a className="min-w-0 break-words text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" href={outlineHeadingHref(heading.id)} onClick={onNavigate}>{heading.text}</a>
+          <li key={heading.id} className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5", current && "-ml-2.5 border-l-2 border-primary")} style={{ paddingLeft: `${Math.max(0, heading.level - 1) * 0.75 + (current ? 0.5 : 0)}rem` }}>
+            <a className={cn("min-w-0 break-words text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40", current && "font-semibold")} href={outlineHeadingHref(heading.id)} aria-current={current ? "location" : undefined} onClick={onNavigate}>{heading.text}</a>
             {section ? (section.score === null ? <span className="text-xs text-muted-foreground">Not enough answers yet</span> : <MasteryBar score={section.score} label />) : null}
           </li>
         );
       }) : <li className="text-muted-foreground">No headings yet.</li>}
     </ol>
+  );
+}
+
+/** The Notes body: active highlights and notes (or a hint when there are none), then saved Ask answers. */
+export function NotesList({ annotations }: { annotations: AnnotationRecord[] }) {
+  const active = annotations.filter((annotation) => !annotation.archivedAt);
+  return (
+    <>
+      <ul className="mt-3 space-y-2">{active.length ? active.map((annotation) => <li key={annotation.id}><span className={`user-annotation-${annotation.color} rounded px-1`}>{annotation.quote}</span>{annotation.note ? <span className="text-muted-foreground"> · {annotation.note}</span> : null}</li>) : <li className="text-muted-foreground">No highlights or notes yet. Select text in the document to highlight or add a note.</li>}</ul>
+      <FromAsk />
+    </>
   );
 }
 
@@ -118,11 +133,13 @@ type StudySidePanelProps = {
   earlierBusy?: boolean;
   onLoadEarlier?: () => void;
   openRequest?: PanelOpenRequest | null;
+  /** Classes for the Contents and Notes trigger group (the rail hides it where it shows the same tools). */
+  className?: string;
 };
 
 const TRIGGER_CLASS = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 max-sm:w-11 max-sm:px-0");
 
-export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBusy = false, onLoadEarlier, openRequest = null }: StudySidePanelProps) {
+export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBusy = false, onLoadEarlier, openRequest = null, className }: StudySidePanelProps) {
   const [open, setOpen] = useState<PanelKind | null>(null);
   // A request made before this panel mounted (e.g. before an edit) does not reopen it.
   const [seenRequest, setSeenRequest] = useState<number | null>(() => openRequest?.nonce ?? null);
@@ -233,6 +250,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
 
   return (
     <div ref={rootRef} className="study-side-panel relative flex items-center gap-1" aria-label="Study navigation">
+      <div className={cn("flex items-center gap-1", className)}>
       <button type="button" className={TRIGGER_CLASS} aria-expanded={open === "contents"} aria-controls={`${panelHeadingId}-panel`} onClick={(event) => toggle("contents", event)}>
         <ListBullets weight="bold" aria-hidden />
         <span className="max-sm:sr-only">Contents</span>
@@ -241,6 +259,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
         <NotePencil weight="bold" aria-hidden />
         <span className="max-sm:sr-only">Notes ({active.length + savedAnswerCount})</span>
       </button>
+      </div>
       {open ? (
         <>
         <button
@@ -264,12 +283,7 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
             <button type="button" className="min-h-11 min-w-11 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" onClick={() => setOpen(null)}>Close</button>
           </div>
           {open === "contents" ? <nav className="mt-3" aria-label="Document contents"><ContentsList headings={headings} sections={sectionMastery} onNavigate={() => setOpen(null)} /></nav> : null}
-          {open === "notes" ? (
-            <>
-              <ul className="mt-3 space-y-2">{active.length ? active.map((annotation) => <li key={annotation.id}><span className={`user-annotation-${annotation.color} rounded px-1`}>{annotation.quote}</span>{annotation.note ? <span className="text-muted-foreground"> · {annotation.note}</span> : null}</li>) : <li className="text-muted-foreground">No highlights or notes yet. Select text in the document to highlight or add a note.</li>}</ul>
-              <FromAsk />
-            </>
-          ) : null}
+          {open === "notes" ? <NotesList annotations={annotations} /> : null}
           {open === "earlier" ? (
             <div className="mt-3 space-y-3">
               {earlier.length ? <ul className="space-y-2 text-muted-foreground">{earlier.map((annotation) => <li key={annotation.id}>“{annotation.quote}”{annotation.note ? ` · ${annotation.note}` : ""}</li>)}</ul> : <p className="text-muted-foreground">No earlier annotations loaded yet.</p>}

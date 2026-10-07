@@ -4,11 +4,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ArrowCounterClockwise, PencilSimple, SealCheck } from "@phosphor-icons/react";
 
 import { AnnotationMenu } from "@/components/annotation-menu";
-import { ModeActions, useModeMenuItems, type ModeMenuItem } from "@/components/mode-toolbar";
+import { ModeActions, ModeRail, useModeMenuItems, useRailActive, type ModeMenuItem } from "@/components/mode-toolbar";
 import { StudyEditor } from "@/components/study-editor";
 import { MarkdownBody } from "@/components/study-markdown";
 import { SOURCE_LIST_UNAVAILABLE, useSourceViewer } from "@/components/source-modal";
 import { StudyExport } from "@/components/study-export";
+import { StudyRail } from "@/components/study-rail";
 import { UnsourcedActionsProvider } from "@/components/unsourced-tag";
 import {
   countClaims,
@@ -36,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { StudySidePanel, type PanelOpenRequest } from "@/components/study-side-panel";
 import { readReadingPosition, readingPositionKey, writeReadingPosition } from "@/lib/reading-position";
 import { getLocalStorage } from "@/lib/safe-storage";
+import { markWideInlineMath } from "@/lib/wide-math";
 import { clearStudyDraft, readStudyDraft, studyDraftKey, writeStudyDraft, type StudyDraft } from "@/lib/study-draft";
 
 type StudyDocumentProps = {
@@ -105,6 +107,8 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const canRecheck = claims.unsourced > 0 || unchecked > 0;
   const [checking, setChecking] = useState(false);
   const [panelRequest, setPanelRequest] = useState<PanelOpenRequest | null>(null);
+  // Where the rail shows (wide pack layout, Ask closed) it carries Contents and Notes instead of the strip.
+  const railActive = useRailActive();
   const viewIdentity = `${view.id}:${view.contentRevision}:${view.annotationRevision}`;
   const [appliedIdentity, setAppliedIdentity] = useState(viewIdentity);
   const draftIsStale = draftRevision !== view.revision;
@@ -223,6 +227,20 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
     window.addEventListener("scroll", remember, { passive: true });
     return () => { window.cancelAnimationFrame(restoreFrame); window.removeEventListener("scroll", remember); if (timer) window.clearTimeout(timer); };
   }, [kind, reviewerId, userId, view.contentRevision]);
+
+  useEffect(() => {
+    // Inline formulas wider than the column scroll inside it; re-measure when the column resizes.
+    const article = articleRef.current;
+    if (editing || !article) return;
+    const mark = () => markWideInlineMath(article);
+    mark();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(mark);
+    observer?.observe(article);
+    // Math fonts can arrive after the first measure and change formula widths.
+    let live = true;
+    void document.fonts?.ready.then(() => { if (live) mark(); });
+    return () => { live = false; observer?.disconnect(); };
+  }, [editing, view.content]);
 
   const save = useCallback(async (content: string): Promise<boolean> => {
     if (draftIsStale) {
@@ -628,6 +646,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
             earlierBusy={earlierBusy}
             onLoadEarlier={() => void loadEarlier()}
             openRequest={panelRequest}
+            className={railActive ? "@min-[64rem]/pack:hidden" : undefined}
           />
         ) : null}
         <Button
@@ -651,6 +670,11 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
         ) : null}
         {editing ? <Button type="button" size="sm" className="min-h-11" onClick={() => void save(draft)} disabled={busy || !draft.trim() || draftIsStale}>{busy ? "Saving" : "Save changes"}</Button> : null}
       </ModeActions>
+      {!editing ? (
+        <ModeRail>
+          <StudyRail markdown={view.content} annotations={annotations} articleRef={articleRef} />
+        </ModeRail>
+      ) : null}
       {restored && editing ? (
         <div role="status" className="print-hide flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
           <ArrowCounterClockwise weight="bold" className="size-3.5 text-primary" aria-hidden />
