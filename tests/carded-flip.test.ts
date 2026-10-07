@@ -78,8 +78,9 @@ describe("Carded recall flip", () => {
     expect(src).not.toContain("😊");
   });
 
-  it("shows memorize chrome and remaining due, not a quiz score", () => {
-    expect(src).toContain("Memorize. No choices.");
+  it("shows the session label and remaining due, not a quiz score", () => {
+    expect(src).not.toContain("Memorize. No choices.");
+    expect(src).toContain("<p>{sessionLabel}</p>");
     expect(src).toContain("Remaining {remainingDue} due");
     expect(src).toContain("todayCards(durableCards, examDate, Date.now()).length");
     expect(src).toContain("selectTodayCards(");

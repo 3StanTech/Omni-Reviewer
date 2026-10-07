@@ -411,7 +411,6 @@ export function CardedView({
     <div data-carded-root className="mx-auto flex w-full max-w-lg flex-col gap-4">
       <div className="flex items-start justify-between gap-2 text-sm text-muted-foreground">
         <div className="space-y-1">
-          <p className="text-foreground">Memorize. No choices.</p>
           <p>{sessionLabel}</p>
           <p>Remaining {remainingDue} due</p>
         </div>

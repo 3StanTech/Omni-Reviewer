@@ -141,8 +141,8 @@ export function TestMeView({
 function SittingFallback() {
   return (
     <section className="space-y-4" aria-labelledby="test-me-sitting-title">
-      <h2 id="test-me-sitting-title" className="text-base font-semibold text-foreground">
-        Exam sitting. Pick an answer.
+      <h2 id="test-me-sitting-title" className="sr-only">
+        Test Me
       </h2>
       <p className="text-sm text-muted-foreground">Opening the sitting.</p>
     </section>
@@ -390,8 +390,8 @@ function UntimedSitting({
   if (!session) {
     return (
       <section className="space-y-4" aria-labelledby="test-me-sitting-title">
-        <h2 id="test-me-sitting-title" className="text-base font-semibold text-foreground">
-          Exam sitting. Pick an answer.
+        <h2 id="test-me-sitting-title" className="sr-only">
+          Test Me
         </h2>
         {saveMessage ? (
           <p role="alert" className="text-sm text-destructive">{saveMessage}</p>
@@ -478,8 +478,8 @@ function UntimedSitting({
     <section className="space-y-4" aria-labelledby="test-me-sitting-title" data-test-me-sitting>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="test-me-sitting-title" className="text-base font-semibold text-foreground">
-            Exam sitting. Pick an answer.
+          <h2 id="test-me-sitting-title" className="sr-only">
+            Test Me
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Question {viewIndex + 1} of {sittingItems.length}

@@ -5,8 +5,10 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   CaretRight,
+  Cards,
   CircleNotch,
   DotsThreeVertical,
+  Exam,
   Notebook,
   PencilSimple,
   Plus,
@@ -343,21 +345,25 @@ export function ReviewerList({
                 <Button
                   size="sm"
                   variant="outline"
+                  className="max-sm:size-11 max-sm:px-0"
                   nativeButton={false}
                   aria-label={`Review due cards in ${reviewer.name}`}
                   render={<Link href={`/topics/${topicId}/reviewers/${reviewer.id}?mode=carded`} />}
                 >
-                  Review
+                  <Cards aria-hidden weight="bold" className="sm:hidden" />
+                  <span className="max-sm:sr-only">Review</span>
                 </Button>
               ) : reviewer.hasActiveSitting ? (
                 <Button
                   size="sm"
                   variant="outline"
+                  className="max-sm:size-11 max-sm:px-0"
                   nativeButton={false}
                   aria-label={`Resume Test Me in ${reviewer.name}`}
                   render={<Link href={`/topics/${topicId}/reviewers/${reviewer.id}?mode=test_me`} />}
                 >
-                  Resume
+                  <Exam aria-hidden weight="bold" className="sm:hidden" />
+                  <span className="max-sm:sr-only">Resume</span>
                 </Button>
               ) : null}
               <DropdownMenu>
