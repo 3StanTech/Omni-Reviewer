@@ -50,7 +50,12 @@ Accent is for selection and primary CTAs only, not decoration.
 
 - App shell: slim top bar (wordmark, Change today's mood, sign out), content column max ~1100px.
 - Home: topic tab strip full width, then reviewer list. The topic shelf is a separate home library surface.
-- Workspace: stacked on mobile. When study modes exist, sources sit behind a Sources control and study is first. Before first generate, sources stay expanded. Exam date editing is behind a labelled disclosure.
+- Workspace: header (breadcrumb; title with a meta line: exam countdown · Generated stamp), then one sticky **strip**, then the study document. Before first generate, sources stay expanded inline above the study.
+- **Strip**: mode tabs left; the active mode's tools right (Locked In and Summary: claims chip `N/M sourced`, Contents, Notes, Edit, Download; Test Me and Carded: Focus), then **More** (⋯). Solid background, no backdrop filter (it would trap fixed sheets). On phones: tabs on one row, tools on a second, labels hidden behind icons, every control 44px. In Focus mode only the Focus toggle stays.
+- **More**: (1) the mode's own actions (Check again, Open slides, Pin, Earlier version), (2) Redo for the active mode with its one-line description and requests left today, (3) pack items: Sources (n) with any unreadable pages, Exam date. Sources and Exam date open dialogs.
+- **Generation section** (once study modes exist): shown above the study only while modes are missing or a job is running, failed or partial. A finished job shows a short Pack ready line that clears itself.
+- **Contents and Notes** (until the rail): a popover under the strip on desktop, the bottom sheet on phones.
+- **Document title**: the "Locked In:" / "Summary:" prefix of the first heading is hidden on screen (kept in the text and in print).
 - Breakpoint: single column below 768px. No horizontal overflow at 390px.
 - Touch targets: primary controls ≥ 44px height on touch-sized viewports. Small icon and inline controls (topic ⋯, Carded Edit/Pin) grow to 44px on coarse pointers (`pointer-coarse:`), keeping desktop density.
 
@@ -69,11 +74,12 @@ Accent is for selection and primary CTAs only, not decoration.
 - **Annotations**: select text in either editable reading document to highlight or add a note. Color choices are allowlisted and Earlier version keeps displaced quotes.
 - **Source rows**: filename, kind icon, status badge when Failed or Not yet processed, delete. Ready sources show no status badge.
 - **Badges**: Failed / Not yet processed are labeled. Ready badge is no longer shown.
-- **Generate**: primary amber for the first pack. After all four modes exist, the control remains and reads All generated. It does not start a model call. Generate missing fills only absent modes.
-- **Redo**: outline control on the active study mode, with a one-line description of upstream. Confirm if that mode already has content. Redo Locked In names all four modes. Redo Summary, Test Me, or Carded names only that mode.
+- **Generate**: primary for the first pack. Generate missing fills only absent modes. Hidden once all four modes exist.
+- **Redo**: an item in More for the active study mode, with a one-line description of upstream. Confirm if that mode already has content. Redo Locked In names all four modes. Redo Summary, Test Me, or Carded names only that mode.
 - **Study mode tabs**: Locked In · Summary · Test Me · Carded, with no theme-specific duplicate chooser. 14px labels; the selected tab is a bottom underline only.
 - **Scroll jump**: on pack pages taller than three screens, ↑ (Back to top) and ↓ (Jump to end) stack above the Ask pill. ↑ shows past half a screen; ↓ hides once the end of the study content (`data-study-end`) is on screen. Hidden while Ask is open, kept in Focus mode, print-hidden, instant under reduced motion.
 - **Empty states**: short title, one teaching sentence, one action when available.
+- **Buttons**: ghost for strip and menu controls; outline for dialog Cancel; primary only for the main action (Save changes, Generate, Start studying, Save date).
 - **Skeletons**: muted blocks, not centered spinners, for list loads.
 
 ## Motion
