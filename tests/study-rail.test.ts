@@ -154,4 +154,12 @@ describe("wide inline math", () => {
     expect(css).not.toMatch(/\.prose-study (?:math|\.katex)\s*\{[^}]*overflow/);
     expect(read("lib/wide-math.ts")).toContain('formula.closest(".katex-display")');
   });
+
+  it("lands Contents jumps below the sticky header and strip on screen only", () => {
+    const css = read("app/globals.css");
+    expect(css).toMatch(/@media screen \{\s*\.prose-study :is\(h1, h2, h3, h4, h5, h6\) \{\s*scroll-margin-top: 8rem;/);
+    expect(css).toMatch(/@media screen and \(max-width: 640px\) \{\s*\.prose-study :is\(h1, h2, h3, h4, h5, h6\) \{\s*scroll-margin-top: 11rem;/);
+    const print = css.slice(css.indexOf("/* Phase 4: study packet print */"));
+    expect(print).not.toContain("scroll-margin-top");
+  });
 });

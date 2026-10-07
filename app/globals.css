@@ -358,6 +358,21 @@
     padding-bottom: 0.25rem;
   }
 
+  /* Contents links land below the sticky header and strip, not under them.
+     Screen only: print has no sticky chrome. */
+  @media screen {
+    .prose-study :is(h1, h2, h3, h4, h5, h6) {
+      scroll-margin-top: 8rem;
+    }
+  }
+
+  /* On phones the strip wraps to two 44px rows. */
+  @media screen and (max-width: 640px) {
+    .prose-study :is(h1, h2, h3, h4, h5, h6) {
+      scroll-margin-top: 11rem;
+    }
+  }
+
   .prose-study math {
     font-family: var(--font-math), math;
   }
