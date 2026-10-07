@@ -264,7 +264,7 @@ export function ViewTabs({
               title={item.job}
               className={cn(
                 "min-w-[6.5rem]",
-                compact && "min-h-11 min-w-0 flex-1 px-2 py-1.5 text-xs",
+                compact && "min-h-11 min-w-0 flex-1 px-2 py-1.5 text-sm",
               )}
             >
               {item.label}
@@ -390,6 +390,8 @@ export function ViewTabs({
           />
         )}
       </TabsContent>
+      {/* Scroll jump's "Jump to end" target: the end of the study content, above the sources footer. */}
+      <div data-study-end aria-hidden className="h-px" />
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>

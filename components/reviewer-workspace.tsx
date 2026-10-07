@@ -12,6 +12,7 @@ import {
 } from "@/components/source-panel";
 import { AskProvider } from "@/components/ask-provider";
 import { FocusModeProvider } from "@/components/focus-mode";
+import { ScrollJump } from "@/components/scroll-jump";
 import { useSectionMastery } from "@/components/study-side-panel";
 import { ViewTabs } from "@/components/view-tabs";
 import { GenerationControls, type FreeRequestQuota } from "@/components/generation-controls";
@@ -26,7 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatStampLocal, formatStampUtc } from "@/lib/format-generated-at";
+import { formatStamp } from "@/lib/format-generated-at";
 import type { ViewKind } from "@/lib/types";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
@@ -185,11 +186,8 @@ export function ReviewerWorkspace({
   const documentDraftControllerRef = useRef<LockedInDraftController | null>(null);
   const router = useRouter();
   const isClient = useIsClient();
-  const generatedStamp = generatedAt
-    ? isClient
-      ? formatStampLocal(generatedAt)
-      : formatStampUtc(generatedAt)
-    : null;
+  // No time text in the server render: it does not know the viewer's zone.
+  const generatedStamp = generatedAt && isClient ? formatStamp(generatedAt) : null;
   const generatedLabel = !generatedAt
     ? NOT_GENERATED_YET
     : generatedStamp
@@ -696,6 +694,7 @@ export function ReviewerWorkspace({
         </DialogContent>
       </Dialog>
     </div>
+    <ScrollJump />
     </FocusModeProvider>
     </AskProvider>
   );
