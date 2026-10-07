@@ -48,13 +48,19 @@ Accent is for selection and primary CTAs only, not decoration.
 
 ## Layout
 
-- App shell: slim top bar (wordmark, Change today's mood, sign out), content column max ~1100px.
+- App shell: slim top bar (wordmark, Change today's mood, sign out), content column max 1024px on the desk. The pack page is wide: header and main up to 90rem (1440px).
 - Home: topic tab strip full width, then reviewer list. The topic shelf is a separate home library surface.
 - Workspace: header (breadcrumb; title with a meta line: exam countdown · Generated stamp), then one sticky **strip**, then the study document. Before first generate, sources stay expanded inline above the study.
 - **Strip**: mode tabs left; the active mode's tools right (Locked In and Summary: claims chip `N/M sourced`, Contents, Notes, Edit, Download; Test Me and Carded: Focus), then **More** (⋯). Solid background, no backdrop filter (it would trap fixed sheets). On phones: tabs on one row, tools on a second, labels hidden behind icons, every control 44px. In Focus mode only the Focus toggle stays.
 - **More**: (1) the mode's own actions (Check again, Open slides, Pin, Earlier version), (2) Redo for the active mode with its one-line description and requests left today, (3) pack items: Sources (n) with any unreadable pages, Exam date. Sources and Exam date open dialogs.
 - **Generation section** (once study modes exist): shown above the study only while modes are missing or a job is running, failed or partial. A finished job shows a short Pack ready line that clears itself.
-- **Contents and Notes** (until the rail): a popover under the strip on desktop, the bottom sheet on phones.
+- **Rail** (pack page): a sticky 17.5rem column right of the study content when the pack container is at least 64rem wide (a container query, so the topic shelf and Ask padding count) and Ask is closed. Sections, in order: the mode's own section, then Pack.
+  - Locked In and Summary: **Contents** with mastery bars, the current section highlighted (the last heading at or above 30% of the viewport, `aria-current="location"`), reading progress %, and Top/End entries (the same jumps as the floating pair); **Notes** collapsed with a count, expanding in place to highlights and saved Ask answers. The strip's Contents and Notes buttons hide while the rail shows; the claims chip stays in the strip.
+  - Test Me and Carded: **Sections**, the Locked In headings with mastery bars, weak sections marked; no links.
+  - **Pack**: Sources (n) and Exam date buttons opening the same dialogs as More (More keeps them, since the rail is not always visible).
+  - Print-hidden.
+- **Contents and Notes fallback** (no rail: narrow window, phone, or Ask open): a popover under the strip on desktop, the bottom sheet on phones.
+- **Wide inline math**: an inline formula wider than the text column scrolls inside the column (measured `math-overflow` class); other inline formulas are untouched. Display math always scrolls.
 - **Document title**: the "Locked In:" / "Summary:" prefix of the first heading is hidden on screen (kept in the text and in print).
 - Breakpoint: single column below 768px. No horizontal overflow at 390px.
 - Touch targets: primary controls ≥ 44px height on touch-sized viewports. Small icon and inline controls (topic ⋯, Carded Edit/Pin) grow to 44px on coarse pointers (`pointer-coarse:`), keeping desktop density.
