@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CaretDown, CaretUp } from "@phosphor-icons/react";
 
 import type { ViewsPayload } from "@/lib/serialize-view";
 import {
@@ -17,6 +16,9 @@ import { useSectionMastery } from "@/components/study-side-panel";
 import { ViewTabs } from "@/components/view-tabs";
 import { GenerationControls, type FreeRequestQuota } from "@/components/generation-controls";
 import { GenerationStatus } from "@/components/generation-status";
+import { MODE_KIT_ITEMS } from "@/components/mode-kit";
+import type { ModeMenuItem } from "@/components/mode-toolbar";
+import { PackReadyNotice } from "@/components/pack-ready-notice";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -92,8 +94,6 @@ export type SerializedAttemptStats = {
   lastAttemptedAt: string | null;
 };
 
-const NOT_GENERATED_YET =
-  "Not generated yet. Upload Ready sources, then generate";
 const MS_PER_DAY = 86_400_000;
 const READING_SLIDES_NOTE =
   "Reading slide images first. Generate unlocks when it finishes.";
@@ -178,7 +178,8 @@ export function ReviewerWorkspace({
   const [examDateDraft, setExamDateDraft] = useState(examDate ?? "");
   const [examDateBusy, setExamDateBusy] = useState(false);
   const [examDateError, setExamDateError] = useState<string | null>(null);
-  const [sourcesUserOpen, setSourcesUserOpen] = useState(false);
+  const [examDateOpen, setExamDateOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<ViewKind>(initialMode);
   const [documentDraftDirty, setDocumentDraftDirty] = useState(false);
   const [draftDialogOpen, setDraftDialogOpen] = useState(false);
@@ -188,11 +189,6 @@ export function ReviewerWorkspace({
   const isClient = useIsClient();
   // No time text in the server render: it does not know the viewer's zone.
   const generatedStamp = generatedAt && isClient ? formatStamp(generatedAt) : null;
-  const generatedLabel = !generatedAt
-    ? NOT_GENERATED_YET
-    : generatedStamp
-      ? `Last generated ${generatedStamp}`
-      : "Last generated";
 
   const hasReadySource = useMemo(
     () => sources.some((s) => s.ingestStatus === "ready"),
@@ -207,7 +203,6 @@ export function ReviewerWorkspace({
       ),
     [views],
   );
-  const sourcesExpanded = hasViews ? sourcesUserOpen : true;
   const examCountdown = currentExamDate
     ? examCountdownCopy(currentExamDate)
     : null;
@@ -276,7 +271,7 @@ export function ReviewerWorkspace({
   const readingSlides = vision.reading;
   const busyReason = readingSlides ? READING_SLIDES_NOTE : null;
   // Pages the provider refused were settled with no readable content. Each
-  // source row says which; the toggle hints at the total while Sources is hidden.
+  // source row says which; the More item and the Sources dialog carry the total.
   const unreadablePages = sources.reduce((total, source) => {
     const entry = vision.progress[source.id];
     return entry && entry.state !== "reading" ? total + (entry.unreadable?.length ?? 0) : total;
@@ -453,25 +448,49 @@ export function ReviewerWorkspace({
     };
   }, [documentDraftDirty]);
 
-  async function saveExamDate() {
+  async function saveExamDate(next: string = examDateDraft) {
     setExamDateBusy(true);
     setExamDateError(null);
     try {
       const res = await fetch(`/api/reviewers/${reviewerId}/exam-date`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ examDate: examDateDraft || null }),
+        body: JSON.stringify({ examDate: next || null }),
       });
       if (!res.ok) throw new Error(await readApiError(res));
       const data = (await res.json()) as { examDate: string | null };
       setCurrentExamDate(data.examDate);
       setExamDateDraft(data.examDate ?? "");
+      setExamDateOpen(false);
     } catch (error) {
       setExamDateError(error instanceof Error ? error.message : "Could not save exam date.");
     } finally {
       setExamDateBusy(false);
     }
   }
+
+  // Sources sit inline before the first generate, so the dialog entry only appears once views exist.
+  const packMenuItems: ModeMenuItem[] = [
+    ...(hasViews ? [{
+      id: "sources",
+      label: `Sources (${sources.length})`,
+      hint: unreadablePages > 0
+        ? unreadablePages === 1 ? "1 page unreadable" : `${unreadablePages} pages unreadable`
+        : undefined,
+      onSelect: () => setSourcesOpen(true),
+    }] : []),
+    {
+      id: "exam-date",
+      label: currentExamDate ? `Exam date: ${currentExamDate}` : "Set exam date",
+      onSelect: () => setExamDateOpen(true),
+    },
+  ];
+
+  // Client only: the countdown and the stamp depend on the viewer's clock and zone.
+  const headerMeta = [
+    isClient ? examCountdown : null,
+    !generatedAt ? "Not generated yet" : generatedStamp ? `Generated ${generatedStamp}` : null,
+  ].filter((item): item is string => Boolean(item));
 
   const sourcePanel = (
     <div data-focus-hide className="print-hide">
@@ -480,7 +499,7 @@ export function ReviewerWorkspace({
       reviewerId={reviewerId}
       initialSources={sources}
       onSourcesChange={setSources}
-      expanded={sourcesExpanded}
+      expanded
       vision={vision}
     />
     </div>
@@ -497,7 +516,7 @@ export function ReviewerWorkspace({
         </h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {hasViews
-            ? "To rebuild all four, open Locked In and use Redo."
+            ? "Generate missing fills study modes that are not generated yet."
             : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
         </p>
       </div>
@@ -522,11 +541,7 @@ export function ReviewerWorkspace({
 
   const studySection = (
     <section className="space-y-3" aria-labelledby="views-heading">
-      <h2
-        id="views-heading"
-        data-focus-hide
-        className="print-hide text-sm font-semibold tracking-tight text-foreground"
-      >
+      <h2 id="views-heading" className="sr-only">
         Study modes
       </h2>
       {viewsError ? (
@@ -569,90 +584,137 @@ export function ReviewerWorkspace({
         compact
         value={activeMode}
         onValueChange={setActiveMode}
+        packMenuItems={packMenuItems}
       />
     </section>
+  );
+
+  // When views exist the generation section shows above the study only while it
+  // has something to do; a finished job shows a short "ready" line instead.
+  const generationState = generation.state;
+  const jobVisible =
+    !generationState.dismissed &&
+    (["queued", "running", "failed", "partial"] as const).some((status) => status === generationState.status);
+  const finishedJob = generationState.status === "succeeded" && !generationState.dismissed;
+  const finishedRedoKind =
+    generationState.job?.intent === "redo" && generationState.job.targetKinds.length === 1
+      ? generationState.job.targetKinds[0]
+      : null;
+  const readyLabel = finishedRedoKind
+    ? `${MODE_KIT_ITEMS.find((item) => item.kind === finishedRedoKind)?.label ?? "Pack"} ready`
+    : "Pack ready";
+  const generationNotice = finishedJob ? (
+    <PackReadyNotice label={readyLabel} onDone={generation.dismiss} />
+  ) : !hasCompleteViews || jobVisible ? (
+    generateSection
+  ) : null;
+
+  const examDateDialog = (
+    <Dialog
+      open={examDateOpen}
+      onOpenChange={(open) => {
+        setExamDateOpen(open);
+        if (open) {
+          setExamDateDraft(currentExamDate ?? "");
+          setExamDateError(null);
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Exam date</DialogTitle>
+          <DialogDescription>Cards will be scheduled no later than this date.</DialogDescription>
+        </DialogHeader>
+        <label htmlFor="exam-date" className="grid gap-1 text-xs text-muted-foreground">
+          Exam date
+          <input
+            id="exam-date"
+            name="examDate"
+            type="date"
+            value={examDateDraft}
+            onChange={(event) => setExamDateDraft(event.target.value)}
+            className="h-11 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+          />
+        </label>
+        {examDateError ? <p role="alert" className="text-xs text-destructive">{examDateError}</p> : null}
+        <DialogFooter>
+          {currentExamDate ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={examDateBusy}
+              onClick={() => {
+                setExamDateDraft("");
+                void saveExamDate("");
+              }}
+            >
+              Clear
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            onClick={() => void saveExamDate()}
+            disabled={examDateBusy || examDateDraft === (currentExamDate ?? "")}
+          >
+            {examDateBusy ? "Saving" : "Save date"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
+  const sourcesDialog = (
+    <Dialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          {/* The panel shows its own "Sources" heading; the title names the dialog for assistive tech. */}
+          <DialogTitle className="sr-only">Sources</DialogTitle>
+          {unreadablePages > 0 ? (
+            <DialogDescription id="sources-unreadable-hint">
+              {unreadablePages === 1 ? "1 page unreadable" : `${unreadablePages} pages unreadable`}
+            </DialogDescription>
+          ) : null}
+        </DialogHeader>
+        {sourcePanel}
+      </DialogContent>
+    </Dialog>
   );
 
   return (
     <AskProvider reviewerId={reviewerId} sections={sectionMastery} initialSavedCount={savedAnswerCount} onCardCreated={refreshCards}>
     <FocusModeProvider>
     <div data-draft-guarded className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
-      <div data-focus-hide className="space-y-1">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1">
-            <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
-              <Link
-                href={`/?topic=${topicId}`}
-                className="rounded outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
-                onClick={(event) => {
-                  if (!requestDraftAction({ type: "href", href: `/?topic=${topicId}` })) {
-                    event.preventDefault();
-                  }
-                }}
-              >
-                {topicName}
-              </Link>
-              <span aria-hidden>/</span>
-              <span className="text-foreground">{reviewerName}</span>
-            </nav>
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
-                {reviewerName}
-              </h1>
-              {isClient && examCountdown ? (
-                <p className="text-sm text-muted-foreground">{examCountdown}</p>
-              ) : null}
-            </div>
-          </div>
-          {hasViews ? (
-            <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
-              {!sourcesExpanded && unreadablePages > 0 ? (
-                <span id="sources-unreadable-hint" className="text-xs text-muted-foreground">
-                  {unreadablePages === 1 ? "1 page unreadable" : `${unreadablePages} pages unreadable`}
-                </span>
-              ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                aria-expanded={sourcesExpanded}
-                aria-controls="sources-panel"
-                aria-describedby={!sourcesExpanded && unreadablePages > 0 ? "sources-unreadable-hint" : undefined}
-                onClick={() => setSourcesUserOpen((open) => !open)}
-              >
-                Sources
-                {sourcesExpanded ? (
-                  <CaretUp weight="bold" />
-                ) : (
-                  <CaretDown weight="bold" />
-                )}
-              </Button>
-            </div>
+      <div data-focus-hide className="min-w-0 space-y-1">
+        <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+          <Link
+            href={`/?topic=${topicId}`}
+            className="rounded outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
+            onClick={(event) => {
+              if (!requestDraftAction({ type: "href", href: `/?topic=${topicId}` })) {
+                event.preventDefault();
+              }
+            }}
+          >
+            {topicName}
+          </Link>
+          <span aria-hidden>/</span>
+          <span className="text-foreground">{reviewerName}</span>
+        </nav>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
+            {reviewerName}
+          </h1>
+          {headerMeta.length > 0 ? (
+            <p className="text-sm text-muted-foreground">{headerMeta.join(" \u00b7 ")}</p>
           ) : null}
         </div>
-        <details className="print-hide mt-3 max-w-md rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-          <summary className="cursor-pointer text-sm font-medium text-foreground" suppressHydrationWarning>
-            {generatedLabel}. Exam date {currentExamDate ? `· ${currentExamDate}` : ""}
-          </summary>
-          <div className="flex flex-wrap items-end gap-2 pt-3">
-            <label htmlFor="exam-date" className="grid gap-1 text-xs text-muted-foreground">
-              Exam date
-              <input id="exam-date" name="examDate" type="date" value={examDateDraft} onChange={(event) => setExamDateDraft(event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-sm text-foreground" />
-            </label>
-            <button type="button" className="h-9 rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50" onClick={() => void saveExamDate()} disabled={examDateBusy || examDateDraft === (currentExamDate ?? "")}>
-              {examDateBusy ? "Saving" : "Save date"}
-            </button>
-            {currentExamDate ? <p className="basis-full text-xs text-muted-foreground">Cards will be scheduled no later than this date.</p> : null}
-            {examDateError ? <p role="alert" className="basis-full text-xs text-destructive">{examDateError}</p> : null}
-          </div>
-        </details>
       </div>
 
       {hasViews ? (
         <>
+          {generationNotice}
           {studySection}
-          {sourcePanel}
-          {generateSection}
+          {sourcesDialog}
         </>
       ) : (
         <>
@@ -662,6 +724,7 @@ export function ReviewerWorkspace({
           {studySection}
         </>
       )}
+      {examDateDialog}
       <Dialog
         open={draftDialogOpen}
         onOpenChange={(open) => {

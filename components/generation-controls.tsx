@@ -37,14 +37,13 @@ export function GenerationControls({
   const hasActiveJob = Boolean(state.jobId && !["succeeded", "failed", "partial"].includes(state.status));
   const hasTerminalResume = Boolean(state.jobId && (state.status === "failed" || state.status === "partial"));
   const resumeAllowed = hasReadySource && (hasActiveJob || hasTerminalResume);
-  const label = resumeAllowed ? "Resume" : hasCompleteViews ? "All generated" : hasViews ? "Generate missing" : "Generate";
+  // The workspace hides this section once every mode exists, so there is no "done" label here.
+  const label = resumeAllowed ? "Resume" : hasViews ? "Generate missing" : "Generate";
   const help = !hasReadySource
     ? sourcesAreMediaOnly
       ? "Video and audio only. Upload a PDF, image, or text file."
       : "Needs a Ready source to generate."
-    : hasCompleteViews
-      ? "All four study modes are generated. Use Redo on a mode to rebuild it."
-      : hasViews
+    : hasViews
       ? "Fills only study modes that are not generated yet."
       : "Creates Locked In, Summary, Test Me, and Carded.";
   return (
