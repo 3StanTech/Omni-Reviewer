@@ -52,12 +52,15 @@ Accent is for selection and primary CTAs only, not decoration.
 - Home: topic tab strip full width, then reviewer list. The topic shelf is a separate home library surface.
 - Workspace: stacked on mobile. When study modes exist, sources sit behind a Sources control and study is first. Before first generate, sources stay expanded. Exam date editing is behind a labelled disclosure.
 - Breakpoint: single column below 768px. No horizontal overflow at 390px.
-- Touch targets: primary controls ≥ 44px height on touch-sized viewports.
+- Touch targets: primary controls ≥ 44px height on touch-sized viewports. Small icon and inline controls (topic ⋯, Carded Edit/Pin) grow to 44px on coarse pointers (`pointer-coarse:`), keeping desktop density.
 
 ## Components
 
 - **Topic tabs**: horizontal scroll if needed; selected = amber underline or filled chip.
-- **Reviewer rows**: name + chevron; overflow menu rename/delete. Second line: generated stamp or Not generated yet, due-today count when above 0, exam date when set.
+- **Today card**: one card at the top of the desk for all topics: due cards, weak sections and minutes (wraps, never truncated), **Start studying** to the first Do-first item, and **See the plan** for the Today dialog. Empty: Nothing due today.
+- **Pack rows**: name up to two lines (never clipped); meta line wraps: generated stamp or Not generated yet, due-today count when above 0, exam date when set, mastery, weak section. A small **Review** button when cards are due (else **Resume** for an active sitting), then the overflow menu (rename/delete).
+- **Topic shelf**: Due today shows the all-topics total, equal to the Today card; each topic shows its own count when above 0. Below 768px it is a drawer that starts closed on every load.
+- **Dates**: one stamp, `Oct 6, 1:36 PM`, in the viewer's zone. Server renders show the label without a time (no UTC text). Days read `Oct 9`.
 - **Change today's mood**: not a primary CTA. Hover/focus opens the look menu on fine pointers; click toggles on coarse pointers.
 - **Citation chips**: small mono `p.14` buttons inline after a claim. They open the source modal and are never part of the annotation text.
 - **Not from your uploaded sources**: amber tag with WarningCircle after an unsupported claim. Hover or focus underlines the claim in the warning color. The popover explains and offers Keep or Delete sentence.
@@ -68,7 +71,8 @@ Accent is for selection and primary CTAs only, not decoration.
 - **Badges**: Failed / Not yet processed are labeled. Ready badge is no longer shown.
 - **Generate**: primary amber for the first pack. After all four modes exist, the control remains and reads All generated. It does not start a model call. Generate missing fills only absent modes.
 - **Redo**: outline control on the active study mode, with a one-line description of upstream. Confirm if that mode already has content. Redo Locked In names all four modes. Redo Summary, Test Me, or Carded names only that mode.
-- **Study mode tabs**: Locked In · Summary · Test Me · Carded, with no theme-specific duplicate chooser.
+- **Study mode tabs**: Locked In · Summary · Test Me · Carded, with no theme-specific duplicate chooser. 14px labels; the selected tab is a bottom underline only.
+- **Scroll jump**: on pack pages taller than three screens, ↑ (Back to top) and ↓ (Jump to end) stack above the Ask pill. ↑ shows past half a screen; ↓ hides once the end of the study content (`data-study-end`) is on screen. Hidden while Ask is open, kept in Focus mode, print-hidden, instant under reduced motion.
 - **Empty states**: short title, one teaching sentence, one action when available.
 - **Skeletons**: muted blocks, not centered spinners, for list loads.
 
@@ -82,7 +86,7 @@ Accent is for selection and primary CTAs only, not decoration.
 
 ## Copy rules
 
-- Product language: topic, reviewer, source, generate, redo, study mode, Locked In, Summary, Test Me, Carded.
+- Product language: topic, pack, source, generate, redo, study mode, Locked In, Summary, Test Me, Carded. Visible copy says pack; code, routes, tables and API errors keep reviewer.
 - Controls name the action.
 - Errors name the problem and recovery.
 - Never use an em dash in visible UI copy. Use a period, colon, or comma.
