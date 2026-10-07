@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
-import { ArrowsClockwise, CircleNotch } from "@phosphor-icons/react";
+import { ArrowsClockwise, CircleNotch, DotsThreeVertical } from "@phosphor-icons/react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -14,12 +14,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
 import { FocusToggle, useFocusMode } from "@/components/focus-mode";
 import { LOW_QUOTA_THRESHOLD, type FreeRequestQuota } from "@/components/generation-controls";
 import { LockedInView } from "@/components/locked-in-view";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
+import {
+  ModeToolbarProvider,
+  useModeMenuItemsValue,
+  useModeToolbarSlotRef,
+  type ModeMenuItem,
+} from "@/components/mode-toolbar";
 import { SourceViewerProvider, useSourceViewer, type PackSourceRef } from "@/components/source-modal";
 import { StudyPackContext } from "@/components/study-document";
 import { citationSourcesForMode } from "@/lib/citations";
@@ -61,6 +74,8 @@ type ViewTabsProps = {
   examDate?: string | null;
   value?: ViewKind;
   onValueChange?: (kind: ViewKind) => void;
+  /** Pack-level More items from the workspace (Sources, Exam date). */
+  packMenuItems?: ModeMenuItem[];
 };
 
 const MODE_JOB_LINES = Object.fromEntries(
@@ -194,6 +209,7 @@ export function ViewTabs({
   examDate = null,
   value,
   onValueChange,
+  packMenuItems = [],
 }: ViewTabsProps) {
   const [uncontrolledTab, setUncontrolledTab] = useState<ViewKind>("locked_in");
   const tab = value ?? uncontrolledTab;
@@ -243,17 +259,23 @@ export function ViewTabs({
     <Suspense fallback={null}>
       <SourceDeepLink />
     </Suspense>
+    <ModeToolbarProvider>
     <Tabs
       value={tab}
       onValueChange={(next) => selectTab(next as ViewKind)}
       className="w-full gap-4"
     >
-      <div data-focus-hide className="print-hide sticky top-14 z-20 -mx-1 overflow-x-auto bg-background/95 px-1 py-2 backdrop-blur">
+      {/* One sticky strip: tabs left; the active mode's tools (portaled into the slot), Focus and More right.
+          No overflow here: it would clip the menus and the Contents popover. The tab list scrolls instead. */}
+      {/* The wrapper stays in Focus mode so the Focus toggle (the way out, and where focus lands) stays visible;
+          tabs, mode tools and More hide individually. */}
+      <div className="print-hide sticky top-14 z-20 -mx-1 flex flex-wrap items-end gap-x-2 gap-y-1 border-b border-border bg-background px-1 pt-2 in-data-[focus=on]:border-b-0">
         <TabsList
+          data-focus-hide
           variant="line"
           className={cn(
-            "min-w-full sm:min-w-0",
-            compact && "min-h-11 gap-0 border-b border-border p-0",
+            "min-w-0 flex-1 overflow-x-auto border-b-0",
+            compact && "min-h-11 gap-0 p-0",
           )}
           aria-label="Study modes"
         >
@@ -271,60 +293,35 @@ export function ViewTabs({
             </TabsTrigger>
           ))}
         </TabsList>
+        <div className="flex shrink-0 items-center gap-1 pb-1 max-sm:w-full max-sm:justify-end">
+          <ModeToolsSlot />
+          <FocusToggle />
+          <MoreMenu
+            packItems={packMenuItems}
+            redo={
+              showRedo
+                ? {
+                    label: busy ? "Redoing" : `Redo ${copy.label}`,
+                    busy,
+                    disabled: redoDisabled,
+                    hint: blockReason ?? copy.description,
+                    remaining: blockReason ? null : quota?.remaining ?? null,
+                    onSelect: requestRedo,
+                  }
+                : null
+            }
+          />
+        </div>
       </div>
       {compact ? null : (
         <p data-focus-hide className="print-hide text-xs text-muted-foreground">{copy.jobLine}</p>
       )}
-
-      {showRedo ? (
-        <div data-focus-hide className="print-hide flex flex-col gap-2 sm:flex-row sm:items-start">
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={redoDisabled}
-              aria-disabled={redoDisabled}
-              title={blockReason ?? copy.description}
-              onClick={requestRedo}
-            >
-              {busy ? (
-                <>
-                  <CircleNotch className="animate-spin" weight="bold" />
-                  Redoing
-                </>
-              ) : (
-                <>
-                  <ArrowsClockwise weight="bold" />
-                  Redo
-                </>
-              )}
-            </Button>
-            {quota ? (
-              <span
-                className={cn(
-                  "text-xs",
-                  quota.remaining < LOW_QUOTA_THRESHOLD ? "text-warning" : "text-muted-foreground",
-                )}
-              >
-                {quota.remaining} left today
-              </span>
-            ) : null}
-          </div>
-          <p className="max-w-xl text-xs leading-relaxed text-muted-foreground">
-            {blockReason ?? copy.description}
-          </p>
-        </div>
-      ) : null}
 
       {views.staleKinds?.includes(tab) && modeHasContent(tab, views) ? (
         <p role="status" data-focus-hide className="print-hide max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           This mode is from an older generation. Redo it when you are ready.
         </p>
       ) : null}
-
-      <div className="print-hide flex justify-end empty:hidden">
-        <FocusToggle />
-      </div>
 
       <TabsContent value={tab} className="outline-none">
         {viewsLoading && !modeHasContent(tab, views) ? (
@@ -422,7 +419,116 @@ export function ViewTabs({
         </DialogContent>
       </Dialog>
     </Tabs>
+    </ModeToolbarProvider>
     </StudyPackContext.Provider>
     </SourceViewerProvider>
+  );
+}
+
+/** The strip element the active mode's tools render into (relative: the Contents popover positions against it). */
+function ModeToolsSlot() {
+  const slotRef = useModeToolbarSlotRef();
+  return <div ref={slotRef} data-focus-hide className="relative flex items-center gap-1 empty:hidden" />;
+}
+
+type RedoMenuEntry = {
+  label: string;
+  busy: boolean;
+  disabled: boolean;
+  /** The block reason when blocked, else the mode's one-line description. */
+  hint: string;
+  remaining: number | null;
+  onSelect: () => void;
+};
+
+const MENU_ITEM_CLASS = "items-start pointer-coarse:min-h-11";
+
+function MenuItemText({ label, hint }: { label: ReactNode; hint?: ReactNode }) {
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span>{label}</span>
+      {hint ? <span className="text-xs leading-snug text-muted-foreground">{hint}</span> : null}
+    </span>
+  );
+}
+
+/**
+ * The strip's one More menu: the active mode's registered items, Redo for the
+ * active mode, then the pack's items. Groups are separated only when present.
+ */
+function MoreMenu({ packItems, redo }: { packItems: ModeMenuItem[]; redo: RedoMenuEntry | null }) {
+  const modeItems = useModeMenuItemsValue();
+  if (modeItems.length === 0 && !redo && packItems.length === 0) return null;
+  const groups: ReactNode[] = [];
+  if (modeItems.length > 0) {
+    groups.push(
+      modeItems.map((item) => (
+        <DropdownMenuItem key={item.id} className={MENU_ITEM_CLASS} disabled={item.disabled} onClick={item.onSelect}>
+          <MenuItemText label={item.label} hint={item.hint} />
+        </DropdownMenuItem>
+      )),
+    );
+  }
+  if (redo) {
+    groups.push(
+      <DropdownMenuItem key="redo" className={MENU_ITEM_CLASS} disabled={redo.disabled} onClick={redo.onSelect}>
+        {redo.busy ? (
+          <CircleNotch className="mt-0.5 animate-spin" weight="bold" />
+        ) : (
+          <ArrowsClockwise className="mt-0.5" weight="bold" />
+        )}
+        <MenuItemText
+          label={redo.label}
+          hint={
+            <>
+              {redo.hint}
+              {redo.remaining !== null ? (
+                <>
+                  {" "}
+                  <span className={redo.remaining < LOW_QUOTA_THRESHOLD ? "text-warning" : undefined}>
+                    {redo.remaining} left today.
+                  </span>
+                </>
+              ) : null}
+            </>
+          }
+        />
+      </DropdownMenuItem>,
+    );
+  }
+  if (packItems.length > 0) {
+    groups.push(
+      packItems.map((item) => (
+        <DropdownMenuItem key={item.id} className={MENU_ITEM_CLASS} disabled={item.disabled} onClick={item.onSelect}>
+          <MenuItemText label={item.label} hint={item.hint} />
+        </DropdownMenuItem>
+      )),
+    );
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            data-focus-hide
+            className="pointer-coarse:size-11"
+            aria-label="More actions"
+          />
+        }
+      >
+        <DotsThreeVertical weight="bold" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-64 max-w-80">
+        {groups.map((group, index) => (
+          <Fragment key={index}>
+            {index > 0 ? <DropdownMenuSeparator /> : null}
+            {group}
+          </Fragment>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
