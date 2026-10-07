@@ -84,12 +84,12 @@ export function safeSegment(value: string): string {
 
 /** Safe download name: "<name> - <mode><extension>", at most 120 characters. */
 export function exportFilename(reviewerName: string, modeLabel: string, extension: ".md" | ".pdf" = ".md"): string {
-  const name = safeSegment(reviewerName) || "Reviewer";
+  const name = safeSegment(reviewerName) || "Pack";
   const mode = safeSegment(modeLabel);
   const suffix = extension;
   let base = mode ? `${name} - ${mode}` : name;
   if (base.length + suffix.length > MAX_FILENAME_LENGTH) {
     base = base.slice(0, MAX_FILENAME_LENGTH - suffix.length).trimEnd().replace(/[.\s-]+$/, "");
   }
-  return `${base || "Reviewer"}${suffix}`;
+  return `${base || "Pack"}${suffix}`;
 }

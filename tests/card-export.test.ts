@@ -135,7 +135,7 @@ describe("cardExportFilename", () => {
 
   it("sanitises unsafe characters and falls back to Reviewer", () => {
     expect(cardExportFilename('Bio/Chem: "Week 1"?', "basic")).toBe("Bio Chem Week 1 - Basic cards.csv");
-    expect(cardExportFilename("  ", "cloze")).toBe("Reviewer - Cloze cards.csv");
+    expect(cardExportFilename("  ", "cloze")).toBe("Pack - Cloze cards.csv");
   });
 
   it("keeps long names within 120 characters with the label intact", () => {

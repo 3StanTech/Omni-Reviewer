@@ -1,4 +1,5 @@
 import { isCalendarDate } from "@/lib/date-validation";
+import { formatDay } from "@/lib/format-generated-at";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The last days before an exam are held back for second reviews. */
@@ -70,5 +71,5 @@ export function selectTodayCards<
 export function dueLabel(dueAt: Date, now: Date): string {
   const endOfToday = new Date(now);
   endOfToday.setHours(23, 59, 59, 999);
-  return dueAt.getTime() <= endOfToday.getTime() ? "Due today" : `Due ${dueAt.toLocaleDateString()}`;
+  return dueAt.getTime() <= endOfToday.getTime() ? "Due today" : `Due ${formatDay(dueAt)}`;
 }

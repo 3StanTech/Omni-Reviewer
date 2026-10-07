@@ -21,6 +21,12 @@ export type SnippetSegment = { text: string; mark: boolean };
 
 const PAGE_MARKER_LINES = /^<<<(?:page \d{1,4}|slide image)>>>$/gm;
 
+/** A citation `ts_headline` cut at the fragment's end (`[S1 p.12`) or start (`p.4]`). */
+const CUT_CITATION_END = /\[\[?(?:S\d*(?:\s*p\.?\s*\d*)?|unsourced)?\s*$/;
+const CUT_CITATION_START = /^\s*(?:S?\d*\s*p\.?\s*\d+|unsourced)?\]\]?/;
+
+const ELLIPSIS = "…";
+
 const TABLE_SEPARATOR_ROW = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const RULE_ROW = /^\s*(?:[-*_=]\s*){3,}$/;
 
@@ -47,11 +53,13 @@ function stripMarkdownNoise(text: string): string {
 /**
  * Turn a `ts_headline` snippet (matches wrapped in « and ») into plain text
  * segments. Citations, `[[unsourced]]`, page markers and Markdown syntax
- * (emphasis, headings, quotes, bullets, table pipes, code ticks, link URLs) are removed. Segments
- * are text only: callers render them as text nodes and never as HTML.
+ * (emphasis, headings, quotes, bullets, table pipes, code ticks, link URLs) are removed, as is
+ * a citation cut at either edge. A fragment that starts or ends mid-sentence gets an ellipsis.
+ * Segments are text only: callers render them as text nodes and never as HTML.
  */
 export function cleanSnippet(raw: string): SnippetSegment[] {
-  const text = stripMarkdownNoise(stripCitations(raw.replace(PAGE_MARKER_LINES, " ")))
+  const uncut = raw.replace(CUT_CITATION_END, "").replace(CUT_CITATION_START, "");
+  const text = stripMarkdownNoise(stripCitations(uncut.replace(PAGE_MARKER_LINES, " ")))
     .replace(/\s+/g, " ")
     .trim();
 
@@ -78,6 +86,20 @@ export function cleanSnippet(raw: string): SnippetSegment[] {
     }
   }
   flush();
+  if (segments.length === 0) return segments;
+
+  // A fragment that starts or stops mid-sentence reads as cut, so say so.
+  const plain = text.replace(/[«»]/g, "");
+  if (!/^(?:[\p{Lu}\p{N}]|…|\.\.\.)/u.test(plain)) {
+    const first = segments[0];
+    if (first.mark) segments.unshift({ text: ELLIPSIS, mark: false });
+    else first.text = ELLIPSIS + first.text;
+  }
+  if (!/(?:[.!?:]|…)$/.test(plain)) {
+    const last = segments[segments.length - 1];
+    if (last.mark) segments.push({ text: ELLIPSIS, mark: false });
+    else last.text += ELLIPSIS;
+  }
   return segments;
 }
 

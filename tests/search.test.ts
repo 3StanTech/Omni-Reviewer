@@ -30,38 +30,74 @@ describe("cleanSnippet", () => {
   });
 
   it("removes page markers and collapses newlines", () => {
-    const segments = cleanSnippet("<<<page 3>>>\nfirst\n\nsecond «hit»");
-    expect(segments.map((segment) => segment.text).join("")).toBe("first second hit");
+    const segments = cleanSnippet("<<<page 3>>>\nFirst\n\nsecond «hit».");
+    expect(segments.map((segment) => segment.text).join("")).toBe("First second hit.");
   });
 
   it("strips Markdown noise but keeps marked words", () => {
     const text = cleanSnippet("* **«Clinical» Utility:** Drugs `bind` [the «target»](http://x.y) and snake_case stays");
-    expect(text.map((s) => s.text).join("")).toBe("Clinical Utility: Drugs bind the target and snake_case stays");
+    expect(text.map((s) => s.text).join("")).toBe("Clinical Utility: Drugs bind the target and snake_case stays…");
     expect(text.filter((s) => s.mark).map((s) => s.text)).toEqual(["Clinical", "target"]);
-    expect(cleanSnippet("## Heading with _«emphasis»_ here").map((s) => s.text).join("")).toBe("Heading with emphasis here");
-    expect(cleanSnippet("> quoted «hit»").map((s) => s.text).join("")).toBe("quoted hit");
+    expect(cleanSnippet("## Heading with _«emphasis»_ here.").map((s) => s.text).join("")).toBe("Heading with emphasis here.");
+    expect(cleanSnippet("> Quoted «hit».").map((s) => s.text).join("")).toBe("Quoted hit.");
   });
 
   it("drops table pipes and separator rows", () => {
     const text = cleanSnippet("| Drug | Use |\n| --- | --- |\n| «Beta» | kills |");
-    expect(text.map((s) => s.text).join("")).toBe("Drug Use Beta kills");
+    expect(text.map((s) => s.text).join("")).toBe("Drug Use Beta kills…");
     expect(text.some((s) => s.mark && s.text === "Beta")).toBe(true);
   });
 
   it("keeps markup as inert text", () => {
     const segments = cleanSnippet('<script>alert(1)</script> «<img src=x onerror=alert(1)>»');
     expect(segments).toEqual([
-      { text: "<script>alert(1)</script> ", mark: false },
+      { text: "…<script>alert(1)</script> ", mark: false },
       { text: "<img src=x onerror=alert(1)>", mark: true },
+      { text: "…", mark: false },
     ]);
   });
 
   it("handles unbalanced and empty input", () => {
     expect(cleanSnippet("")).toEqual([]);
     expect(cleanSnippet("stray » close «open")).toEqual([
-      { text: "stray  close ", mark: false },
+      { text: "…stray  close ", mark: false },
       { text: "open", mark: true },
+      { text: "…", mark: false },
     ]);
+  });
+
+  it("drops a citation cut at the end of the fragment", () => {
+    const segments = cleanSnippet("…(beta-lactam + «penicillin» + streptomycin) [S1 p.12");
+    const text = segments.map((s) => s.text).join("");
+    expect(text).not.toContain("[S1");
+    expect(text).toBe("…(beta-lactam + penicillin + streptomycin)…");
+    expect(segments.filter((s) => s.mark).map((s) => s.text)).toEqual(["penicillin"]);
+    expect(cleanSnippet("Binds «30S» [[unsourced").map((s) => s.text).join("")).toBe("Binds 30S…");
+  });
+
+  it("drops a citation tail cut at the start of the fragment", () => {
+    const text = cleanSnippet("p.4] word «hit» here.").map((s) => s.text).join("");
+    expect(text).not.toContain("p.4]");
+    expect(text).toBe("…word hit here.");
+    expect(cleanSnippet("S2 p.10]] Binds «30S».").map((s) => s.text).join("")).toBe("Binds 30S.");
+  });
+
+  it("adds ellipses only where the fragment is cut", () => {
+    expect(cleanSnippet("Binds the «30S» subunit.")).toEqual([
+      { text: "Binds the ", mark: false },
+      { text: "30S", mark: true },
+      { text: " subunit.", mark: false },
+    ]);
+    expect(cleanSnippet("«Penicillin» binds")).toEqual([
+      { text: "Penicillin", mark: true },
+      { text: " binds…", mark: false },
+    ]);
+    expect(cleanSnippet("binds «PBP»")).toEqual([
+      { text: "…binds ", mark: false },
+      { text: "PBP", mark: true },
+      { text: "…", mark: false },
+    ]);
+    expect(cleanSnippet("12 drugs: «beta-lactams» and more:").map((s) => s.text).join("")).toBe("12 drugs: beta-lactams and more:");
   });
 });
 

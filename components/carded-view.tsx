@@ -117,7 +117,7 @@ export function CardedView({
   examDate = null,
   onCardsChange,
   lockedIn = null,
-  reviewerName = "Reviewer",
+  reviewerName = "Pack",
 }: CardedViewProps) {
   const generatedCards = useMemo(
     () => parseCards(contentJson, content),
@@ -461,8 +461,8 @@ export function CardedView({
         {isDurableCard(card) ? <span>{dueLabel(new Date(card.dueAt), new Date(sessionStartedAt))}</span> : null}
         {isDurableCard(card) && (card.isEdited || card.isPinned) ? <span className="text-warning">Protected from silent overwrite</span> : null}
         {dueStale ? <span className="text-warning">This card changed. Start a new due session before rating it.</span> : null}
-        {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
-        {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
+        {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
+        {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
         {isDurableCard(card) && flipped ? (
           <ExplainThisButton request={{ kind: "explain", target: { type: "card", cardId: card.id } }} />
         ) : null}

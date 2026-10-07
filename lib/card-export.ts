@@ -141,12 +141,12 @@ const FILE_LABELS: Record<CardExportKind, { label: string; suffix: string }> = {
 
 /** Safe download name: "<name> - Basic cards.csv", "- Cloze cards.csv" or "- RemNote cards.txt". */
 export function cardExportFilename(reviewerName: string, kind: CardExportKind): string {
-  const name = safeSegment(reviewerName) || "Reviewer";
+  const name = safeSegment(reviewerName) || "Pack";
   const { label, suffix } = FILE_LABELS[kind];
   let base = `${name} - ${label}`;
   if (base.length + suffix.length > MAX_FILENAME_LENGTH) {
     const room = MAX_FILENAME_LENGTH - suffix.length - ` - ${label}`.length;
-    base = `${name.slice(0, room).trimEnd().replace(/[.\s-]+$/, "") || "Reviewer"} - ${label}`;
+    base = `${name.slice(0, room).trimEnd().replace(/[.\s-]+$/, "") || "Pack"} - ${label}`;
   }
   return `${base}${suffix}`;
 }

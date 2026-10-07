@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { formatDay, formatStamp } from "@/lib/format-generated-at";
 import { daysUntilExam, dueLabel, newCardAllowance, selectTodayCards } from "@/lib/pacing";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -89,6 +90,24 @@ describe("dueLabel", () => {
 
   it("shows the date for a card due after today", () => {
     const tomorrow = new Date(2026, 9, 8, 0, 5);
-    expect(dueLabel(tomorrow, today)).toBe(`Due ${tomorrow.toLocaleDateString()}`);
+    expect(dueLabel(tomorrow, today)).toBe("Due Oct 8");
+    expect(dueLabel(new Date(2026, 9, 9, 10, 0), today)).toBe("Due Oct 9");
+  });
+});
+
+describe("formatStamp and formatDay", () => {
+  it("formats a stamp as month, day and time without seconds", () => {
+    const stamp = formatStamp(new Date(2026, 9, 6, 13, 36, 16).toISOString());
+    expect(stamp).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} (AM|PM)$/);
+    expect(stamp).toBe("Oct 6, 1:36 PM");
+  });
+
+  it("returns null for an invalid stamp", () => {
+    expect(formatStamp("not a date")).toBeNull();
+  });
+
+  it("formats a day as month and day", () => {
+    expect(formatDay(new Date(2026, 9, 9, 8, 0))).toBe("Oct 9");
+    expect(formatDay(new Date(2026, 0, 31))).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/);
   });
 });

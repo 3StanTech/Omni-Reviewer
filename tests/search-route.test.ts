@@ -74,7 +74,7 @@ describe("GET /api/search", () => {
       packName: "Pharm",
       kindLabel: "Slide 7",
       href: searchResultHref({ kind: "source_page", topicId: "t1", reviewerId: "r1", sourceId: "s1", sourceIndex: 2, page: 7 }),
-      snippet: [{ text: "Propranolol", mark: true }, { text: " blocks beta", mark: false }],
+      snippet: [{ text: "Propranolol", mark: true }, { text: " blocks beta…", mark: false }],
     });
     expect(results[0].href).toContain("sourceId=s1");
     expect(results[0].href).toContain("page=7");

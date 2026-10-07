@@ -88,7 +88,7 @@ describe("exportFilename", () => {
   });
 
   it("falls back when the name is empty after cleaning", () => {
-    expect(exportFilename("///", "Summary")).toBe("Reviewer - Summary.md");
+    expect(exportFilename("///", "Summary")).toBe("Pack - Summary.md");
   });
 
   it("caps the filename at 120 characters", () => {
