@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { formatStampLocal, formatStampUtc } from "@/lib/format-generated-at";
+import { formatStamp } from "@/lib/format-generated-at";
 import { BATCH_ACCEPT } from "@/lib/generation-queue";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
@@ -58,15 +58,15 @@ export function PackMastery({ mastery }: { mastery: ReviewerListItem["mastery"] 
   return (
     <>
       {mastery.score !== null ? (
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex shrink-0 items-center gap-1.5">
           Mastery
           <MasteryBar score={mastery.score} label />
         </span>
       ) : null}
       {mastery.weakTitle ? (
-        <span className="inline-flex max-w-full min-w-0 items-center gap-1">
-          <WarningCircle weight="bold" aria-hidden className="size-3.5 shrink-0 text-warning" />
-          <span className="truncate">Weak: {mastery.weakTitle}</span>
+        <span className="flex min-w-0 basis-full items-start gap-1">
+          <WarningCircle weight="bold" aria-hidden className="mt-px size-3.5 shrink-0 text-warning" />
+          <span className="line-clamp-1 min-w-0 break-words">Weak: {mastery.weakTitle}</span>
         </span>
       ) : null}
     </>
@@ -82,20 +82,14 @@ type ReviewerListProps = {
   addingFiles?: boolean;
 };
 
-const LIST_LOCAL_STAMP: Intl.DateTimeFormatOptions = {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-};
-
+/** Hidden on phones, where the row's right side holds the actions. */
 function PackRowChevron() {
   const { pending } = useLinkStatus();
   if (pending) {
     return (
       <>
         <CircleNotch
-          className="size-4 shrink-0 animate-spin text-muted-foreground"
+          className="mt-2 size-4 shrink-0 animate-spin text-muted-foreground max-sm:hidden"
           weight="bold"
           aria-hidden
         />
@@ -105,7 +99,7 @@ function PackRowChevron() {
   }
   return (
     <CaretRight
-      className="size-4 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100"
+      className="mt-2 size-4 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100 max-sm:hidden"
       weight="bold"
     />
   );
@@ -116,9 +110,8 @@ function GeneratedAtLabel({ iso }: { iso: string | null }) {
   if (!iso) {
     return <span suppressHydrationWarning>Not generated yet</span>;
   }
-  const stamp = isClient
-    ? formatStampLocal(iso, LIST_LOCAL_STAMP)
-    : formatStampUtc(iso);
+  // The server does not know the viewer's zone, so the time appears after mount.
+  const stamp = isClient ? formatStamp(iso) : null;
   const text = stamp ? `Generated ${stamp}` : "Generated";
   return <span suppressHydrationWarning>{text}</span>;
 }
@@ -160,7 +153,7 @@ export function ReviewerList({
     if (!topicId) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setError("Reviewer name is required.");
+      setError("Pack name is required.");
       return;
     }
     setBusy(true);
@@ -193,7 +186,7 @@ export function ReviewerList({
     if (!active) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setError("Reviewer name is required.");
+      setError("Pack name is required.");
       return;
     }
     setBusy(true);
@@ -295,7 +288,7 @@ export function ReviewerList({
             }}
           >
             <Plus weight="bold" />
-            New reviewer
+            New pack
           </Button>
         </div>
       </div>
@@ -304,7 +297,7 @@ export function ReviewerList({
         <EmptyState
           icon={<Notebook weight="duotone" className="size-5" />}
           title="No study packs yet"
-          description="A reviewer is one study pack: sources you upload, plus four study modes you generate when ready."
+          description="A pack holds the sources you upload and the four study modes you generate from them."
           action={
             <Button
               type="button"
@@ -315,24 +308,24 @@ export function ReviewerList({
               }}
             >
               <Plus weight="bold" />
-              Create first reviewer
+              Create first pack
             </Button>
           }
         />
       ) : (
         <ul className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/80 bg-surface/40">
           {reviewers.map((reviewer) => (
-            <li key={reviewer.id} className="group flex items-stretch">
+            <li key={reviewer.id} className="group flex items-center gap-2 pr-2">
               <Link
                 href={`/topics/${topicId}/reviewers/${reviewer.id}`}
                 prefetch
-                className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-4 py-2 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+                className="flex min-h-14 min-w-0 flex-1 items-start gap-3 px-4 py-3 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
               >
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
                   <Notebook weight="duotone" className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-foreground">
+                  <span className="line-clamp-2 text-sm font-medium break-words text-foreground">
                     {reviewer.name}
                   </span>
                   <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
@@ -346,56 +339,66 @@ export function ReviewerList({
                 </span>
                 <PackRowChevron />
               </Link>
-              {reviewer.dueTodayCount > 0 || reviewer.hasActiveSitting ? (
-                <Link
-                  href={reviewer.dueTodayCount > 0
-                    ? `/topics/${topicId}/reviewers/${reviewer.id}?mode=carded`
-                    : `/topics/${topicId}/reviewers/${reviewer.id}?mode=test_me`}
-                  className="flex items-center border-l border-border/60 px-3 text-xs font-medium text-primary outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+              {reviewer.dueTodayCount > 0 ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  nativeButton={false}
+                  aria-label={`Review due cards in ${reviewer.name}`}
+                  render={<Link href={`/topics/${topicId}/reviewers/${reviewer.id}?mode=carded`} />}
                 >
-                  {reviewer.dueTodayCount > 0 ? "Review due cards" : "Resume Test Me"}
-                </Link>
+                  Review
+                </Button>
+              ) : reviewer.hasActiveSitting ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  nativeButton={false}
+                  aria-label={`Resume Test Me in ${reviewer.name}`}
+                  render={<Link href={`/topics/${topicId}/reviewers/${reviewer.id}?mode=test_me`} />}
+                >
+                  Resume
+                </Button>
               ) : null}
-              <div className="flex items-center border-l border-border/60 px-1">
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Actions for ${reviewer.name}`}
-                      />
-                    }
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="pointer-coarse:size-11"
+                      aria-label={`Actions for ${reviewer.name}`}
+                    />
+                  }
+                >
+                  <DotsThreeVertical weight="bold" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-40">
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setActive(reviewer);
+                      setName(reviewer.name);
+                      setError(null);
+                      setRenameOpen(true);
+                    }}
                   >
-                    <DotsThreeVertical weight="bold" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-40">
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setActive(reviewer);
-                        setName(reviewer.name);
-                        setError(null);
-                        setRenameOpen(true);
-                      }}
-                    >
-                      <PencilSimple />
-                      Rename
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => {
-                        setActive(reviewer);
-                        setError(null);
-                        setDeleteOpen(true);
-                      }}
-                    >
-                      <Trash />
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+                    <PencilSimple />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => {
+                      setActive(reviewer);
+                      setError(null);
+                      setDeleteOpen(true);
+                    }}
+                  >
+                    <Trash />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </li>
           ))}
         </ul>
@@ -404,14 +407,14 @@ export function ReviewerList({
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New reviewer</DialogTitle>
+            <DialogTitle>New pack</DialogTitle>
             <DialogDescription>
               Name this study pack. You will upload sources and generate study
               modes inside it.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="reviewer-name">Name</Label>
+            <Label htmlFor="reviewer-name">Pack name</Label>
             <Input
               id="reviewer-name"
               value={name}
@@ -452,7 +455,7 @@ export function ReviewerList({
                   Creating
                 </>
               ) : (
-                "Create reviewer"
+                "Create pack"
               )}
             </Button>
           </DialogFooter>
@@ -462,13 +465,13 @@ export function ReviewerList({
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Rename reviewer</DialogTitle>
+            <DialogTitle>Rename pack</DialogTitle>
             <DialogDescription>
               Update the name of this study pack.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="reviewer-rename">Name</Label>
+            <Label htmlFor="reviewer-rename">Pack name</Label>
             <Input
               id="reviewer-rename"
               value={name}
@@ -518,7 +521,7 @@ export function ReviewerList({
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete reviewer</DialogTitle>
+            <DialogTitle>Delete pack</DialogTitle>
             <DialogDescription>
               This removes the study pack, its sources, and all generated study
               modes. This cannot be undone.
@@ -550,7 +553,7 @@ export function ReviewerList({
                   Deleting
                 </>
               ) : (
-                "Delete reviewer"
+                "Delete pack"
               )}
             </Button>
           </DialogFooter>

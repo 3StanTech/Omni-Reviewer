@@ -293,7 +293,7 @@ describe("exam pacing strip", () => {
 
 describe("today components", () => {
   it("contain no em dashes", () => {
-    for (const file of ["mastery-bar", "today-bar", "today-modal"]) {
+    for (const file of ["mastery-bar", "today-card", "today-modal"]) {
       const source = readFileSync(`components/${file}.tsx`, "utf8");
       expect(source.includes("—"), `${file}.tsx`).toBe(false);
     }

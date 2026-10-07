@@ -8,26 +8,25 @@ function parseStamp(iso: string): Date | null {
   }
 }
 
-/** `yyyy-mm-dd hh:mi UTC`, or null if the ISO stamp is invalid. */
-export function formatStampUtc(iso: string): string | null {
+export const STAMP_OPTIONS: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+};
+
+/**
+ * The one product stamp, `Oct 6, 1:36 PM` in the viewer's zone, or null if the
+ * ISO stamp is invalid. Call it only on the client: the server does not know
+ * the viewer's zone, so server renders show a label without the time.
+ */
+export function formatStamp(iso: string): string | null {
   const d = parseStamp(iso);
   if (!d) return null;
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mi = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi} UTC`;
+  return d.toLocaleString("en-US", STAMP_OPTIONS);
 }
 
-/** Locale stamp, or null if the ISO stamp is invalid. */
-export function formatStampLocal(
-  iso: string,
-  options?: Intl.DateTimeFormatOptions,
-): string | null {
-  const d = parseStamp(iso);
-  if (!d) return null;
-  return options
-    ? d.toLocaleString(undefined, options)
-    : d.toLocaleString();
+/** A calendar day, `Oct 9`, in the viewer's zone. */
+export function formatDay(date: Date): string {
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }

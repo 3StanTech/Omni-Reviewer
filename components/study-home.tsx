@@ -1,18 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 
 import { GenerationQueuePanel } from "@/components/generation-queue-panel";
 import {
   ReviewerList,
   type ReviewerListItem,
 } from "@/components/reviewer-list";
-import { TodayBar } from "@/components/today-bar";
+import { TodayCard } from "@/components/today-card";
 import { TodayModal, type TodayHrefs } from "@/components/today-modal";
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
 import { useTopicNav } from "@/components/topic-shelf";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { outlineHeadingHref } from "@/lib/study-outline";
 import type { TodayPlan } from "@/lib/today-plan";
@@ -42,7 +40,7 @@ type StudyHomeProps = {
   selectedId: string | null;
   topicName: string | null;
   reviewers: ReviewerListItem[];
-  /** Null while the user has no packs; the Today bar is then hidden. */
+  /** Null while the user has no packs; the Today card is then hidden. */
   today: StudyHomeToday | null;
   /** Session user, for the batch upload's Blob paths. Absent hides the batch button. */
   userId?: string | null;
@@ -82,7 +80,6 @@ export function StudyHome({
   const packTopicIds = today?.packTopicIds;
   const hrefs = useMemo(() => todayHrefs(packTopicIds ?? {}), [packTopicIds]);
   const shelfOpen = topicNav?.shelfOpen ?? true;
-  const duePack = reviewers.find((reviewer) => reviewer.dueTodayCount > 0) ?? null;
   const [localOptimisticId, setLocalOptimisticId] = useState<string | null>(
     null,
   );
@@ -101,30 +98,16 @@ export function StudyHome({
 
   return (
     <div className="flex flex-col gap-8">
-      {today || (duePack && selectedId) ? (
-        <div className="flex flex-col gap-3">
-          {today ? (
-            <>
-              <TodayBar plan={today.plan} onOpen={() => setTodayOpen(true)} />
-              <TodayModal
-                plan={today.plan}
-                open={todayOpen}
-                onOpenChange={setTodayOpen}
-                hrefs={hrefs}
-              />
-            </>
-          ) : null}
-          {duePack && selectedId ? (
-            <Button
-              nativeButton={false}
-              render={
-                <Link href={`/topics/${selectedId}/reviewers/${duePack.id}?mode=carded`} />
-              }
-            >
-              Practice due cards
-            </Button>
-          ) : null}
-        </div>
+      {today ? (
+        <>
+          <TodayCard plan={today.plan} hrefs={hrefs} onOpenPlan={() => setTodayOpen(true)} />
+          <TodayModal
+            plan={today.plan}
+            open={todayOpen}
+            onOpenChange={setTodayOpen}
+            hrefs={hrefs}
+          />
+        </>
       ) : null}
       <div className={shelfOpen ? "md:hidden" : undefined}>
         <TopicTabs
