@@ -76,7 +76,7 @@ import {
 } from "@/lib/prompts";
 import { hasPageMarkers, splitPages } from "@/lib/source-markers";
 import { itemPages, sectionPages, uncoveredSections } from "@/lib/study-coverage";
-import { stripDocumentFraming } from "@/lib/study-framing";
+import { stripDocumentFraming, stripSelfReference } from "@/lib/study-framing";
 import { demoteShiftedHeadings, sanitizeStudyHeadings } from "@/lib/study-headings";
 import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
 import { capSummarySections } from "@/lib/summary-cap";
@@ -1216,7 +1216,8 @@ async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; model
       textOf: testMeText,
     });
     // Valid items can still carry "A. ..." labels; the UI numbers choices.
-    return { ...result, items: result.items.map((item) => repairQuizAnswer(item) as TestMeItem) };
+    // References to "the document" are removed in code, as with Locked In framing.
+    return { ...result, items: result.items.map((item) => withoutSelfReference(repairQuizAnswer(item) as TestMeItem)) };
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
     throw toGenerationError(
@@ -1231,9 +1232,26 @@ async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; model
   }
 }
 
+/** A Test Me item without references to the study material; the answer stays one of the choices. */
+function withoutSelfReference(item: TestMeItem): TestMeItem {
+  const original = item.choices ?? [];
+  const choices = original.map(stripSelfReference);
+  const answerIndex = original.indexOf(item.answer);
+  if (!item.choices || new Set(choices).size !== choices.length || answerIndex < 0) {
+    return { ...item, question: stripSelfReference(item.question), explanation: stripSelfReference(item.explanation) };
+  }
+  return {
+    ...item,
+    question: stripSelfReference(item.question),
+    choices,
+    answer: choices[answerIndex],
+    explanation: stripSelfReference(item.explanation),
+  };
+}
+
 async function runCarded(summary: string): Promise<{ items: CardedItem[]; modelUsed: string }> {
   try {
-    return await generateItemsByHalves({
+    const result = await generateItemsByHalves({
       kind: "carded",
       markdown: summary,
       prompt: cardedPrompt,
@@ -1241,6 +1259,10 @@ async function runCarded(summary: string): Promise<{ items: CardedItem[]; modelU
       promptText: (item) => item.front,
       textOf: cardedText,
     });
+    return {
+      ...result,
+      items: result.items.map((item) => ({ ...item, front: stripSelfReference(item.front), back: stripSelfReference(item.back) })),
+    };
   } catch (err) {
     if (err instanceof PromptInputLimitError) throw err;
     throw toGenerationError(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { stripDocumentFraming } from "@/lib/study-framing";
+import { stripDocumentFraming, stripSelfReference } from "@/lib/study-framing";
 
 describe("stripDocumentFraming", () => {
   it("removes the live Trans 5 framing sentence and preserves the pharmacology sentence", () => {
@@ -94,5 +94,31 @@ describe("stripDocumentFraming", () => {
     const markdown = "## Pharmacology\n\nA  drug inhibits synthesis. [S1 p.2]\nA second line keeps *italics*.\n\n- A supported  fact.\n";
     expect(stripDocumentFraming(markdown)).toBe(markdown);
     expect(stripDocumentFraming("")).toBe("");
+  });
+});
+
+describe("stripSelfReference", () => {
+  it.each([
+    ["According to the document, which drug treats PJP?", "Which drug treats PJP?"],
+    ["As described in this guide, what does TMP-SMX inhibit?", "What does TMP-SMX inhibit?"],
+    ["Which enzyme is described in the document as the target?", "Which enzyme is described as the target?"],
+    ["What is the first-line drug, as stated in the study guide?", "What is the first-line drug?"],
+    ["The drug is first line in the notes [S1 p.2].", "The drug is first line [S1 p.2]."],
+    ["**In the document,** what is the dose?", "What is the dose?"],
+  ])("rewrites %s", (input, expected) => {
+    expect(stripSelfReference(input)).toBe(expected);
+  });
+
+  it.each([
+    "Which document must the pharmacist sign before dispensing?",
+    "What is stated in the text of the prescription label?",
+    "Record the dose in the patient's medication document.",
+    "{{TMP-SMX}} treats PJP.",
+  ])("leaves %s unchanged", (input) => {
+    expect(stripSelfReference(input)).toBe(input);
+  });
+
+  it("keeps the original when nothing else is left", () => {
+    expect(stripSelfReference("In the document")).toBe("In the document");
   });
 });

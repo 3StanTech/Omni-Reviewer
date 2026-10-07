@@ -81,3 +81,31 @@ export function stripDocumentFraming(markdown: string): string {
   }
   return output.join("\n");
 }
+
+const SELF_NOUN = "(?:study\\s+)?(?:document|guide|reviewer|text|material|materials|notes|lesson|summary|handout)";
+const LEADING_PHRASE = `(?:according\\s+to|based\\s+on|from|in|as\\s+(?:described|stated|discussed|noted|shown|explained|mentioned)\\s+in)\\s+(?:the|this)\\s+${SELF_NOUN}`;
+/** "According to the document, ..." or "As described in this guide, ..." opening a question or card. */
+const LEADING_SELF_REFERENCE = new RegExp(`^(\\s*)${LEADING_PHRASE}\\s*,\\s*`, "i");
+/** The same opening wrapped in emphasis ("**In the document,** ..."), unwrapped first. */
+const EMPHASIZED_LEADING_SELF_REFERENCE = new RegExp(`^(\\s*)([*_]{1,3})(${LEADING_PHRASE}\\s*,?)\\2\\s*`, "i");
+/** ", as described in the document" or " in the guide" inside a sentence; never "the text of ...". */
+const INLINE_SELF_REFERENCE = new RegExp(
+  `,?\\s+(?:as\\s+(?:described|stated|discussed|noted|shown|explained|mentioned)\\s+)?(?:in|from|according\\s+to|within)\\s+(?:the|this)\\s+${SELF_NOUN}(?!\\s+of\\b)(?=[\\s,.?!;:)]|$)`,
+  "gi",
+);
+
+/**
+ * Remove references to the study material itself from a Test Me question,
+ * choice, explanation or card side ("According to the document, which ..." ->
+ * "Which ..."). Free models write them despite the prompt rule; the learner
+ * studies the content, not a document. Returns the text unchanged when
+ * removing them would leave nothing.
+ */
+export function stripSelfReference(text: string): string {
+  const stripped = text
+    .replace(EMPHASIZED_LEADING_SELF_REFERENCE, (_, lead: string, _mark: string, phrase: string) => `${lead}${phrase.replace(/,?$/, ",")} `)
+    .replace(LEADING_SELF_REFERENCE, (_, lead: string) => lead)
+    .replace(INLINE_SELF_REFERENCE, "")
+    .replace(/^(\s*)(\p{Ll})/u, (_, lead: string, first: string) => lead + first.toUpperCase());
+  return stripped.trim() ? stripped : text;
+}

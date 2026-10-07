@@ -314,7 +314,7 @@ Requirements:
 - Write the fields in that order. Work out the explanation first, then copy the choice it supports into s4_answer.
 - Every item must be multiple-choice with at least two non-empty choices. Use recall, comparison, and application questions when the material supports it.
 - When the material is clinical (patients, drugs, diseases), write about a third of the items as short case vignettes (a brief patient scenario followed by the question). Never prefix a question with a label such as "Clinical Case:".
-- State facts directly in questions and explanations. Never refer to the source material itself: no "The document states", "The text states", "The lecture says", "According to Locked In", or similar.
+- State facts directly in questions and explanations. Never refer to the source material itself: no "The document states", "in the document", "The text states", "The lecture says", "According to Locked In", or similar.
 - End every s3_explanation with the exact citation of the supporting Locked In claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from Locked In; never create new ones.
 - Return about ${maxItems} items (never more than ${maxItems}); return fewer only when the material has fewer distinct facts.
 - ${SECTION_COVERAGE}
@@ -343,6 +343,7 @@ Requirements:
     "back": string (answer / definition / explanation)
   }
 - One atomic idea per card. Front should be answerable without seeing the back.
+- State facts directly. Never refer to the source material itself: no "in the document", "according to the Summary", "the text says", or similar.
 - For a fill-in-the-blank card, the front may use one or more balanced {{answer}} placeholders. Keep each placeholder short and put the explanation in back.
 - Prefer cloze {{...}} cards for short lists worth memorizing, such as an adverse-effect triad or the drugs in a class.
 - End every back with the exact citation of the supporting Summary claim, for example [S1 p.14], [S1 pp.14-15], or [S2]. Copy citations only from the Summary; never create new ones.
