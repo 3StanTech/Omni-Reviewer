@@ -56,10 +56,11 @@ Accent is for selection and primary CTAs only, not decoration.
 - **Generation section** (once study modes exist): shown above the study only while modes are missing or a job is running, failed or partial. A finished job shows a short Pack ready line that clears itself.
 - **Rail** (pack page): a sticky 17.5rem column right of the study content when the pack container is at least 64rem wide (a container query, so the topic shelf and Ask padding count) and Ask is closed. Sections, in order: the mode's own section, then Pack.
   - Locked In and Summary: **Contents** with mastery bars, the current section highlighted (the last heading at or above 30% of the viewport, `aria-current="location"`), reading progress %, and Top/End entries (the same jumps as the floating pair); **Notes** collapsed with a count, expanding in place to highlights and saved Ask answers. The strip's Contents and Notes buttons hide while the rail shows; the claims chip stays in the strip.
-  - Test Me and Carded: **Sections**, the Locked In headings with mastery bars, weak sections marked; no links.
+  - Test Me and Carded: **Sections**, the Locked In headings with mastery bars, weak sections marked (described as "Under 60% correct on 3 or more answers"); no links.
+  - The rail's Contents keeps the current section in view by scrolling the rail itself, never the page; it pauses for 2 seconds after the reader scrolls the rail.
   - **Pack**: Sources (n) and Exam date buttons opening the same dialogs as More (More keeps them, since the rail is not always visible).
   - Print-hidden.
-- **Contents and Notes fallback** (no rail: narrow window, phone, or Ask open): a popover under the strip on desktop, the bottom sheet on phones.
+- **Contents and Notes fallback** (no rail: narrow window, phone, or Ask open): a popover under the strip on desktop, the bottom sheet on phones. While a phone sheet is open (`html[data-study-sheet-open]`), the floating ↑ ↓ and Ask pill hide so they never cover it.
 - **Wide inline math**: an inline formula wider than the text column scrolls inside the column (measured `math-overflow` class); other inline formulas are untouched. Display math always scrolls.
 - **Document title**: the "Locked In:" / "Summary:" prefix of the first heading is hidden on screen (kept in the text and in print).
 - Breakpoint: single column below 768px. No horizontal overflow at 390px.
@@ -68,9 +69,10 @@ Accent is for selection and primary CTAs only, not decoration.
 ## Components
 
 - **Topic tabs**: horizontal scroll if needed; selected = amber underline or filled chip.
-- **Today card**: one card at the top of the desk for all topics: due cards, weak sections and minutes (wraps, never truncated), **Start studying** to the first Do-first item, and **See the plan** for the Today dialog. Empty: Nothing due today.
-- **Pack rows**: name up to two lines (never clipped); meta line wraps: generated stamp or Not generated yet, due-today count when above 0, exam date when set, mastery, weak section. A small **Review** button when cards are due (else **Resume** for an active sitting), then the overflow menu (rename/delete).
-- **Topic shelf**: Due today shows the all-topics total, equal to the Today card; each topic shows its own count when above 0. Below 768px it is a drawer that starts closed on every load.
+- **Today card**: one card at the top of the desk for all topics: "N to review · M new", weak sections and minutes (wraps, never truncated; a zero part is left out), **Start studying** to the first Do-first item, **See the plan** for the Today dialog, and **How cards come back** (the `StudyHelp` explainer). Empty: Nothing due today.
+- **StudyHelp** ("How cards come back", `Question` icon; icon only below 640px): a popover on desktop, a bottom sheet on phones. It explains New (up to 20 a day per pack, or spread out until the exam), To review, Again (tomorrow) and Good (about 3 days, then 2 weeks, then 2 months, then longer; never after the exam), and Weak (under 60% correct across 3 or more answers). Shown on the Today card and in Carded.
+- **Pack rows**: name up to two lines (never clipped); meta line wraps: generated stamp or Not generated yet, "N to review · M new" when above 0 (zero parts left out), exam date when set, mastery, weak section (described as "Under 60% correct on 3 or more answers"). A small **Review** button when cards are due (else **Resume** for an active sitting), then the overflow menu (rename/delete).
+- **Topic shelf**: Due today shows the all-topics total (cards to review plus today's new cards), equal to the Today card; each topic shows its own count when above 0. Below 768px it is a drawer that starts closed on every load.
 - **Dates**: one stamp, `Oct 6, 1:36 PM`, in the viewer's zone. Server renders show the label without a time (no UTC text). Days read `Oct 9`.
 - **Change today's mood**: not a primary CTA. Hover/focus opens the look menu on fine pointers; click toggles on coarse pointers.
 - **Citation chips**: small mono `p.14` buttons inline after a claim. They open the source modal and are never part of the annotation text.
@@ -83,6 +85,9 @@ Accent is for selection and primary CTAs only, not decoration.
 - **Generate**: primary for the first pack. Generate missing fills only absent modes. Hidden once all four modes exist.
 - **Redo**: an item in More for the active study mode, with a one-line description of upstream. Confirm if that mode already has content. Redo Locked In names all four modes. Redo Summary, Test Me, or Carded names only that mode.
 - **Study mode tabs**: Locked In · Summary · Test Me · Carded, with no theme-specific duplicate chooser. 14px labels; the selected tab is a bottom underline only.
+- **Carded**: header "Remaining: N to review · M new" with Export, Browse all / Study due and How cards come back; no Restart. The session recap offers **Practice missed (n)** (cards rated Again) and **Practice all (n)**; practice runs the same cards with flip and Again/Good, labelled "Practice, not scheduled", and never saves a rating. It ends on "Practice done" with the same buttons plus **Back to due**.
+- **Test Me recap**: a large score ("7/15" with "47%"), the studied-for line, **By section** (sections with items this sitting, "3 of 5" and a bar; uncited items under Other), and each miss with **Your answer** (`XCircle`, muted; "No answer" when empty) beside **Correct** (`CheckCircle`). Retry missed and Start again stay.
+- **Unsourced tag**: "Not from your uploaded sources" with Keep, Delete and Ask why; under the title one muted reason line: "Not found in your sources: <terms>" for a term-guard tag, else "The checker could not match this sentence to its cited page."
 - **Scroll jump**: on pack pages taller than three screens, ↑ (Back to top) and ↓ (Jump to end) stack above the Ask pill. ↑ shows past half a screen; ↓ hides once the end of the study content (`data-study-end`) is on screen. Hidden while Ask is open, kept in Focus mode, print-hidden, instant under reduced motion.
 - **Empty states**: short title, one teaching sentence, one action when available.
 - **Buttons**: ghost for strip and menu controls; outline for dialog Cancel; primary only for the main action (Save changes, Generate, Start studying, Save date).

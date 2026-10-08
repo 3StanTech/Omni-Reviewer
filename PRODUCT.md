@@ -67,8 +67,8 @@ Generated only on explicit Generate or Redo. Tab changes never call the model. S
 
 1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables, KaTeX, and legacy semantic ink spans rendered neutrally; GFM footnotes are unsupported). Source of truth. It supports explicit Edit, Save changes, and Cancel.
 2. **Summary** - detailed summary of Locked In for last-minute review. It uses the same explicit Markdown editor and save/revision contract as Locked In.
-3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains. This mode has a last question. It does not schedule tomorrow's work.
-4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome. Each button shows its next interval. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
+3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains. This mode has a last question. It does not schedule tomorrow's work. The recap shows the score with a percent, a breakdown by Locked In section, and each miss with the reader's answer beside the correct one.
+4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome ("Remaining: N to review · M new"). Each button shows its next interval. The session recap offers Practice missed and Practice all, which re-run cards without saving ratings or changing due dates; there is no Restart. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
 
 Looks (Night and Day) are chrome only. Legacy Thea-Style and RemNote-Style values in local storage normalize to Day; they do not add objects or layouts.
 
@@ -92,7 +92,7 @@ Carded schedules with FSRS (`ts-fsrs`, MIT) and two buttons, Again and Good.
 
 ### Exam pacing
 
-Only a pack with an exam date paces its new cards, so each is reviewed at least twice before the exam. New cards per day is the new cards remaining divided by the days left minus 2 (at least 1 day), rounded up, counted over a rolling 24 hours. The last 2 days are held back for second reviews. Due counts on the desk, pack rows and Carded use the paced number. A pack without an exam date shows every due new card.
+Only a pack with an exam date paces its new cards, so each is reviewed at least twice before the exam. New cards per day is the new cards remaining divided by the days left minus 2 (at least 1 day), rounded up, counted over a rolling 24 hours. The last 2 days are held back for second reviews. Due counts on the desk, pack rows and Carded use the paced number. A pack without an exam date introduces at most 20 new cards a day (`NEW_CARDS_PER_DAY`); reviews are never capped. Counts read "N to review · M new" on the desk, pack rows and Carded; the shelf's Due today is their sum.
 
 ### Mastery
 
@@ -132,6 +132,8 @@ A one-line bar on the desk sums up the day: cards due, weak sections, the neares
 - PDF pages and PPTX slides are stored with `<<<page N>>>` markers. DOCX, pasted notes, and images have no pages and are cited as a whole source. A ready PDF or PPTX stored before markers existed shows **Refresh page numbers**, which re-reads the stored file.
 - Sources are numbered S1..Sn in upload order. Locked In and Summary end each claim with `[S1 p.14]`, `[S1 pp.14-15]`, `[S1 p.2, p.3]`, or `[S2]`. The view stores which upload each S number meant (`contentJson.citationSources`), so later uploads never re-point old citations.
 - After Locked In and Summary are generated, a grounding check compares each claim with its cited pages: a free text-overlap check first, then one batched model call for the misses that must list the facts the evidence lacks. A claim with no support gets `[[unsourced]]`, shown as **Not from your uploaded sources**. The label never says "hallucination": the checker cannot tell invented facts from correct outside knowledge.
+- A term guard then tags any supported claim naming a specific term absent from every source. Possessives match their stem ("Sun Tzu's" = "Sun Tzu"), ordinals match their words ("3rd" = "third"), and listed acronyms match their expansion (PCP, AZT). The report records the missing terms per claim (`termFlags`), and the tag shows them: "Not found in your sources: <terms>"; other tags say "The checker could not match this sentence to its cited page."
+- `scripts/recheck-tags.ts` re-checks tagged claims with no model call (overlap and term guard only) and clears tags that now pass; dry run by default, `--apply` saves with the normal revision check. Production runs need the owner's go.
 - Keep removes the tag. Delete sentence removes the claim. Both use the normal revision-checked save.
 - The header shows "N of M claims from your sources" only for grounded documents, where N counts claims without the tag.
 - Citation chips open the source in a modal. PDFs render the cited page in the browser from the private file stream.
