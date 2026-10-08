@@ -167,6 +167,18 @@ export function StudySidePanel({ markdown, annotations, earlierCursor, earlierBu
     return () => media.removeEventListener("change", sync);
   }, []);
 
+  // The phone sheet sits inside the strip's stacking context, so the floating
+  // stack and the Ask pill hide while it is open (they key off this attribute).
+  const sheetOpen = Boolean(open) && compactSheet;
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const root = document.documentElement;
+    root.dataset.studySheetOpen = "true";
+    return () => {
+      delete root.dataset.studySheetOpen;
+    };
+  }, [sheetOpen]);
+
   useEffect(() => {
     if (open) {
       // Opened from More: closing returns focus to the nearest strip control.

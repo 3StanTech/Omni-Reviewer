@@ -124,7 +124,7 @@ export function AskPanel({
         aria-label="Ask this pack"
         aria-expanded={false}
         className={cn(
-          "print-hide fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 inline-flex h-11 items-center justify-center gap-1.5 rounded-full border border-border bg-card px-4 text-[0.8125rem] font-semibold text-foreground opacity-55 shadow-[0_6px_18px_oklch(0_0_0/25%)] transition-[opacity,background-color] duration-150 outline-none hover:bg-muted hover:opacity-100 focus-visible:bg-muted focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50",
+          "print-hide [html[data-study-sheet-open]_&]:hidden fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 inline-flex h-11 items-center justify-center gap-1.5 rounded-full border border-border bg-card px-4 text-[0.8125rem] font-semibold text-foreground opacity-55 shadow-[0_6px_18px_oklch(0_0_0/25%)] transition-[opacity,background-color] duration-150 outline-none hover:bg-muted hover:opacity-100 focus-visible:bg-muted focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50",
           // On a phone: an icon-only circle at the edge, above Carded's grade buttons, which are left aligned.
           "max-[640px]:right-3 max-[640px]:bottom-[max(6rem,calc(env(safe-area-inset-bottom)_+_5rem))] max-[640px]:w-11 max-[640px]:px-0",
         )}

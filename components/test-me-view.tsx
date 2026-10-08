@@ -17,7 +17,8 @@ import { MarkdownBody } from "@/components/study-markdown";
 import { OpenCitedSlide, TimedTestMe } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
 import { parseTestMeItems } from "@/lib/learning";
-import { formatSittingDuration, recapFocusSection } from "@/lib/sitting-recap";
+import { MASTERY_WEAK_THRESHOLD } from "@/lib/mastery";
+import { formatSittingDuration, recapFocusSection, sectionBreakdown } from "@/lib/sitting-recap";
 import { isStudyKeyTarget } from "@/lib/study-keys";
 import {
   canRetryMissed,
@@ -64,6 +65,11 @@ function controlId(itemId: string, suffix: string): string {
     .map((character) => (character.codePointAt(0) ?? 0).toString(16))
     .join("-");
   return `test-me-${readable}-${encoded || "item"}-${suffix}`;
+}
+
+/** The text whose citations place an item in a Locked In section. */
+function citedText(item: TestMeItem): string {
+  return [item.explanation, item.answer].filter(Boolean).join("\n");
 }
 
 function isCorrect(selected: string, answer: string): boolean {
@@ -405,15 +411,22 @@ function UntimedSitting({
   if (complete || !item) {
     const focusSection = recapFocusSection({
       lockedIn,
-      missedTexts: missedItems.map((missed) => [missed.explanation, missed.answer].filter(Boolean).join("\n")),
+      missedTexts: missedItems.map(citedText),
     })?.title ?? null;
+    const breakdown = sectionBreakdown({
+      lockedIn,
+      items: sittingItems.flatMap((answered) => {
+        const entry = progress.answersByItemId[answered.id];
+        return entry ? [{ text: citedText(answered), correct: entry.correct }] : [];
+      }),
+    });
     return (
       <div className="space-y-4">
         <div className="flex justify-end">{timedRunButton}</div>
         <SittingRecap
           title="Sitting complete"
+          score={{ correct: score, total: sittingItems.length }}
           lines={[
-            `${score} of ${sittingItems.length} correct`,
             ...(openedAt !== null && finishedAt !== null
               ? [`Studied for ${formatSittingDuration(finishedAt - openedAt)}`]
               : []),
@@ -427,25 +440,62 @@ function UntimedSitting({
               : ""}
           </p>
 
+          {breakdown.length > 0 ? (
+            <div className="mt-4 space-y-2">
+              <h3 className="text-sm font-semibold text-foreground">By section</h3>
+              <ul className="space-y-1.5">
+                {breakdown.map((row) => (
+                  <li key={row.id} className="flex min-w-0 items-center gap-3 text-sm">
+                    <span className="min-w-0 flex-1 break-words text-foreground">{row.title}</span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                      {row.correct} of {row.total}
+                    </span>
+                    <span aria-hidden className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
+                      <span
+                        className={cn(
+                          "block h-full rounded-full",
+                          row.correct / row.total < MASTERY_WEAK_THRESHOLD ? "bg-warning" : "bg-primary",
+                        )}
+                        style={{ width: `${Math.round((row.correct / row.total) * 100)}%` }}
+                      />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <div className="mt-4 space-y-2">
             <h3 className="text-sm font-semibold text-foreground">Misses</h3>
             {missedItems.length === 0 ? (
               <p className="text-sm text-muted-foreground">No misses this sitting.</p>
             ) : (
               <ol className="space-y-2">
-                {missedItems.map((missed) => (
-                  <li
-                    key={missed.id}
-                    className="rounded-lg border border-border/60 bg-muted/40 px-3 py-3 text-sm"
-                  >
-                    <div className="font-medium text-foreground">
-                      <MarkdownBody source={missed.question} />
-                    </div>
-                    <div className="mt-1 text-muted-foreground">
-                      Answer: <MarkdownBody source={missed.answer} inline />
-                    </div>
-                  </li>
-                ))}
+                {missedItems.map((missed) => {
+                  const yourAnswer = progress.answersByItemId[missed.id]?.selectedAnswer.trim() ?? "";
+                  return (
+                    <li
+                      key={missed.id}
+                      className="rounded-lg border border-border/60 bg-muted/40 px-3 py-3 text-sm"
+                    >
+                      <div className="font-medium text-foreground">
+                        <MarkdownBody source={missed.question} />
+                      </div>
+                      <div className="mt-1 flex items-start gap-1.5 text-muted-foreground">
+                        <XCircle weight="fill" className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
+                        <span className="min-w-0 break-words">
+                          Your answer: {yourAnswer ? <MarkdownBody source={yourAnswer} inline /> : "No answer"}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-start gap-1.5 text-foreground">
+                        <CheckCircle weight="fill" className="mt-0.5 size-4 shrink-0 text-success" aria-hidden />
+                        <span className="min-w-0 break-words">
+                          Correct: <MarkdownBody source={missed.answer} inline />
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
               </ol>
             )}
           </div>

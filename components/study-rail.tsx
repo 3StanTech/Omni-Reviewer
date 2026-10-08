@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, NotePencil } from "@phosphor-icons/react";
 
 import { useOptionalAsk } from "@/components/ask-provider";
@@ -64,6 +64,63 @@ export function useReadingPosition({ headings, articleRef }: { headings: StudyHe
   return position;
 }
 
+/** After the reader scrolls the rail, it stops following the current section for this long. */
+const RAIL_FOLLOW_PAUSE_MS = 2000;
+/** Room left above or below the current item when the rail scrolls to it. */
+const RAIL_FOLLOW_MARGIN = 8;
+
+/** The nearest ancestor that scrolls vertically (the rail's sticky inner), or null. */
+function scrollContainerOf(element: HTMLElement): HTMLElement | null {
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    const { overflowY } = window.getComputedStyle(parent);
+    if (overflowY === "auto" || overflowY === "scroll") return parent;
+  }
+  return null;
+}
+
+/**
+ * Keeps the current Contents item visible inside the rail's own scroll
+ * container (nearest-edge scrolling, never the window). Pauses while the
+ * reader has scrolled the rail in the last two seconds.
+ */
+function useRailFollow(navRef: RefObject<HTMLElement | null>, currentId: string | null) {
+  const lastReaderScroll = useRef(0);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    const container = nav ? scrollContainerOf(nav) : null;
+    if (!container) return;
+    const mark = () => {
+      lastReaderScroll.current = Date.now();
+    };
+    container.addEventListener("wheel", mark, { passive: true });
+    container.addEventListener("pointerdown", mark);
+    container.addEventListener("touchstart", mark, { passive: true });
+    return () => {
+      container.removeEventListener("wheel", mark);
+      container.removeEventListener("pointerdown", mark);
+      container.removeEventListener("touchstart", mark);
+    };
+  }, [navRef]);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav || !currentId) return;
+    if (Date.now() - lastReaderScroll.current < RAIL_FOLLOW_PAUSE_MS) return;
+    const container = scrollContainerOf(nav);
+    const link = nav.querySelector<HTMLElement>('[aria-current="location"]');
+    if (!container || !link) return;
+    const box = container.getBoundingClientRect();
+    const item = link.getBoundingClientRect();
+    let delta = 0;
+    if (item.top < box.top + RAIL_FOLLOW_MARGIN) delta = item.top - box.top - RAIL_FOLLOW_MARGIN;
+    else if (item.bottom > box.bottom - RAIL_FOLLOW_MARGIN) delta = item.bottom - box.bottom + RAIL_FOLLOW_MARGIN;
+    if (delta === 0) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    container.scrollTo({ top: container.scrollTop + delta, behavior: reduce ? "auto" : "smooth" });
+  }, [navRef, currentId]);
+}
+
 const RAIL_HEADING_CLASS = "text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 const RAIL_BUTTON_CLASS = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-9 w-full justify-start");
 
@@ -85,6 +142,8 @@ export function StudyRailBody({ headings, annotations, currentId, progress }: { 
   const sections = useSectionMastery();
   const savedAnswerCount = useOptionalAsk()?.savedCount ?? 0;
   const noteCount = annotations.filter((annotation) => !annotation.archivedAt).length + savedAnswerCount;
+  const navRef = useRef<HTMLElement>(null);
+  useRailFollow(navRef, currentId);
   return (
     <div className="flex flex-col gap-4 text-sm">
       <section aria-label="Contents" className="space-y-2">
@@ -96,7 +155,7 @@ export function StudyRailBody({ headings, annotations, currentId, progress }: { 
           <ArrowUp weight="bold" aria-hidden />
           Top
         </button>
-        <nav aria-label="Document contents" className="pl-2.5">
+        <nav ref={navRef} aria-label="Document contents" className="pl-2.5">
           <ContentsList headings={headings} sections={sections} currentId={currentId} />
         </nav>
         <button type="button" className={RAIL_BUTTON_CLASS} onClick={scrollToStudyEnd}>

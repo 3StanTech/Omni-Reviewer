@@ -86,6 +86,33 @@ describe("study rail", () => {
   });
 });
 
+describe("rail follow", () => {
+  const rail = read("components/study-rail.tsx");
+
+  it("scrolls the rail's own container to the current item, never the window", () => {
+    expect(rail).toContain("useRailFollow(navRef, currentId)");
+    expect(rail).toContain('<nav ref={navRef} aria-label="Document contents"');
+    // The container is found by walking up from the rail's own nav.
+    expect(rail).toContain("for (let parent = element.parentElement; parent; parent = parent.parentElement)");
+    expect(rail).toContain('overflowY === "auto" || overflowY === "scroll"');
+    expect(rail).toContain("container.scrollTo({ top: container.scrollTop + delta");
+    expect(rail).toContain(`nav.querySelector<HTMLElement>('[aria-current="location"]')`);
+    expect(rail).not.toContain("scrollIntoView");
+    expect(rail).not.toMatch(/window\.scroll(?:To|By)?\(/);
+  });
+
+  it("pauses after the reader scrolls the rail and respects reduced motion", () => {
+    expect(rail).toContain("RAIL_FOLLOW_PAUSE_MS = 2000");
+    expect(rail).toContain("Date.now() - lastReaderScroll.current < RAIL_FOLLOW_PAUSE_MS");
+    for (const event of ["wheel", "pointerdown", "touchstart"]) {
+      expect(rail).toContain(`container.addEventListener("${event}", mark`);
+      expect(rail).toContain(`container.removeEventListener("${event}", mark)`);
+    }
+    expect(rail).toContain('window.matchMedia("(prefers-reduced-motion: reduce)").matches');
+    expect(rail).toContain('behavior: reduce ? "auto" : "smooth"');
+  });
+});
+
 describe("study document and the rail", () => {
   const document = read("components/study-document.tsx");
 

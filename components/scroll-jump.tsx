@@ -101,7 +101,7 @@ export function ScrollJump() {
   if (!state.show) return null;
 
   return (
-    <div className="print-hide fixed right-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))_+_3.25rem)] z-30 flex flex-col gap-2 max-[640px]:right-3 max-[640px]:bottom-[calc(max(6rem,calc(env(safe-area-inset-bottom)_+_5rem))_+_3.25rem)]">
+    <div className="print-hide [html[data-study-sheet-open]_&]:hidden fixed right-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))_+_3.25rem)] z-30 flex flex-col gap-2 max-[640px]:right-3 max-[640px]:bottom-[calc(max(6rem,calc(env(safe-area-inset-bottom)_+_5rem))_+_3.25rem)]">
       {state.up ? (
         <button
           type="button"

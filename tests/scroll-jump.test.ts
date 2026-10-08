@@ -83,3 +83,23 @@ describe("ScrollJump source", () => {
     expect(src).not.toContain(EM_DASH);
   });
 });
+
+describe("phone sheet overlap", () => {
+  const HIDDEN = "[html[data-study-sheet-open]_&]:hidden";
+
+  it("hides the floating stack and the Ask pill while a phone sheet is open", () => {
+    expect(read("components/scroll-jump.tsx")).toContain(`print-hide ${HIDDEN} fixed`);
+    const ask = read("components/ask-panel.tsx");
+    const pill = ask.slice(ask.indexOf("data-ask-pill"), ask.indexOf("</button>", ask.indexOf("data-ask-pill")));
+    expect(pill).toContain(`print-hide ${HIDDEN} fixed`);
+  });
+
+  it("sets the attribute only while the compact Contents or Notes sheet is open and clears it", () => {
+    const panel = read("components/study-side-panel.tsx");
+    expect(panel).toContain("const sheetOpen = Boolean(open) && compactSheet;");
+    expect(panel).toContain("if (!sheetOpen) return;");
+    expect(panel).toContain('root.dataset.studySheetOpen = "true";');
+    expect(panel).toContain("delete root.dataset.studySheetOpen;");
+    expect(panel).toContain("}, [sheetOpen]);");
+  });
+});

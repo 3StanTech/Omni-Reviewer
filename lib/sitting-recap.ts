@@ -24,6 +24,33 @@ export function recapFocusSection({
   return best;
 }
 
+export type SectionBreakdownRow = { id: string; title: string; correct: number; total: number };
+
+/**
+ * Correct answers per Locked In section this sitting, in document order. An
+ * item counts for the first section its citations overlap; items with no
+ * matching section go to "Other", last. Sections without items are left out.
+ */
+export function sectionBreakdown({
+  lockedIn,
+  items,
+}: {
+  lockedIn: string | null;
+  items: Array<{ text: string; correct: boolean }>;
+}): SectionBreakdownRow[] {
+  const sections = lockedIn ? sectionsFromLockedIn(lockedIn) : [];
+  const rows = sections.map((section) => ({ id: section.id, title: section.title, correct: 0, total: 0 }));
+  const other = { id: "other", title: "Other", correct: 0, total: 0 };
+  for (const item of items) {
+    const pages = citedPages(item.text);
+    const index = sections.findIndex((section) => pagesOverlap(pages, section.pages));
+    const row = index >= 0 ? rows[index] : other;
+    row.total += 1;
+    if (item.correct) row.correct += 1;
+  }
+  return [...rows, other].filter((row) => row.total > 0);
+}
+
 export function formatSittingDuration(ms: number): string {
   if (ms < 60_000) return "under a minute";
   const minutes = Math.round(ms / 60_000);
