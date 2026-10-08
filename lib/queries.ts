@@ -192,13 +192,18 @@ export async function beginTopicDeletion(
   return result.rows.length > 0;
 }
 
-export type ReviewerByTopic = Reviewer & { dueTodayCount: number };
+export type ReviewerByTopic = Reviewer & { dueTodayCount: number; reviewDueCount: number; newTodayCount: number };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Per-pack inputs and result of the paced due selection (`selectTodayCards`). */
 export type PacedDueCounts = {
+  /** Due review cards plus today's new cards: `reviewDue + newToday`. */
   dueToday: number;
+  /** Due cards studied before; never capped. */
+  reviewDue: number;
+  /** Due new cards within today's new-card allowance. */
+  newToday: number;
   newRemaining: number;
   introducedLast24h: number;
 };
@@ -264,7 +269,7 @@ export function pacedDueCounts(
   args: { examDate: string | null; deletingAt: Date | null; now: Date },
 ): PacedDueCounts {
   if (args.deletingAt != null) {
-    return { dueToday: 0, newRemaining: 0, introducedLast24h: 0 };
+    return { dueToday: 0, reviewDue: 0, newToday: 0, newRemaining: 0, introducedLast24h: 0 };
   }
   const allowance = newCardAllowance({
     examDate: args.examDate,
@@ -272,8 +277,11 @@ export function pacedDueCounts(
     introducedLast24h: row.introducedLast24h,
     now: args.now,
   });
+  const newToday = Math.min(row.newDue, allowance);
   return {
-    dueToday: row.reviewDue + Math.min(row.newDue, allowance),
+    dueToday: row.reviewDue + newToday,
+    reviewDue: row.reviewDue,
+    newToday,
     newRemaining: row.newRemaining,
     introducedLast24h: row.introducedLast24h,
   };
@@ -300,13 +308,18 @@ export async function listReviewersByTopic(
     .innerJoin(topics, eq(reviewers.topicId, topics.id))
     .where(and(eq(reviewers.topicId, topicId), eq(topics.userId, userId)))
     .orderBy(asc(reviewers.createdAt));
-  return rows.map(({ reviewDue, newDue, newRemaining, introducedLast24h, ...reviewer }) => ({
-    ...reviewer,
-    dueTodayCount: pacedDueCounts(
+  return rows.map(({ reviewDue, newDue, newRemaining, introducedLast24h, ...reviewer }) => {
+    const counts = pacedDueCounts(
       { reviewDue, newDue, newRemaining, introducedLast24h },
       { examDate: reviewer.examDate, deletingAt: reviewer.deletingAt, now },
-    ).dueToday,
-  }));
+    );
+    return {
+      ...reviewer,
+      dueTodayCount: counts.dueToday,
+      reviewDueCount: counts.reviewDue,
+      newTodayCount: counts.newToday,
+    };
+  });
 }
 
 /**
@@ -573,7 +586,7 @@ export async function getTodayPlan(userId: string, now = new Date()): Promise<To
     const packEvidence = evidence.get(pack.id);
     const result = packEvidence ? computeMastery(packEvidence.input) : null;
     if (result) mastery.set(pack.id, result);
-    const counts = paced.get(pack.id) ?? { dueToday: 0, newRemaining: 0, introducedLast24h: 0 };
+    const counts = paced.get(pack.id) ?? { dueToday: 0, reviewDue: 0, newToday: 0, newRemaining: 0, introducedLast24h: 0 };
     const hasWeak = result?.sections.some((section) => section.weak) ?? false;
     return {
       id: pack.id,

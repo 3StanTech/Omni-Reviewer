@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { formatDay, formatStamp } from "@/lib/format-generated-at";
-import { daysUntilExam, dueLabel, newCardAllowance, selectTodayCards } from "@/lib/pacing";
+import { daysUntilExam, dueLabel, NEW_CARDS_PER_DAY, newCardAllowance, selectTodayCards } from "@/lib/pacing";
 
 const DAY = 24 * 60 * 60 * 1000;
 const now = new Date("2026-09-01T08:00:00.000Z");
@@ -18,10 +18,11 @@ describe("daysUntilExam", () => {
 });
 
 describe("newCardAllowance", () => {
-  it("is unlimited without an exam", () => {
-    expect(newCardAllowance({ examDate: null, newRemaining: 40, introducedLast24h: 5, now })).toBe(
-      Infinity,
-    );
+  it("caps new cards at 20 a day without an exam", () => {
+    expect(NEW_CARDS_PER_DAY).toBe(20);
+    expect(newCardAllowance({ examDate: null, newRemaining: 40, introducedLast24h: 0, now })).toBe(20);
+    expect(newCardAllowance({ examDate: null, newRemaining: 40, introducedLast24h: 5, now })).toBe(15);
+    expect(newCardAllowance({ examDate: null, newRemaining: 40, introducedLast24h: 25, now })).toBe(0);
   });
 
   it("gives 4 a day for 40 new cards with the exam 12 days away", () => {

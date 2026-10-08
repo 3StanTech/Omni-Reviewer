@@ -4,6 +4,8 @@ import { formatDay } from "@/lib/format-generated-at";
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The last days before an exam are held back for second reviews. */
 const HOLDBACK_DAYS = 2;
+/** New cards a pack introduces per day when no exam date is set. Reviews are never capped. */
+export const NEW_CARDS_PER_DAY = 20;
 
 /** Whole days from `now` to the exam's UTC midnight (floor, at least 0). */
 export function daysUntilExam(examDate: string | null | undefined, now: Date): number | null {
@@ -13,7 +15,7 @@ export function daysUntilExam(examDate: string | null | undefined, now: Date): n
   return Math.max(0, Math.floor((deadline.getTime() - now.getTime()) / DAY_MS));
 }
 
-/** New cards still allowed today. Unlimited without an exam date. */
+/** New cards still allowed today: capped at 20 a day without an exam date, else paced toward the exam. */
 export function newCardAllowance({
   examDate,
   newRemaining,
@@ -26,7 +28,7 @@ export function newCardAllowance({
   now: Date;
 }): number {
   const days = daysUntilExam(examDate, now);
-  if (days === null) return Infinity;
+  if (days === null) return Math.max(0, NEW_CARDS_PER_DAY - introducedLast24h);
   const newPerDay =
     days <= HOLDBACK_DAYS
       ? newRemaining

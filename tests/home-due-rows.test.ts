@@ -5,8 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
 import { pacedDueCounts } from "@/lib/queries";
 import { selectTodayCards } from "@/lib/pacing";
+import { PackMastery } from "@/components/reviewer-list";
 
 const root = path.resolve(__dirname, "..");
 const EM_DASH = "\u2014";
@@ -19,13 +23,13 @@ describe("paced due-today pack counts", () => {
   const now = new Date("2026-09-19T12:00:00.000Z");
   const at = (days: number) => new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 
-  it("counts every due review card and all due new cards without an exam", () => {
+  it("caps new cards at 20 a day without an exam", () => {
     expect(
       pacedDueCounts(
         { reviewDue: 3, newDue: 40, newRemaining: 50, introducedLast24h: 5 },
         { examDate: null, deletingAt: null, now },
       ),
-    ).toEqual({ dueToday: 43, newRemaining: 50, introducedLast24h: 5 });
+    ).toEqual({ dueToday: 18, reviewDue: 3, newToday: 15, newRemaining: 50, introducedLast24h: 5 });
   });
 
   it("matches selectTodayCards on the same cards with an exam", () => {
@@ -76,12 +80,26 @@ describe("home pack row contract", () => {
     expect(page).toContain("dueTodayCount: r.dueTodayCount");
     expect(list).toContain("examDate: string | null");
     expect(list).toContain("dueTodayCount: number");
+    expect(list).toContain("reviewDueCount: number");
+    expect(list).toContain("newTodayCount: number");
     expect(list).toContain("Not generated yet");
     expect(list).toContain("`Generated ${stamp}`");
-    expect(list).toContain("{reviewer.dueTodayCount} due");
+    expect(list).toContain("{dueSplitCopy(reviewer.reviewDueCount, reviewer.newTodayCount)}");
+    expect(list).not.toContain("{reviewer.dueTodayCount} due");
+    // The Review button still shows whenever anything is due.
+    expect(list).toContain("{reviewer.dueTodayCount > 0 ? (\n                <Button");
     expect(list).toContain("{reviewer.examDate}");
     expect(list).toContain("Rename");
     expect(list).toContain("Delete");
+  });
+
+  it("defines Weak on the pack row's weak line for screen readers too", () => {
+    const html = renderToStaticMarkup(createElement(PackMastery, { mastery: { score: 0.4, weakTitle: "Cells" } }));
+    const weak = html.match(/title="Under 60% correct on 3 or more answers" aria-describedby="([^"]+)"/);
+    expect(weak).not.toBeNull();
+    expect(html).toContain(`id="${weak?.[1]}" hidden="">Under 60% correct on 3 or more answers</span>`);
+    expect(html).toContain("Cells</span>");
+    expect(renderToStaticMarkup(createElement(PackMastery, { mastery: { score: 0.9, weakTitle: null } }))).not.toContain("Under 60%");
   });
 
   it("does not put an em dash in home pack copy", () => {

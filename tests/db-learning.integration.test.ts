@@ -789,8 +789,17 @@ describeDb("Neon FSRS integration", () => {
     const selected = selectTodayCards(learning, { examDate, introducedLast24h, now: at });
 
     expect(introducedLast24h).toBe(1);
-    expect(paced).toEqual({ dueToday: selected.length, newRemaining: 14, introducedLast24h: 1 });
+    const selectedNew = selected.filter((card) => card.isNew).length;
+    expect(paced).toEqual({
+      dueToday: selected.length,
+      reviewDue: selected.length - selectedNew,
+      newToday: selectedNew,
+      newRemaining: 14,
+      introducedLast24h: 1,
+    });
     expect(row?.dueTodayCount).toBe(selected.length);
+    expect(row?.reviewDueCount).toBe(selected.length - selectedNew);
+    expect(row?.newTodayCount).toBe(selectedNew);
     // 4 due reviews (one replayed from history) plus ceil(14 / 7) - 1 new card.
     expect(selected.length).toBe(5);
   }, 60_000);
