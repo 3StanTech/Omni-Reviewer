@@ -61,6 +61,11 @@ const shelfListeners = new Set<() => void>();
 // stored preference belongs to the desktop shelf only.
 let drawerOpen = false;
 
+/** The shelf total sums both kinds of due card. */
+const DUE_TODAY_DESCRIPTION = "Cards to review plus new cards for today";
+// The shelf renders once per page.
+const DUE_TODAY_DESCRIPTION_ID = "topic-shelf-due-today-description";
+
 function isDesktopShelf(): boolean {
   return window.matchMedia("(min-width: 768px)").matches;
 }
@@ -288,11 +293,17 @@ export function TopicShelf({
       aria-label="Topic shelf"
     >
       <div className="flex flex-col gap-1 p-3">
-        <div className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-muted-foreground">
+        <div
+          className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-muted-foreground"
+          title={DUE_TODAY_DESCRIPTION}
+        >
           <CalendarBlank className="size-4 shrink-0" />
           <span>Due today</span>
-          <span className="ml-auto tabular-nums text-foreground">
+          <span className="ml-auto tabular-nums text-foreground" aria-describedby={DUE_TODAY_DESCRIPTION_ID}>
             {dueTodayTotal}
+          </span>
+          <span id={DUE_TODAY_DESCRIPTION_ID} hidden>
+            {DUE_TODAY_DESCRIPTION}
           </span>
         </div>
 

@@ -5,7 +5,6 @@ import {
   CaretLeft,
   CaretRight,
   Cards,
-  ArrowCounterClockwise,
   Eye,
   EyeSlash,
   Presentation,
@@ -16,6 +15,7 @@ import { CardExport } from "@/components/card-export";
 import { EmptyState } from "@/components/empty-state";
 import { useSourceViewer } from "@/components/source-modal";
 import { SittingRecap } from "@/components/sitting-recap";
+import { StudyHelp } from "@/components/study-help";
 import { MarkdownBody } from "@/components/study-markdown";
 import { firstPageCitation } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
@@ -25,11 +25,13 @@ import { isClozeCardFront, renderClozeText } from "@/lib/learning";
 import {
   captureDueQueue,
   type CapturedCard,
+  practiceQueue,
   reconcileDueSession,
 } from "@/lib/practice-session";
 import { dueLabel, selectTodayCards } from "@/lib/pacing";
 import { formatSittingDuration, nextReturnCopy, recapFocusSection } from "@/lib/sitting-recap";
 import { isStudyKeyTarget } from "@/lib/study-keys";
+import { dueSplitCopy } from "@/lib/today-plan";
 import type { CardedItem } from "@/lib/types";
 import { cn, readApiError } from "@/lib/utils";
 
@@ -126,12 +128,14 @@ export function CardedView({
   const cards = durableCards.length > 0 ? durableCards : generatedCards;
   // Remaining due is the paced selection at dueAt <= now, so the cutoff has to be wall clock.
   /* eslint-disable react-hooks/purity -- dueAt <= now needs Date.now */
-  const remainingDue = useMemo(
-    () => todayCards(durableCards, examDate, Date.now()).length,
-    [durableCards, examDate],
-  );
+  const remaining = useMemo(() => {
+    const due = todayCards(durableCards, examDate, Date.now());
+    const fresh = due.filter((item) => item.isNew).length;
+    return { review: due.length - fresh, fresh };
+  }, [durableCards, examDate]);
   /* eslint-enable react-hooks/purity */
-  const [mode, setMode] = useState<"due" | "browse">("due");
+  // Practice replays this session's cards without saving ratings or changing schedules.
+  const [mode, setMode] = useState<"due" | "browse" | "practice">("due");
   const [queue, setQueue] = useState<CapturedCard[]>(() => {
     const now = Date.now();
     return captureDueQueue(todayCards(durableCards, examDate, now), now);
@@ -142,6 +146,10 @@ export function CardedView({
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   // Set when a rating saves, so the recap duration stops at the last rating.
   const [lastRatedAt, setLastRatedAt] = useState<number | null>(null);
+  const [practiceCaptured, setPracticeCaptured] = useState<CapturedCard[]>([]);
+  const [practiceIndex, setPracticeIndex] = useState(0);
+  const [practiceTally, setPracticeTally] = useState({ again: 0, good: 0 });
+  const [practiceAgainIds, setPracticeAgainIds] = useState<string[]>([]);
   const [browseIndex, setBrowseIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [clozeRevealed, setClozeRevealed] = useState(false);
@@ -189,11 +197,23 @@ export function CardedView({
   );
 
   const browsing = mode === "browse";
+  const practicing = mode === "practice";
+  const cardById = useMemo(() => new Map(durableCards.map((item) => [item.id, item])), [durableCards]);
+  // Practice shows each card's latest content; a card deleted meanwhile drops out.
+  const practiceCards = useMemo(
+    () => practiceCaptured.flatMap((entry) => cardById.get(entry.id) ?? []),
+    [cardById, practiceCaptured],
+  );
+  const practiceDone = practicing && practiceIndex >= practiceCards.length;
   const browseCards = durableCards.length > 0 ? durableCards : generatedCards;
   const safeBrowseIndex = Math.min(browseIndex, Math.max(0, browseCards.length - 1));
   const currentDue = dueSession.current?.card ?? null;
-  const card = browsing ? browseCards[safeBrowseIndex] ?? null : currentDue;
-  const dueStale = !browsing && Boolean(dueSession.current?.stale);
+  const card = browsing
+    ? browseCards[safeBrowseIndex] ?? null
+    : practicing
+      ? practiceCards[practiceIndex] ?? null
+      : currentDue;
+  const dueStale = mode === "due" && Boolean(dueSession.current?.stale);
   const isCloze = Boolean(card && (card.kind === "cloze" || isClozeCardFront(card.front)));
   const draftIsStale =
     editing &&
@@ -215,6 +235,33 @@ export function CardedView({
     captureQueue();
   }
 
+  function enterPractice(cardsToPractice: CapturedCard[]) {
+    if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
+    advanceTimer.current = null;
+    setMode("practice");
+    setPracticeCaptured(cardsToPractice);
+    setPracticeIndex(0);
+    setPracticeTally({ again: 0, good: 0 });
+    setPracticeAgainIds([]);
+    setFlipped(false);
+    setClozeRevealed(false);
+    setEditing(false);
+    setScheduleHint(null);
+    setError(null);
+  }
+
+  /** Practice rating: counts locally and moves on. Never saved, so schedules stay as they are. */
+  function practiceRate(rating: "again" | "good") {
+    if (!practicing || !card) return;
+    setPracticeTally((current) => ({ ...current, [rating]: current[rating] + 1 }));
+    if (rating === "again") {
+      setPracticeAgainIds((current) => current.includes(card.id) ? current : [...current, card.id]);
+    }
+    setPracticeIndex((index) => index + 1);
+    setFlipped(false);
+    setClozeRevealed(false);
+  }
+
   function go(delta: number) {
     if (!browsing) return;
     setFlipped(false);
@@ -234,6 +281,8 @@ export function CardedView({
   }
 
   async function review(rating: "again" | "good") {
+    // Practice never saves a rating.
+    if (practicing) return;
     if (browsing || !card || !isDurableCard(card) || busy || dueStale) return;
     const expectedRevision = dueSession.current?.stale
       ? dueSession.current.capturedRevision
@@ -313,14 +362,19 @@ export function CardedView({
       }
       // Grading needs a saved card; generated cards only flip.
       if (!flipped || !isDurableCard(card)) return;
+      if (practicing) {
+        if (event.key === "1") practiceRate("again");
+        if (event.key === "2") practiceRate("good");
+        return;
+      }
       if (event.key === "1") void review("again");
       if (event.key === "2") void review("good");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-    // review, go and toggleFlip are recreated each render; the listener only needs the latest closure.
+    // review, practiceRate, go and toggleFlip are recreated each render; the listener only needs the latest closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browsing, browseCards.length, busy, card, dueStale, editing, flipped, scheduleHint]);
+  }, [browsing, practicing, browseCards.length, busy, card, dueStale, editing, flipped, scheduleHint]);
 
   async function saveEdit() {
     if (!isDurableCard(card)) return;
@@ -379,7 +433,6 @@ export function CardedView({
   const backCitation = card && flipped ? firstPageCitation([card.back]) : null;
   const backPage = backCitation?.pageStart ?? null;
 
-  const cardById = new Map(durableCards.map((item) => [item.id, item]));
   const recapEndedAt = lastRatedAt ?? sessionStartedAt;
   const recapFocus = dueSession.finished
     ? recapFocusSection({
@@ -390,6 +443,35 @@ export function CardedView({
   const recapReturns = dueSession.finished
     ? nextReturnCopy(ratedIds.flatMap((id) => cardById.get(id)?.dueAt ?? []), new Date(recapEndedAt))
     : null;
+
+  const remainingCopy = dueSplitCopy(remaining.review, remaining.fresh) || "none";
+
+  /** Practice missed (hidden when none) and Practice all for a finished round; after practice, Back to due too. */
+  function practiceButtons(captured: CapturedCard[], missedIds: string[], afterPractice = false) {
+    const missed = practiceQueue({ queue: captured, againIds: missedIds, which: "missed" })
+      .filter((entry) => cardById.has(entry.id));
+    const all = practiceQueue({ queue: captured, againIds: missedIds, which: "all" })
+      .filter((entry) => cardById.has(entry.id));
+    return (
+      <div className="mt-3 flex flex-wrap gap-2">
+        {missed.length > 0 ? (
+          <Button type="button" variant="outline" onClick={() => enterPractice(missed)}>
+            Practice missed ({missed.length})
+          </Button>
+        ) : null}
+        {all.length > 0 ? (
+          <Button type="button" variant="outline" onClick={() => enterPractice(all)}>
+            Practice all ({all.length})
+          </Button>
+        ) : null}
+        {afterPractice ? (
+          <Button type="button" variant="ghost" onClick={enterDue}>
+            Back to due
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
 
   if (packEmpty) {
     return (
@@ -403,7 +485,9 @@ export function CardedView({
 
   const sessionLabel = browsing
     ? `Browsing ${browseCards.length === 0 ? 0 : safeBrowseIndex + 1} of ${browseCards.length}`
-    : dueSession.empty
+    : practicing
+      ? `Practice ${Math.min(practiceIndex + 1, practiceCards.length)} of ${practiceCards.length}`
+      : dueSession.empty
       ? "0 of 0 due"
       : `${dueSession.completed} of ${dueSession.total}`;
 
@@ -412,36 +496,36 @@ export function CardedView({
       <div className="flex items-start justify-between gap-2 text-sm text-muted-foreground">
         <div className="space-y-1">
           <p>{sessionLabel}</p>
-          <p>Remaining {remainingDue} due</p>
+          {practicing ? (
+            <p className="text-foreground">Practice, not scheduled</p>
+          ) : (
+            <p>Remaining: {remainingCopy}</p>
+          )}
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <CardExport cards={cards} reviewerName={reviewerName} />
-          {browsing ? (
+          {browsing || practicing ? (
             <Button type="button" variant="ghost" size="sm" onClick={enterDue}>
               Study due
             </Button>
-          ) : (
+          ) : null}
+          {!browsing ? (
             <Button type="button" variant="ghost" size="sm" onClick={enterBrowse}>
               <Eye weight="bold" />
               Browse all
             </Button>
-          )}
-          {!browsing ? (
-            <Button type="button" variant="ghost" size="sm" onClick={enterDue}>
-              <ArrowCounterClockwise weight="bold" />
-              Restart
-            </Button>
           ) : null}
+          <StudyHelp />
         </div>
       </div>
-      {!browsing && dueSession.empty ? (
+      {mode === "due" && dueSession.empty ? (
         <EmptyState
           icon={<Cards weight="duotone" className="size-5" />}
           title="No cards due"
           description="Nothing is due in this session. Browse all to inspect cards without scheduling, or start again later."
         />
       ) : null}
-      {!browsing && dueSession.finished ? (
+      {mode === "due" && dueSession.finished ? (
         <SittingRecap
           title="Session complete"
           lines={[
@@ -452,6 +536,18 @@ export function CardedView({
           returns={recapReturns}
         >
           <p className="text-sm text-muted-foreground">Newly due cards wait for the next session.</p>
+          {practiceButtons(queue, againIds)}
+        </SittingRecap>
+      ) : null}
+      {practiceDone ? (
+        <SittingRecap
+          title="Practice done"
+          lines={[
+            `${practiceCards.length} cards · ${practiceTally.good} Good · ${practiceTally.again} Again`,
+            "Practice ratings are not saved. Schedules did not change.",
+          ]}
+        >
+          {practiceButtons(practiceCaptured, practiceAgainIds, true)}
         </SittingRecap>
       ) : null}
 
@@ -460,8 +556,8 @@ export function CardedView({
         {isDurableCard(card) ? <span>{dueLabel(new Date(card.dueAt), new Date(sessionStartedAt))}</span> : null}
         {isDurableCard(card) && (card.isEdited || card.isPinned) ? <span className="text-warning">Protected from silent overwrite</span> : null}
         {dueStale ? <span className="text-warning">This card changed. Start a new due session before rating it.</span> : null}
-        {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
-        {isDurableCard(card) ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
+        {isDurableCard(card) && !practicing ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
+        {isDurableCard(card) && !practicing ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
         {isDurableCard(card) && flipped ? (
           <ExplainThisButton request={{ kind: "explain", target: { type: "card", cardId: card.id } }} />
         ) : null}
@@ -594,7 +690,16 @@ export function CardedView({
       ) : null}
       {!browsing && isDurableCard(card) && flipped && !dueStale ? (
         <div className="carded-thumb-bar flex flex-wrap gap-2 rounded-xl border border-border/80 bg-surface/50 p-4">
-          {scheduleHint ? (
+          {practicing ? (
+            <>
+              <Button type="button" variant="outline" onClick={() => practiceRate("again")}>
+                Again
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => practiceRate("good")}>
+                Good
+              </Button>
+            </>
+          ) : scheduleHint ? (
             <p className="w-full text-sm text-foreground">{scheduleHint}</p>
           ) : (
             <>

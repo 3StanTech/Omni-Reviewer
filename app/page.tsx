@@ -64,6 +64,8 @@ export default async function HomePage({ searchParams }: HomeProps) {
       : null,
     examDate: r.examDate,
     dueTodayCount: r.dueTodayCount,
+    reviewDueCount: r.reviewDueCount,
+    newTodayCount: r.newTodayCount,
     hasActiveSitting: activeUntimedIds.has(r.id),
     mastery: packMasterySummary(today?.mastery.get(r.id)),
   }));

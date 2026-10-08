@@ -7,7 +7,7 @@ import { isCalendarDate } from "@/lib/date-validation";
  * the "Do first" list and the exam pacing strips. No data access here.
  *
  * Time estimate constants:
- * - 8 seconds per due card
+ * - 8 seconds per due card (to review or new)
  * - 45 seconds per re-test question (the section's missed items from its
  *   latest sitting, at least MIN_RETEST_QUESTIONS)
  * - re-read time is the section's words at 200 words per minute, rounded up
@@ -31,7 +31,12 @@ export type TodayPack = {
   topicName: string;
   name: string;
   examDate: string | null;
+  /** Cards due today: `reviewDue + newToday`. */
   dueToday: number;
+  /** Due cards studied before. */
+  reviewDue: number;
+  /** New cards within today's allowance. */
+  newToday: number;
   newRemaining: number;
   introducedLast24h: number;
   mastery: MasteryResult | null;
@@ -57,7 +62,10 @@ export type PacingGroup = {
 };
 
 export type TodayBarData = {
+  /** Every card due today: `reviewCards + newCards`. */
   dueCards: number;
+  reviewCards: number;
+  newCards: number;
   weakSections: number;
   exam: { topicName: string; days: number } | null;
   minutes: number;
@@ -168,6 +176,8 @@ function weakSections(packs: TodayPack[]): WeakSection[] {
 
 export function buildTodayPlan({ packs, now }: { packs: TodayPack[]; now: Date }): TodayPlan {
   const dueCards = packs.reduce((sum, pack) => sum + Math.max(0, pack.dueToday), 0);
+  const reviewCards = packs.reduce((sum, pack) => sum + Math.max(0, pack.reviewDue), 0);
+  const newCards = packs.reduce((sum, pack) => sum + Math.max(0, pack.newToday), 0);
   const weak = weakSections(packs);
 
   const doFirst: DoFirstItem[] = [];
@@ -222,7 +232,7 @@ export function buildTodayPlan({ packs, now }: { packs: TodayPack[]; now: Date }
   }
 
   return {
-    bar: { dueCards, weakSections: weak.length, exam, minutes },
+    bar: { dueCards, reviewCards, newCards, weakSections: weak.length, exam, minutes },
     doFirst,
     pacing: buildPacing(packs, now),
     empty: dueCards === 0 && weak.length === 0,
@@ -231,18 +241,38 @@ export function buildTodayPlan({ packs, now }: { packs: TodayPack[]; now: Date }
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
+/** What "weak" means wherever a weak section is marked. */
+export const WEAK_SECTION_DEFINITION = "Under 60% correct on 3 or more answers";
+
+export type TodayBarPart = { text: string; weak?: boolean };
+
+/** The Today bar's parts in order; zero and null parts are omitted. The weak part is flagged for its definition. */
+export function todayBarParts(bar: TodayBarData): TodayBarPart[] {
+  const parts: TodayBarPart[] = [];
+  if (bar.reviewCards > 0) parts.push({ text: `${bar.reviewCards} to review` });
+  if (bar.newCards > 0) parts.push({ text: `${bar.newCards} new` });
+  if (bar.weakSections > 0) parts.push({ text: plural(bar.weakSections, "weak section", "weak sections"), weak: true });
+  if (bar.exam) {
+    parts.push({
+      text:
+        bar.exam.days === 0
+          ? `${bar.exam.topicName} exam today`
+          : `${bar.exam.topicName} exam in ${plural(bar.exam.days, "day", "days")}`,
+    });
+  }
+  if (bar.minutes > 0) parts.push({ text: `About ${bar.minutes} min` });
+  return parts;
+}
+
 /** The Today bar's text segments; zero and null segments are omitted. */
 export function todayBarSegments(bar: TodayBarData): string[] {
-  const segments: string[] = [];
-  if (bar.dueCards > 0) segments.push(`${plural(bar.dueCards, "card", "cards")} due`);
-  if (bar.weakSections > 0) segments.push(plural(bar.weakSections, "weak section", "weak sections"));
-  if (bar.exam) {
-    segments.push(
-      bar.exam.days === 0
-        ? `${bar.exam.topicName} exam today`
-        : `${bar.exam.topicName} exam in ${plural(bar.exam.days, "day", "days")}`,
-    );
-  }
-  if (bar.minutes > 0) segments.push(`About ${bar.minutes} min`);
-  return segments;
+  return todayBarParts(bar).map((part) => part.text);
+}
+
+/** A pack's due split, "2 to review · 5 new"; zero parts are omitted, empty when both are zero. */
+export function dueSplitCopy(review: number, fresh: number): string {
+  const parts: string[] = [];
+  if (review > 0) parts.push(`${review} to review`);
+  if (fresh > 0) parts.push(`${fresh} new`);
+  return parts.join(" · ");
 }

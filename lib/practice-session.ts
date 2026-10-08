@@ -101,6 +101,20 @@ export function reconcileDueSession<T extends DurableCardLike>(args: {
   };
 }
 
+/**
+ * The cards a Carded practice round runs, in session order: every captured
+ * card, or only those rated Again. Practice never schedules or saves a rating.
+ */
+export function practiceQueue(args: {
+  queue: readonly CapturedCard[];
+  againIds: readonly string[];
+  which: "missed" | "all";
+}): CapturedCard[] {
+  if (args.which === "all") return [...args.queue];
+  const missed = new Set(args.againIds);
+  return args.queue.filter((entry) => missed.has(entry.id));
+}
+
 export function nextUnratedIndex(queue: readonly CapturedCard[], ratedIds: ReadonlySet<string>): number {
   return queue.findIndex((entry) => !ratedIds.has(entry.id));
 }

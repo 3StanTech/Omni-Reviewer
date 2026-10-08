@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { Fragment, useId } from "react";
 import { CalendarCheck, CaretRight } from "@phosphor-icons/react";
 
 import type { TodayHrefs } from "@/components/today-modal";
+import { StudyHelp } from "@/components/study-help";
 import { Button } from "@/components/ui/button";
-import { todayBarSegments, type DoFirstItem, type TodayPlan } from "@/lib/today-plan";
+import { todayBarParts, WEAK_SECTION_DEFINITION, type DoFirstItem, type TodayPlan } from "@/lib/today-plan";
 
 /** Where Start studying goes: the first Do-first item's mode in its pack. */
 export function startHref(item: DoFirstItem, hrefs: TodayHrefs): string {
@@ -24,7 +26,8 @@ export function TodayCard({
   hrefs: TodayHrefs;
   onOpenPlan: () => void;
 }) {
-  const summary = plan.empty ? "Nothing due today" : todayBarSegments(plan.bar).join(" · ");
+  const weakDefinitionId = useId();
+  const parts = plan.empty ? [] : todayBarParts(plan.bar);
   const first = plan.doFirst[0];
   return (
     <section
@@ -36,7 +39,27 @@ export function TodayCard({
           <CalendarCheck weight="bold" aria-hidden className="size-5 shrink-0 text-primary" />
           Today
         </p>
-        <p className="mt-1 text-sm break-words text-muted-foreground">{summary}</p>
+        <p className="mt-1 text-sm break-words text-muted-foreground">
+          {plan.empty
+            ? "Nothing due today"
+            : parts.map((part, index) => (
+                <Fragment key={part.text}>
+                  {index > 0 ? " · " : null}
+                  {part.weak ? (
+                    <span title={WEAK_SECTION_DEFINITION} aria-describedby={weakDefinitionId}>
+                      {part.text}
+                    </span>
+                  ) : (
+                    part.text
+                  )}
+                </Fragment>
+              ))}
+          {parts.some((part) => part.weak) ? (
+            <span id={weakDefinitionId} hidden>
+              {WEAK_SECTION_DEFINITION}
+            </span>
+          ) : null}
+        </p>
       </div>
       <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
         {first ? (
@@ -54,6 +77,7 @@ export function TodayCard({
           See the plan
           <CaretRight weight="bold" data-icon="inline-end" />
         </Button>
+        <StudyHelp />
       </div>
     </section>
   );

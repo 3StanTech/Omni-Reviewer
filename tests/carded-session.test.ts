@@ -23,6 +23,9 @@ describe("Carded finite session UI", () => {
     expect(src).toContain("nextReturnCopy(");
     expect(src).toContain("Newly due cards wait for the next session.");
     expect(src).toContain("${dueSession.completed} of ${dueSession.total}");
+    // The due recap and empty state belong to due mode, not to practice or browsing.
+    expect(src).toContain('{mode === "due" && dueSession.finished ? (');
+    expect(src).toContain('{mode === "due" && dueSession.empty ? (');
   });
 
   it("rates only after a successful save and keeps the same client request on retry", () => {

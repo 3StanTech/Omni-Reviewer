@@ -5,7 +5,14 @@ import { describe, expect, it } from "vitest";
 
 import { PacingBlock } from "@/components/today-modal";
 import type { MasteryResult } from "@/lib/mastery";
-import { buildTodayPlan, todayBarSegments, type TodayPack } from "@/lib/today-plan";
+import {
+  buildTodayPlan,
+  dueSplitCopy,
+  todayBarParts,
+  todayBarSegments,
+  WEAK_SECTION_DEFINITION,
+  type TodayPack,
+} from "@/lib/today-plan";
 
 const now = new Date("2026-09-27T08:00:00.000Z");
 
@@ -23,14 +30,18 @@ function mastery(sections: { id: string; title: string; score: number | null; it
   };
 }
 
+/** A pack whose due cards are all reviews unless the split is given. */
 function pack(overrides: Partial<TodayPack> = {}): TodayPack {
+  const dueToday = overrides.dueToday ?? 0;
   return {
     id: "p1",
     topicId: "t1",
     topicName: "Pharmacology 2",
     name: "Pack",
     examDate: null,
-    dueToday: 0,
+    dueToday,
+    reviewDue: dueToday,
+    newToday: 0,
     newRemaining: 0,
     introducedLast24h: 0,
     mastery: null,
@@ -58,6 +69,19 @@ describe("buildTodayPlan totals and time", () => {
     expect(plan.bar.dueCards).toBe(38);
     expect(plan.bar.weakSections).toBe(2);
     expect(plan.empty).toBe(false);
+  });
+
+  it("splits due cards into to review and new, summing to dueCards", () => {
+    const plan = buildTodayPlan({
+      now,
+      packs: [
+        pack({ id: "a", dueToday: 25, reviewDue: 5, newToday: 20 }),
+        pack({ id: "b", dueToday: 7, reviewDue: 7, newToday: 0 }),
+      ],
+    });
+    expect(plan.bar).toMatchObject({ dueCards: 32, reviewCards: 12, newCards: 20 });
+    expect(plan.bar.reviewCards + plan.bar.newCards).toBe(plan.bar.dueCards);
+    expect(todayBarSegments(plan.bar).slice(0, 2)).toEqual(["12 to review", "20 new"]);
   });
 
   it("estimates 8 s per card, 45 s per re-test question and words / 200 per re-read, rounded to 5 min", () => {
@@ -98,21 +122,39 @@ describe("buildTodayPlan totals and time", () => {
 
 describe("todayBarSegments", () => {
   it("omits zero and null segments and joins in order", () => {
-    expect(todayBarSegments({ dueCards: 38, weakSections: 2, exam: { topicName: "Pharm", days: 9 }, minutes: 35 })).toEqual([
-      "38 cards due",
+    expect(
+      todayBarSegments({ dueCards: 32, reviewCards: 12, newCards: 20, weakSections: 3, exam: { topicName: "Pharm", days: 9 }, minutes: 20 }),
+    ).toEqual(["12 to review", "20 new", "3 weak sections", "Pharm exam in 9 days", "About 20 min"]);
+    expect(todayBarSegments({ dueCards: 38, reviewCards: 38, newCards: 0, weakSections: 2, exam: { topicName: "Pharm", days: 9 }, minutes: 35 })).toEqual([
+      "38 to review",
       "2 weak sections",
       "Pharm exam in 9 days",
       "About 35 min",
     ]);
-    expect(todayBarSegments({ dueCards: 0, weakSections: 1, exam: null, minutes: 5 })).toEqual([
+    expect(todayBarSegments({ dueCards: 0, reviewCards: 0, newCards: 0, weakSections: 1, exam: null, minutes: 5 })).toEqual([
       "1 weak section",
       "About 5 min",
     ]);
-    expect(todayBarSegments({ dueCards: 1, weakSections: 0, exam: { topicName: "Pharm", days: 1 }, minutes: 0 })).toEqual([
-      "1 card due",
+    expect(todayBarSegments({ dueCards: 1, reviewCards: 0, newCards: 1, weakSections: 0, exam: { topicName: "Pharm", days: 1 }, minutes: 0 })).toEqual([
+      "1 new",
       "Pharm exam in 1 day",
     ]);
-    expect(todayBarSegments({ dueCards: 0, weakSections: 0, exam: null, minutes: 0 })).toEqual([]);
+    expect(todayBarSegments({ dueCards: 0, reviewCards: 0, newCards: 0, weakSections: 0, exam: null, minutes: 0 })).toEqual([]);
+  });
+
+  it("flags only the weak part for its definition", () => {
+    const parts = todayBarParts({ dueCards: 2, reviewCards: 2, newCards: 0, weakSections: 1, exam: null, minutes: 5 });
+    expect(parts.filter((part) => part.weak).map((part) => part.text)).toEqual(["1 weak section"]);
+    expect(WEAK_SECTION_DEFINITION).toBe("Under 60% correct on 3 or more answers");
+  });
+});
+
+describe("dueSplitCopy", () => {
+  it("omits zero parts and is empty when both are zero", () => {
+    expect(dueSplitCopy(2, 5)).toBe("2 to review · 5 new");
+    expect(dueSplitCopy(0, 5)).toBe("5 new");
+    expect(dueSplitCopy(3, 0)).toBe("3 to review");
+    expect(dueSplitCopy(0, 0)).toBe("");
   });
 });
 
@@ -293,7 +335,7 @@ describe("exam pacing strip", () => {
 
 describe("today components", () => {
   it("contain no em dashes", () => {
-    for (const file of ["mastery-bar", "today-card", "today-modal"]) {
+    for (const file of ["mastery-bar", "today-card", "today-modal", "study-help"]) {
       const source = readFileSync(`components/${file}.tsx`, "utf8");
       expect(source.includes("—"), `${file}.tsx`).toBe(false);
     }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link, { useLinkStatus } from "next/link";
-import { useRef, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   CaretRight,
@@ -39,6 +39,7 @@ import { Label } from "@/components/ui/label";
 import { formatStamp } from "@/lib/format-generated-at";
 import { BATCH_ACCEPT } from "@/lib/generation-queue";
 import { useIsClient } from "@/lib/use-is-client";
+import { dueSplitCopy, WEAK_SECTION_DEFINITION } from "@/lib/today-plan";
 import { readApiError } from "@/lib/utils";
 
 export type ReviewerListItem = {
@@ -48,7 +49,10 @@ export type ReviewerListItem = {
   createdAt: string;
   lastGeneratedAt: string | null;
   examDate: string | null;
+  /** Due today: `reviewDueCount + newTodayCount`; shows the Review button. */
   dueTodayCount: number;
+  reviewDueCount: number;
+  newTodayCount: number;
   hasActiveSitting?: boolean;
   /** Pack mastery, and the weakest section's title when that section is weak. */
   mastery?: { score: number | null; weakTitle: string | null } | null;
@@ -56,6 +60,7 @@ export type ReviewerListItem = {
 
 /** The pack row's mastery bar and weak-section chip; nothing until the pack has a score. */
 export function PackMastery({ mastery }: { mastery: ReviewerListItem["mastery"] }) {
+  const weakDefinitionId = useId();
   if (!mastery) return null;
   return (
     <>
@@ -66,9 +71,16 @@ export function PackMastery({ mastery }: { mastery: ReviewerListItem["mastery"] 
         </span>
       ) : null}
       {mastery.weakTitle ? (
-        <span className="flex min-w-0 basis-full items-start gap-1">
+        <span
+          className="flex min-w-0 basis-full items-start gap-1"
+          title={WEAK_SECTION_DEFINITION}
+          aria-describedby={weakDefinitionId}
+        >
           <WarningCircle weight="bold" aria-hidden className="mt-px size-3.5 shrink-0 text-warning" />
           <span className="line-clamp-1 min-w-0 break-words">Weak: {mastery.weakTitle}</span>
+          <span id={weakDefinitionId} hidden>
+            {WEAK_SECTION_DEFINITION}
+          </span>
         </span>
       ) : null}
     </>
@@ -333,7 +345,7 @@ export function ReviewerList({
                   <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
                     <GeneratedAtLabel iso={reviewer.lastGeneratedAt} />
                     {reviewer.dueTodayCount > 0 ? (
-                      <span>{reviewer.dueTodayCount} due</span>
+                      <span>{dueSplitCopy(reviewer.reviewDueCount, reviewer.newTodayCount)}</span>
                     ) : null}
                     {reviewer.examDate ? <span>{reviewer.examDate}</span> : null}
                     <PackMastery mastery={reviewer.mastery} />

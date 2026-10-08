@@ -16,7 +16,7 @@ const hrefs = todayHrefs({ p1: "t1", p2: "t2" });
 
 function plan(overrides: Partial<TodayPlan>): TodayPlan {
   return {
-    bar: { dueCards: 0, weakSections: 0, exam: null, minutes: 0 },
+    bar: { dueCards: 0, reviewCards: 0, newCards: 0, weakSections: 0, exam: null, minutes: 0 },
     doFirst: [],
     pacing: [],
     empty: false,
@@ -38,7 +38,7 @@ describe("Today card", () => {
   it("starts due cards in Carded of the busiest pack", () => {
     const html = render(
       plan({
-        bar: { dueCards: 12, weakSections: 1, exam: null, minutes: 5 },
+        bar: { dueCards: 12, reviewCards: 4, newCards: 8, weakSections: 1, exam: null, minutes: 5 },
         doFirst: [
           { kind: "review", dueCards: 12, packCount: 2, packId: "p1" },
           { kind: "retest", packId: "p2", sectionId: "cells", title: "Cells", score: 0.3, missed: 4 },
@@ -46,7 +46,8 @@ describe("Today card", () => {
       }),
     );
     expect(html).toContain("Today");
-    expect(html).toContain("12 cards due");
+    expect(html).toContain("4 to review · 8 new · ");
+    expect(html).not.toContain("cards due");
     expect(startHref(html)).toBe("/topics/t1/reviewers/p1?mode=carded");
     expect(html).toContain("See the plan");
     expect(html).toContain('aria-haspopup="dialog"');
@@ -55,7 +56,7 @@ describe("Today card", () => {
   it("starts a re-test in Test Me when only weak sections remain", () => {
     const html = render(
       plan({
-        bar: { dueCards: 0, weakSections: 1, exam: null, minutes: 5 },
+        bar: { dueCards: 0, reviewCards: 0, newCards: 0, weakSections: 1, exam: null, minutes: 5 },
         doFirst: [{ kind: "retest", packId: "p2", sectionId: "cells", title: "Cells", score: 0.3, missed: 4 }],
       }),
     );
@@ -65,11 +66,30 @@ describe("Today card", () => {
   it("starts a re-read in Locked In at the section heading", () => {
     const html = render(
       plan({
-        bar: { dueCards: 0, weakSections: 1, exam: null, minutes: 5 },
+        bar: { dueCards: 0, reviewCards: 0, newCards: 0, weakSections: 1, exam: null, minutes: 5 },
         doFirst: [{ kind: "reread", packId: "p1", sectionId: "cells", title: "Cells", score: 0.3, minutes: 4 }],
       }),
     );
     expect(startHref(html)).toBe("/topics/t1/reviewers/p1?mode=locked_in#user-content-cells");
+  });
+
+  it("describes the weak segment with the Weak definition, not by hover alone", () => {
+    const html = render(
+      plan({
+        bar: { dueCards: 0, reviewCards: 0, newCards: 0, weakSections: 3, exam: null, minutes: 20 },
+        doFirst: [{ kind: "retest", packId: "p2", sectionId: "cells", title: "Cells", score: 0.3, missed: 4 }],
+      }),
+    );
+    const weak = html.match(/<span title="Under 60% correct on 3 or more answers" aria-describedby="([^"]+)">3 weak sections<\/span>/);
+    expect(weak).not.toBeNull();
+    expect(html).toContain(`<span id="${weak?.[1]}" hidden="">Under 60% correct on 3 or more answers</span>`);
+    expect(html).toContain("3 weak sections</span> · About 20 min");
+  });
+
+  it("offers How cards come back beside See the plan", () => {
+    const html = render(plan({ empty: true }));
+    expect(html).toContain('aria-label="How cards come back"');
+    expect(html.indexOf("See the plan")).toBeLessThan(html.indexOf("How cards come back"));
   });
 
   it("shows Nothing due today and only See the plan when the plan is empty", () => {
@@ -80,7 +100,7 @@ describe("Today card", () => {
   });
 
   it("lets the summary wrap instead of truncating", () => {
-    const html = render(plan({ bar: { dueCards: 3, weakSections: 0, exam: null, minutes: 5 } }));
+    const html = render(plan({ bar: { dueCards: 3, reviewCards: 3, newCards: 0, weakSections: 0, exam: null, minutes: 5 } }));
     expect(html).not.toContain("truncate");
   });
 

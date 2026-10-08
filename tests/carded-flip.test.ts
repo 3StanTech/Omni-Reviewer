@@ -81,8 +81,8 @@ describe("Carded recall flip", () => {
   it("shows the session label and remaining due, not a quiz score", () => {
     expect(src).not.toContain("Memorize. No choices.");
     expect(src).toContain("<p>{sessionLabel}</p>");
-    expect(src).toContain("Remaining {remainingDue} due");
-    expect(src).toContain("todayCards(durableCards, examDate, Date.now()).length");
+    expect(src).toContain("<p>Remaining: {remainingCopy}</p>");
+    expect(src).toContain("todayCards(durableCards, examDate, Date.now());");
     expect(src).toContain("selectTodayCards(");
     expect(src).not.toContain("Card {safeIndex + 1} of {cards.length}");
     expect(src).not.toMatch(/\{safeIndex \+ 1\} of \{cards\.length\}/);

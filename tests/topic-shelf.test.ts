@@ -46,6 +46,13 @@ describe("topic shelf", () => {
     expect(shelf).toContain("{dueTodayTotal}");
   });
 
+  it("describes the Due today total as reviews plus new cards", () => {
+    expect(shelf).toContain('const DUE_TODAY_DESCRIPTION = "Cards to review plus new cards for today";');
+    expect(shelf).toContain("title={DUE_TODAY_DESCRIPTION}");
+    expect(shelf).toContain("aria-describedby={DUE_TODAY_DESCRIPTION_ID}");
+    expect(shelf).toContain("<span id={DUE_TODAY_DESCRIPTION_ID} hidden>");
+  });
+
   it("shows each topic's own due count and a 44px actions button on touch", () => {
     expect(shelf).toContain("dueByTopic?.[topic.id]");
     expect(shelf).toContain("aria-label={`${due} due today`}");

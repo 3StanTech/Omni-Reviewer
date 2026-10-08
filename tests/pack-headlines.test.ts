@@ -16,7 +16,7 @@ describe("redundant study headlines", () => {
   it("drops the Carded tagline but keeps the session and remaining lines", () => {
     expect(carded).not.toContain("Memorize. No choices.");
     expect(carded).toContain("<p>{sessionLabel}</p>");
-    expect(carded).toContain("Remaining {remainingDue} due");
+    expect(carded).toContain("<p>Remaining: {remainingCopy}</p>");
   });
 
   it("keeps the Test Me heading for screen readers only", () => {
