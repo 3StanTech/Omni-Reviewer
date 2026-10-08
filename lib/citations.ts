@@ -159,6 +159,17 @@ function maskSpans(text: string): string {
   return text.replace(INLINE_CODE, mask).replace(INLINE_MATH, mask);
 }
 
+/**
+ * For a line opening display math ("$$" or "\\["), the offset just past its
+ * closer when the math closes on the same line, else null (a multi-line block).
+ */
+function displayMathLineEnd(line: string): number | null {
+  const open = line.search(/\S/);
+  const closer = line.startsWith("$$", open) ? "$$" : "\\]";
+  const close = line.indexOf(closer, open + 2);
+  return close < 0 ? null : close + closer.length;
+}
+
 function trimmedRange(
   markdown: string,
   start: number,
@@ -236,9 +247,9 @@ export function claimSentences(markdown: string): ClaimSentence[] {
     }
     if (trimmed.startsWith("$$") || trimmed.startsWith("\\[")) {
       flush();
-      const closer = trimmed.startsWith("$$") ? "$$" : "\\]";
-      const closedOnLine = trimmed.length > 2 && trimmed.slice(2).trimEnd().endsWith(closer);
-      if (!closedOnLine) displayMath = closer;
+      // Only math left open on its line starts a block; "$$x$$ [S1 p.2]" closes
+      // on its line, is never a claim (as in grounding) and never hides the lines after it.
+      if (displayMathLineEnd(text) === null) displayMath = trimmed.startsWith("$$") ? "$$" : "\\]";
       continue;
     }
     if (!trimmed) {
@@ -618,10 +629,15 @@ function maskNonProse(markdown: string): string {
       continue;
     }
     if (trimmed.startsWith("$$") || trimmed.startsWith("\\[")) {
-      const closer = trimmed.startsWith("$$") ? "$$" : "\\]";
-      const closedOnLine = trimmed.length > 2 && trimmed.slice(2).trimEnd().endsWith(closer);
-      if (!closedOnLine) displayMath = closer;
-      out.push(blank);
+      const mathEnd = displayMathLineEnd(line);
+      if (mathEnd === null) {
+        displayMath = trimmed.startsWith("$$") ? "$$" : "\\]";
+        out.push(blank);
+        continue;
+      }
+      // Closed on its line: mask the math, and read the rest of the line (a
+      // citation or tag after it) as prose, as the renderer does.
+      out.push(blank.slice(0, mathEnd) + maskSpans(line.slice(mathEnd)));
       continue;
     }
     out.push(maskSpans(line));
