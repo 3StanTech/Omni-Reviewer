@@ -33,8 +33,10 @@ import {
 } from "@/lib/generation-errors";
 import {
   groundDocument,
+  mergeRecheckReport,
   type GroundingReport,
   type GroundingSource,
+  type RecheckOptions,
   type VerifyItem,
 } from "@/lib/grounding";
 import { getEnv } from "@/lib/env";
@@ -755,7 +757,9 @@ async function groundGeneratedDocument(args: {
   citationSources: CitationSourceRef[];
   stepStartedAt: number;
   /** Check again: evaluate only tagged claims and the recorded unchecked ones. */
-  recheck?: { uncheckedKeys?: readonly string[]; legacyUnchecked?: boolean };
+  recheck?: RecheckOptions;
+  /** No model call: lexical misses stay unchecked and tagged ones keep their tags. */
+  skipVerifier?: boolean;
 }): Promise<{ markdown: string; meta: StudyDocumentMeta }> {
   // Without any source text (legacy packs) there is nothing to ground against.
   if (args.sources.length === 0) {
@@ -774,6 +778,7 @@ async function groundGeneratedDocument(args: {
     maxVerifyItems: MAX_GROUNDING_VERIFY_ITEMS,
     maxEvidenceChars: MAX_GROUNDING_EVIDENCE_CHARS,
     ...(args.recheck ? { recheck: args.recheck } : {}),
+    skipVerifier: Boolean(args.skipVerifier),
     verify: async (items) => {
       const remaining = args.stepStartedAt + GROUNDED_STEP_TOTAL_MS - Date.now();
       const deadlineMs = Math.min(GROUNDING_VERIFY_DEADLINE_MS, remaining);
@@ -794,13 +799,16 @@ async function groundGeneratedDocument(args: {
  * Reports written before unchecked keys existed re-check every untagged
  * lexical miss instead. The returned report describes the whole document:
  * this pass's counts, with the supported totals added to the previous ones.
+ * `noModel` skips the verifier: only claims that pass overlap and the term
+ * guard lose their tags, and the previous verifier flags are kept.
  */
 export async function regroundStudyDocument(
   markdown: string,
   sources: GroundingSource[],
-  options: { previous?: GroundingReport | null } = {},
+  options: { previous?: GroundingReport | null; noModel?: boolean } = {},
 ): Promise<{ markdown: string; report: GroundingReport | null }> {
   const previous = options.previous ?? null;
+  const noModel = Boolean(options.noModel);
   const grounded = await groundGeneratedDocument({
     markdown,
     sources,
@@ -809,30 +817,13 @@ export async function regroundStudyDocument(
     recheck: {
       uncheckedKeys: previous?.uncheckedKeys,
       legacyUnchecked: !previous?.uncheckedKeys && (previous?.unchecked ?? 0) > 0,
+      ...(previous?.termFlags ? { termFlags: previous.termFlags } : {}),
     },
+    skipVerifier: noModel,
   });
   const pass = grounded.meta.grounding;
   if (!pass) return { markdown: grounded.markdown, report: null };
-  // Unchecked counts and keys come only from this pass.
-  const carried: Partial<GroundingReport> = { ...previous };
-  delete carried.unchecked;
-  delete carried.uncheckedKeys;
-  // Term guard tags are re-evaluated with every tagged claim, like unsourced.
-  delete carried.termFlagged;
-  const report: GroundingReport = {
-    ...carried,
-    total: pass.total,
-    cited: pass.cited,
-    unsourced: pass.unsourced,
-    truncated: pass.truncated,
-    verifierFailed: pass.verifierFailed,
-    lexicalSupported: (previous?.lexicalSupported ?? 0) + pass.lexicalSupported,
-    verifiedSupported: (previous?.verifiedSupported ?? 0) + pass.verifiedSupported,
-    ...(pass.termFlagged ? { termFlagged: pass.termFlagged } : {}),
-    ...(pass.unchecked ? { unchecked: pass.unchecked } : {}),
-    ...(pass.uncheckedKeys?.length ? { uncheckedKeys: pass.uncheckedKeys } : {}),
-  };
-  return { markdown: grounded.markdown, report };
+  return { markdown: grounded.markdown, report: mergeRecheckReport(previous, pass, { noModel }) };
 }
 
 function withKnownCitations<T extends Record<K, string>, K extends keyof T>(

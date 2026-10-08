@@ -265,3 +265,45 @@ describe("hyphen and space variants", () => {
     expect(normalized(absentTerms("The 2024 report.", buildSourceVocabulary(["Pages 20 24."])))).toContain("2024");
   });
 });
+
+describe("possessives, ordinals and aliases", () => {
+  const ART_OF_WAR = "Infectious disease is a conflict, as in The Art of War by Sun Tzu.";
+
+  it.each(["Sun Tzu's", "Sun Tzu’s"])("matches the possessive %s to its plain source form", (name) => {
+    expect(absentTerms(`The battle is likened to ${name} "Art of War".`, buildSourceVocabulary([ART_OF_WAR]))).toEqual([]);
+  });
+
+  it("matches a possessive claim to a plain source and a plain claim to a possessive source", () => {
+    expect(absentTerms("These are *Koch's postulates* for causation.", buildSourceVocabulary(["Koch postulates link a microbe to disease."]))).toEqual([]);
+    expect(absentTerms("These are *Koch postulates* for causation.", buildSourceVocabulary(["Koch's postulates link a microbe to disease."]))).toEqual([]);
+    expect(absentTerms("The rule follows Koch for causation.", buildSourceVocabulary(["Koch’s postulates link a microbe to disease."]))).toEqual([]);
+  });
+
+  it("matches a plural possessive written with a trailing apostrophe", () => {
+    expect(absentTerms("The method follows Jones' criteria closely.", buildSourceVocabulary(["The Jones criteria guide diagnosis."]))).toEqual([]);
+  });
+
+  it("keeps inner apostrophes in names", () => {
+    expect(specificTerms("The sign was described by O'Brien in detail.")).toContain("O'Brien");
+    expect(absentTerms("The sign was described by O'Brien in detail.", buildSourceVocabulary(["O'Brien described the sign."]))).toEqual([]);
+    expect(absentTerms("The sign was described by O'Brien in detail.", buildSourceVocabulary(["Osler described the sign."]))).toEqual(["O'Brien"]);
+  });
+
+  it("matches a numbered ordinal to its spelled source form and back", () => {
+    expect(absentTerms("Avoid the drug in the 3rd trimester of pregnancy.", buildSourceVocabulary(["It is contraindicated in the third trimester."]))).toEqual([]);
+    expect(absentTerms("Avoid the drug in the *Third Trimester* of pregnancy.", buildSourceVocabulary(["It is contraindicated in the 3rd trimester."]))).toEqual([]);
+    expect(absentTerms("Avoid the drug in the 3rd-trimester window.", buildSourceVocabulary(["It is contraindicated in the third trimester window."]))).toEqual([]);
+  });
+
+  it("still flags a different ordinal", () => {
+    expect(absentTerms("Avoid the drug in the 2nd trimester of pregnancy.", buildSourceVocabulary(["It is contraindicated in the third trimester."]))).toEqual(["2nd"]);
+  });
+
+  it("treats AZT as present when the source names zidovudine", () => {
+    expect(absentTerms("AZT reduces vertical transmission of HIV.", buildSourceVocabulary(["Zidovudine reduces vertical transmission of HIV."]))).toEqual([]);
+  });
+
+  it("still flags a drug the source never mentions", () => {
+    expect(absentTerms("Tigecycline covers resistant organisms.", buildSourceVocabulary(["Doxycycline covers many organisms."]))).toEqual(["Tigecycline"]);
+  });
+});

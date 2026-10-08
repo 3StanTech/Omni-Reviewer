@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { unsourcedTokenOffsets } from "@/lib/citations";
 import {
   claimKey,
   groundDocument,
   keyTerms,
   LEXICAL_SUPPORT_THRESHOLD,
   lexicalSupport,
+  mergeRecheckReport,
   normalizeForMatch,
+  taggedClaims,
+  unsourcedClaimKey,
+  type GroundingReport,
   type GroundingSource,
   type VerifyFn,
 } from "@/lib/grounding";
@@ -855,5 +860,103 @@ describe("display math", () => {
     const inside = "Gentamicin grows new teeth on every patient within three short hours.";
     const markdown = ["$$", inside, inside, "x = 1 $$", PROSE[0], "\\[", inside, PROSE[1]].join("\n");
     expect(await extracted(markdown)).toEqual([PROSE[0].replace(" [S1 p.14]", "")]);
+  });
+});
+
+describe("term-guard reasons and the no-model re-check", () => {
+  const SUN_TZU = "The battle against infectious diseases is a timeless conflict, famously likened to Sun Tzu's Art of War. [S1 p.1]";
+  const CALCIUM = "Daptomycin depolarizes the Gram-positive cytoplasmic membrane in a calcium-dependent manner. [S1 p.10]";
+  const sources: GroundingSource[] = [{
+    index: 1,
+    text: [
+      "<<<page 1>>>",
+      "The battle against infectious diseases is a timeless conflict, likened to The Art of War by Sun Tzu.",
+      "<<<page 10>>>",
+      "Daptomycin depolarizes the Gram-positive cytoplasmic membrane.",
+      PHARM_SOURCE.text,
+    ].join("\n"),
+  }];
+  const tag = (claim: string) => claim.replace(/ \[S1 p\.\d+\]$/, (cite) => ` [[unsourced]]${cite}`);
+
+  it("records the absent terms of a term-flagged claim under its claim key", async () => {
+    const result = await groundDocument({ markdown: CALCIUM, sources, verify: neverCalled() });
+    expect(result.report.termFlagged).toBe(1);
+    expect(Object.keys(result.report.termFlags ?? {})).toEqual([claimKey(CALCIUM)]);
+    expect(result.report.termFlags?.[claimKey(CALCIUM)]).toContain("calcium");
+  });
+
+  it("records no reasons when nothing is term-flagged", async () => {
+    const result = await groundDocument({ markdown: INVENTED, sources: [PHARM_SOURCE], verify: rejectAll() });
+    expect(result.report.unsourced).toBe(1);
+    expect(result.report.termFlags).toBeUndefined();
+  });
+
+  it("skipVerifier clears a tagged lexical pass, keeps a tagged lexical miss and never calls verify", async () => {
+    const markdown = [tag(SUN_TZU), "", tag(INVENTED)].join("\n");
+    const verify = neverCalled();
+    const result = await groundDocument({ markdown, sources, verify, recheck: {}, skipVerifier: true });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.markdown).toBe([SUN_TZU, "", tag(INVENTED)].join("\n"));
+    expect(result.report).toMatchObject({ unsourced: 1, verifierFailed: false, truncated: false, verifiedSupported: 0 });
+    expect(result.report.unchecked ?? 0).toBe(0);
+  });
+
+  it("skipVerifier leaves an untagged lexical miss untagged, also without a verify function", async () => {
+    const result = await groundDocument({ markdown: INVENTED, sources: [PHARM_SOURCE], skipVerifier: true });
+    expect(result.markdown).toBe(INVENTED);
+    expect(result.report).toMatchObject({ unsourced: 0, unchecked: 1, verifierFailed: false, truncated: false });
+  });
+
+  it("a re-check keeps the earlier reason of a tag it could not decide and drops the reason of a cleared one", async () => {
+    const markdown = [tag(SUN_TZU), "", tag(INVENTED)].join("\n");
+    const previous = { [claimKey(SUN_TZU)]: ["Tzu's"], [claimKey(INVENTED)]: ["250"] };
+    const result = await groundDocument({ markdown, sources, recheck: { termFlags: previous }, skipVerifier: true });
+    expect(result.report.termFlags).toEqual({ [claimKey(INVENTED)]: ["250"] });
+  });
+
+  it("a re-check replaces the reason of a claim it flags again", async () => {
+    const result = await groundDocument({
+      markdown: tag(CALCIUM),
+      sources,
+      recheck: { termFlags: { [claimKey(CALCIUM)]: ["old"] } },
+      skipVerifier: true,
+    });
+    expect(result.markdown).toBe(tag(CALCIUM));
+    expect(result.report.termFlags?.[claimKey(CALCIUM)]).toContain("calcium");
+    expect(result.report.termFlags?.[claimKey(CALCIUM)]).not.toContain("old");
+  });
+
+  it("bounds the recorded terms", async () => {
+    const claim = "Daptomycin depolarizes the Gram-positive cytoplasmic membrane with AAA, BBB, QQQ, DDD, EEE and FFF. [S1 p.10]";
+    const verify = vi.fn<VerifyFn>(async (items) => items.map((item) => ({ id: item.id, supported: true })));
+    const result = await groundDocument({ markdown: claim, sources, verify });
+    expect(result.report.termFlagged).toBe(1);
+    expect(result.report.termFlags?.[claimKey(claim)]).toEqual(["AAA", "BBB", "QQQ", "DDD", "EEE"]);
+  });
+
+  it("maps a rendered tag to the claim key grounding used", () => {
+    const markdown = ["- " + tag(SUN_TZU), "", "| a | b |", "|---|---|", "| x | y |", "", tag(INVENTED) + " [[unsourced]]"].join("\n");
+    const offsets = unsourcedTokenOffsets(markdown);
+    expect(offsets).toHaveLength(3);
+    expect(unsourcedClaimKey(markdown, offsets[0])).toBe(claimKey(SUN_TZU));
+    expect(unsourcedClaimKey(markdown, offsets[1])).toBe(claimKey(INVENTED));
+    expect(unsourcedClaimKey(markdown, offsets[2])).toBe(claimKey(INVENTED));
+    expect(unsourcedClaimKey(markdown, offsets[0] + 1)).toBeNull();
+    expect(taggedClaims(markdown).map((entry) => entry.key)).toEqual([claimKey(SUN_TZU), claimKey(INVENTED), claimKey(INVENTED)]);
+  });
+
+  it("a no-model merge keeps the earlier verifier flags and takes reasons from the pass", () => {
+    const previous: GroundingReport = {
+      total: 2, cited: 2, lexicalSupported: 1, verifiedSupported: 0, unsourced: 1, truncated: true, verifierFailed: true,
+      termFlagged: 1, termFlags: { aaaaaaaa: ["X"] },
+    };
+    const pass: GroundingReport = {
+      total: 2, cited: 2, lexicalSupported: 1, verifiedSupported: 0, unsourced: 0, truncated: false, verifierFailed: false,
+    };
+    expect(mergeRecheckReport(previous, pass, { noModel: true })).toEqual({
+      total: 2, cited: 2, lexicalSupported: 2, verifiedSupported: 0, unsourced: 0, truncated: true, verifierFailed: true,
+    });
+    expect(mergeRecheckReport(previous, pass)).toMatchObject({ truncated: false, verifierFailed: false });
   });
 });

@@ -12,4 +12,6 @@ export const ACRONYM_ALIASES: Readonly<Record<string, readonly string[]>> = {
     "pneumocystis carinii pneumonia",
     "pneumocystis pneumonia",
   ],
+  // AZT (azidothymidine) is the older name of zidovudine.
+  AZT: ["zidovudine"],
 };

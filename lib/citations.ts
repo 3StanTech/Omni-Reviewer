@@ -530,11 +530,34 @@ export type StudyDocumentMeta = {
     uncheckedKeys?: string[];
     /** Supported claims tagged by the term guard; included in unsourced. */
     termFlagged?: number;
+    /** claimKey of each term-flagged claim and the terms its sources never mention. */
+    termFlags?: Record<string, string[]>;
   };
 };
 
 const MAX_UNCHECKED_KEYS = 500;
 const MAX_UNCHECKED_KEY_CHARS = 16;
+/** Bounds of a grounding report's term-guard reasons. */
+export const MAX_TERM_FLAG_KEYS = 200;
+export const MAX_TERM_FLAG_TERMS = 5;
+export const MAX_TERM_FLAG_TERM_CHARS = 40;
+
+/** A claim's absent terms within the stored bounds: the first 5, each cut to 40 characters. */
+export function boundTermFlagTerms(terms: readonly string[]): string[] {
+  return terms.slice(0, MAX_TERM_FLAG_TERMS).map((term) => term.slice(0, MAX_TERM_FLAG_TERM_CHARS));
+}
+
+function isTermFlags(value: unknown): value is Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  return entries.length <= MAX_TERM_FLAG_KEYS
+    && entries.every(([key, terms]) =>
+      key.length <= MAX_UNCHECKED_KEY_CHARS
+      && Array.isArray(terms)
+      && terms.length >= 1
+      && terms.length <= MAX_TERM_FLAG_TERMS
+      && terms.every((term) => typeof term === "string" && term.length > 0 && term.length <= MAX_TERM_FLAG_TERM_CHARS));
+}
 
 function isUncheckedKeyList(value: unknown): value is string[] {
   return Array.isArray(value)
@@ -557,10 +580,11 @@ export function readStudyDocumentMeta(contentJson: unknown): StudyDocumentMeta |
   );
   const raw = (contentJson as { grounding?: unknown }).grounding;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { citationSources };
-  // A malformed key list or term-guard count is dropped; the rest of the report is kept.
-  const { uncheckedKeys, termFlagged, ...rest } = raw as NonNullable<StudyDocumentMeta["grounding"]>;
+  // A malformed key list, term-guard count or reason map is dropped; the rest of the report is kept.
+  const { uncheckedKeys, termFlagged, termFlags, ...rest } = raw as NonNullable<StudyDocumentMeta["grounding"]>;
   const grounding: NonNullable<StudyDocumentMeta["grounding"]> = isUncheckedKeyList(uncheckedKeys) ? { ...rest, uncheckedKeys } : rest;
   if (Number.isSafeInteger(termFlagged) && (termFlagged as number) >= 0) grounding.termFlagged = termFlagged;
+  if (isTermFlags(termFlags)) grounding.termFlags = termFlags;
   return { citationSources, grounding };
 }
 

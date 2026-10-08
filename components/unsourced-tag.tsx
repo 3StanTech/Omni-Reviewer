@@ -14,7 +14,8 @@ import { ChatCircleDots, WarningCircle } from "@phosphor-icons/react";
 
 import { Button } from "@/components/ui/button";
 import { MAX_ASK_QUESTION_CHARS } from "@/lib/ask-types";
-import { stripCitations, type UnsourcedResolution } from "@/lib/citations";
+import { stripCitations, unsourcedTokenOffsets, type UnsourcedResolution } from "@/lib/citations";
+import { unsourcedClaimKey } from "@/lib/grounding";
 import { cn } from "@/lib/utils";
 
 export const UNSOURCED_TAG_LABEL = "Not from your uploaded sources";
@@ -24,6 +25,26 @@ export const UNSOURCED_EXPLANATION_BODY =
 /** Used when the grounding check was truncated or its verifier failed. */
 export const UNSOURCED_INCOMPLETE_CHECK_TEXT =
   "This sentence did not match your uploaded sources, and the full check could not run this time. It may still be supported. Check the cited slide before you rely on it.";
+
+/** Why a tag without recorded missing terms was placed: the verifier rejected it (or it predates reasons). */
+export const UNSOURCED_VERIFIER_REASON = "The checker could not match this sentence to its cited page.";
+
+/** The tag's reason line: the terms the sources never mention, else the verifier's rejection. */
+export function unsourcedReasonText(terms: readonly string[] | null | undefined): string {
+  return terms && terms.length > 0 ? `Not found in your sources: ${terms.join(", ")}` : UNSOURCED_VERIFIER_REASON;
+}
+
+/** The recorded missing terms of the nth rendered tag of `content`, or null when none were recorded. */
+export function unsourcedTagTerms(
+  content: string,
+  occurrence: number,
+  termFlags: Readonly<Record<string, readonly string[]>>,
+): readonly string[] | null {
+  const offset = unsourcedTokenOffsets(content)[occurrence];
+  if (offset === undefined) return null;
+  const key = unsourcedClaimKey(content, offset);
+  return key ? termFlags[key] ?? null : null;
+}
 
 /** Class names for the claim wrapper; `data-active` is toggled by its tag. */
 export const UNSOURCED_CLAIM_CLASS =
@@ -35,6 +56,10 @@ type UnsourcedActions = {
   disabled: boolean;
   /** From the view's grounding report: true when it was truncated or the verifier failed. */
   checkIncomplete?: boolean;
+  /** From the view's grounding report (empty when none were recorded); without it no reason line shows. */
+  termFlags?: Readonly<Record<string, readonly string[]>>;
+  /** The Markdown the tags were rendered from, to find each tag's claim. */
+  content?: string;
 };
 
 const UnsourcedActionsContext = createContext<UnsourcedActions | null>(null);
@@ -80,6 +105,7 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
   const [hover, setHover] = useState(false);
   const [pending, setPending] = useState(false);
   const [sentence, setSentence] = useState("");
+  const [reason, setReason] = useState<string | null>(null);
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({});
 
   useEffect(() => {
@@ -126,6 +152,11 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
       return;
     }
     setSentence(askWhy ? claimSentence(rootRef.current) : "");
+    setReason(
+      actions?.termFlags && actions.content !== undefined && occurrence !== null
+        ? unsourcedReasonText(unsourcedTagTerms(actions.content, occurrence, actions.termFlags))
+        : null,
+    );
     const rect = rootRef.current?.getBoundingClientRect();
     const width = Math.min(POPOVER_MAX_WIDTH, window.innerWidth - VIEWPORT_GUTTER * 2);
     if (rect) {
@@ -201,10 +232,14 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
         className="absolute top-full z-30 mt-2 block rounded-xl border border-border bg-popover p-3 text-left font-sans text-sm leading-relaxed font-normal whitespace-normal text-popover-foreground not-italic shadow-[0_10px_30px_oklch(0_0_0/40%)]"
       >
         {actions?.checkIncomplete ? (
-          <span className="block">{UNSOURCED_INCOMPLETE_CHECK_TEXT}</span>
+          <>
+            <span className="block">{UNSOURCED_INCOMPLETE_CHECK_TEXT}</span>
+            {reason ? <span className="mt-1 block text-muted-foreground">{reason}</span> : null}
+          </>
         ) : (
           <>
             <strong className="block font-semibold">{UNSOURCED_EXPLANATION_TITLE}</strong>
+            {reason ? <span className="mt-1 block text-muted-foreground">{reason}</span> : null}
             <span className="mt-1 block text-muted-foreground">{UNSOURCED_EXPLANATION_BODY}</span>
           </>
         )}

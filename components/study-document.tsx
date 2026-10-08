@@ -324,8 +324,11 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
       resolve: resolveUnsourced,
       disabled: editing || busy,
       checkIncomplete: Boolean(grounding?.verifierFailed || grounding?.truncated),
+      // Each tag's reason line looks up its claim in the recorded term-guard reasons.
+      termFlags: grounding ? grounding.termFlags ?? {} : undefined,
+      content: view.content,
     }),
-    [busy, editing, grounding, resolveUnsourced],
+    [busy, editing, grounding, resolveUnsourced, view.content],
   );
 
   const captureSelection = useCallback(() => {

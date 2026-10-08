@@ -37,9 +37,26 @@ function normalize(text: string): string {
     .trim();
 }
 
+/** A final "'s" or "’s" after 2+ letters ("Tzu's", "Koch’s"); inner apostrophes ("O'Brien") never match. */
+const POSSESSIVE = /(\p{L}{2})['’][sS](?![\p{L}\p{N}])/gu;
+
+/** Possessives written as their stem ("Sun Tzu's" as "Sun Tzu"), in claims and sources alike. */
+function stripPossessives(text: string): string {
+  return text.replace(POSSESSIVE, "$1");
+}
+
+/** Ordinals one to ten, spelled and numbered ("third" and "3rd"), each mapped to the other. */
+const ORDINALS: Record<string, string> = {
+  first: "1st", second: "2nd", third: "3rd", fourth: "4th", fifth: "5th",
+  sixth: "6th", seventh: "7th", eighth: "8th", ninth: "9th", tenth: "10th",
+};
+const ORDINAL_EQUIVALENTS = new Map<string, string>(
+  Object.entries(ORDINALS).flatMap(([spelled, numbered]) => [[spelled, numbered], [numbered, spelled]]),
+);
+
 /** Each text normalized on its own and joined with " | ", so no phrase matches across two texts. */
 export function buildSourceVocabulary(texts: readonly string[]): SourceVocabulary {
-  const normalized = texts.map((text) => normalize(canonicalizeGreek(text)));
+  const normalized = texts.map((text) => normalize(stripPossessives(canonicalizeGreek(text))));
   const joined = new Set<string>();
   for (const text of normalized) {
     const words = text.split(" ").filter(Boolean);
@@ -135,9 +152,9 @@ export function specificTerms(sentence: string): string[] {
 }
 
 function findTerms(sentence: string): FoundTerm[] {
-  const text = canonicalizeGreek(
+  const text = stripPossessives(canonicalizeGreek(
     sentence.split(UNSOURCED_TOKEN).join(" ").replace(citationPattern(), " ").replace(LIST_OR_QUOTE_PREFIX, ""),
-  );
+  ));
   const found: FoundTerm[] = [];
   const seen = new Map<string, FoundTerm>();
   const add = (term: string, compound?: string) => {
@@ -203,10 +220,13 @@ function findTerms(sentence: string): FoundTerm[] {
 
 /**
  * A normalized ordinary word found at a word start: as is, singular, or by a
- * 6-letter prefix when over 8 letters. Numbers and abbreviations need the whole token.
+ * 6-letter prefix when over 8 letters. Numbers and abbreviations need the whole
+ * token; an ordinal also matches its other spelling ("3rd" and "third").
  */
 function wordPresent(word: string, vocab: SourceVocabulary, exact = false): boolean {
   if (vocab.words.has(word)) return true;
+  const ordinal = ORDINAL_EQUIVALENTS.get(word);
+  if (ordinal && vocab.words.has(ordinal)) return true;
   if (exact) return false;
   const forms = [word];
   if (word.endsWith("es") && word.length > 4) forms.push(word.slice(0, -2));
@@ -259,7 +279,13 @@ function exactTermPresent(term: string, vocab: SourceVocabulary): boolean {
   // A compound with a number or abbreviation ("IL-6-dependent") only matches as a
   // whole; its ordinary words may differ in number ("6-month" and "6 months").
   if (exact.some(Boolean)) {
-    const phrase = words.map((word, index) => (exact[index] ? word : `(?:${singular(word)}|${word})(?:e?s)?`)).join(" ");
+    const phrase = words
+      .map((word, index) => {
+        if (!exact[index]) return `(?:${singular(word)}|${word})(?:e?s)?`;
+        const ordinal = ORDINAL_EQUIVALENTS.get(word);
+        return ordinal ? `(?:${word}|${ordinal})` : word;
+      })
+      .join(" ");
     return new RegExp(` ${phrase} `, "u").test(vocab.text);
   }
   const long = words.filter((word) => word.length >= 4);

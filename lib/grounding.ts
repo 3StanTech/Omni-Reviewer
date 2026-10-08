@@ -12,8 +12,10 @@
  */
 
 import {
+  boundTermFlagTerms,
   citationPattern,
   isSentenceAbbreviation,
+  MAX_TERM_FLAG_KEYS,
   parseCitations,
   stripCitations,
   UNSOURCED_TOKEN,
@@ -60,6 +62,12 @@ export type GroundingReport = {
   uncheckedKeys?: string[];
   /** Claims judged supported but tagged because a specific term is absent from the sources; included in unsourced. */
   termFlagged?: number;
+  /**
+   * claimKey of each term-flagged claim, with the terms the sources never
+   * mention (bounded), so the tag can say why. A tagged claim without an entry
+   * was rejected by the verifier or graded before reasons were recorded.
+   */
+  termFlags?: Record<string, string[]>;
   /** Bare page-as-source citations rewritten before grounding. */
   repairedCitations?: number;
 };
@@ -444,6 +452,42 @@ export function groundingClaimTexts(markdown: string): Array<{ sentence: string;
   return extractClaims(markdown.split("\n")).map((claim) => ({ sentence: claim.sentence, termGuardText: claim.keyText }));
 }
 
+/** Each `[[unsourced]]` token of the Markdown, in order, with the claim it follows as grounding reads it. */
+function tokensWithClaims(markdown: string): Array<{ line: number; column: number; claim: Claim | null }> {
+  const original = markdown.split("\n");
+  const { lines, tokens } = stripTokens(original);
+  const claims = extractClaims(lines);
+  // Where each token itself starts, after any leading space its match took.
+  const columns = original.flatMap((line) =>
+    [...line.matchAll(TOKEN_WITH_SPACE)].map((match) => match.index + match[0].length - UNSOURCED_TOKEN.length),
+  );
+  return tokens.map((token, index) => ({
+    line: token.line,
+    column: columns[index],
+    claim: claims.find((entry) => entry.line === token.line && entry.insertAt <= token.at && token.at <= entry.end) ?? null,
+  }));
+}
+
+/**
+ * claimKey of the claim an `[[unsourced]]` token at `offset` of the Markdown
+ * follows, as grounding computed it; null when the token ends no claim. Pure,
+ * so the reader can look up a tag's recorded reason.
+ */
+export function unsourcedClaimKey(markdown: string, offset: number): string | null {
+  const before = markdown.slice(0, offset);
+  const line = before.split("\n").length - 1;
+  const column = offset - (before.lastIndexOf("\n") + 1);
+  const token = tokensWithClaims(markdown).find((entry) => entry.line === line && entry.column === column);
+  return token?.claim ? claimKey(token.claim.keyText) : null;
+}
+
+/** The claims that carry an `[[unsourced]]` token, in token order: key and verifier sentence. */
+export function taggedClaims(markdown: string): Array<{ key: string; sentence: string }> {
+  return tokensWithClaims(markdown).flatMap(({ claim }) =>
+    claim ? [{ key: claimKey(claim.keyText), sentence: claim.sentence }] : [],
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Evidence
 
@@ -579,6 +623,8 @@ export type RecheckOptions = {
   uncheckedKeys?: readonly string[];
   /** Graded before keys were recorded: every untagged lexical miss may be checked. */
   legacyUnchecked?: boolean;
+  /** The previous report's reasons; kept for tagged claims this pass could not decide. */
+  termFlags?: Readonly<Record<string, readonly string[]>>;
 };
 
 export async function groundDocument({
@@ -589,10 +635,11 @@ export async function groundDocument({
   maxEvidenceChars = 4000,
   passageChars = GROUNDING_PASSAGE_CHARS,
   recheck,
+  skipVerifier = false,
 }: {
   markdown: string;
   sources: GroundingSource[];
-  verify: VerifyFn;
+  verify?: VerifyFn;
   maxVerifyItems?: number;
   maxEvidenceChars?: number;
   /** Evidence window size; the best windows of each claim's pages reach the verifier. */
@@ -602,6 +649,12 @@ export async function groundDocument({
    * unchecked. No other claim is evaluated, so a kept claim is never re-tagged.
    */
   recheck?: RecheckOptions;
+  /**
+   * No model (also without `verify`): no verifier call; every lexical miss stays unchecked
+   * (a tagged one keeps its tag), so only claims that pass overlap and the term
+   * guard change. `verifierFailed` stays false.
+   */
+  skipVerifier?: boolean;
 }): Promise<{ markdown: string; report: GroundingReport }> {
   const stripped = recheck ? stripTokens(markdown.split("\n")) : null;
   const lines = stripped?.lines ?? markdown.split("\n");
@@ -609,8 +662,19 @@ export async function groundDocument({
   const bySource = buildPages(sources);
   const allPages = [...bySource.values()].flat();
   const vocabulary = buildSourceVocabulary(sources.map((source) => source.text));
-  /** A supported claim naming a term the sources never mention is treated as unsourced. */
-  const termGuarded = (claim: Claim): boolean => absentTerms(claim.keyText, vocabulary).length > 0;
+  const termFlags: Record<string, string[]> = {};
+  let termFlagKeys = 0;
+  /** A supported claim naming a term the sources never mention is treated as unsourced; its terms are recorded. */
+  const termGuarded = (claim: Claim): boolean => {
+    const absent = absentTerms(claim.keyText, vocabulary);
+    if (absent.length === 0) return false;
+    const key = claimKey(claim.keyText);
+    if (!(key in termFlags) && termFlagKeys < MAX_TERM_FLAG_KEYS) {
+      termFlags[key] = boundTermFlagTerms(absent);
+      termFlagKeys++;
+    }
+    return true;
+  };
 
   // Claims whose end carried a token before stripping (re-check only).
   const tokenClaims = new Map<Insertion, Claim>();
@@ -665,11 +729,12 @@ export async function groundDocument({
 
   // Misses beyond the batch are left unchecked, not tagged: an unchecked claim
   // is not evidence that it is missing from the sources, and Check again can reach it.
-  const verifiable = misses.slice(0, Math.max(0, maxVerifyItems));
+  const noVerifier = skipVerifier || !verify;
+  const verifiable = noVerifier ? [] : misses.slice(0, Math.max(0, maxVerifyItems));
   for (const miss of misses.slice(verifiable.length)) outcomes.set(miss.claim, "unchecked");
-  if (misses.length > verifiable.length) truncated = true;
+  if (!noVerifier && misses.length > verifiable.length) truncated = true;
 
-  if (verifiable.length > 0) {
+  if (verify && verifiable.length > 0) {
     const items: VerifyItem[] = verifiable.map((miss, id) => ({
       id,
       sentence: miss.claim.sentence,
@@ -738,6 +803,55 @@ export async function groundDocument({
     report.uncheckedKeys = uncheckedKeys;
   }
   if (termFlagged > 0) report.termFlagged = termFlagged;
+  // A re-check keeps the earlier reason of a tagged claim it could not decide
+  // (unchecked, or a tag on a line that is no claim); a claim decided now has
+  // only this pass's reason, and an untagged claim has none.
+  if (stripped && recheck?.termFlags) {
+    const keptTags = claims.filter((claim) => tagged.has(claim) && outcomes.get(claim) !== "pass" && outcomes.get(claim) !== "reject");
+    for (const claim of keptTags) {
+      const key = claimKey(claim.keyText);
+      const earlier = recheck.termFlags[key];
+      if (earlier && !(key in termFlags) && termFlagKeys < MAX_TERM_FLAG_KEYS) {
+        termFlags[key] = boundTermFlagTerms(earlier);
+        termFlagKeys++;
+      }
+    }
+  }
+  if (termFlagKeys > 0) report.termFlags = termFlags;
 
   return { markdown: output, report };
+}
+
+/**
+ * The whole-document report after a re-check pass: this pass's counts, with
+ * the supported totals added to the previous ones. Unchecked keys, term-guard
+ * counts and reasons come only from the pass (which already kept the reasons
+ * of tags it could not decide). A no-model pass says nothing about the
+ * verifier, so the previous truncated and verifierFailed flags are kept.
+ */
+export function mergeRecheckReport(
+  previous: GroundingReport | null,
+  pass: GroundingReport,
+  { noModel = false }: { noModel?: boolean } = {},
+): GroundingReport {
+  const carried: Partial<GroundingReport> = { ...previous };
+  delete carried.unchecked;
+  delete carried.uncheckedKeys;
+  // Term guard tags are re-evaluated with every tagged claim, like unsourced.
+  delete carried.termFlagged;
+  delete carried.termFlags;
+  return {
+    ...carried,
+    total: pass.total,
+    cited: pass.cited,
+    unsourced: pass.unsourced,
+    truncated: noModel ? Boolean(previous?.truncated) : pass.truncated,
+    verifierFailed: noModel ? Boolean(previous?.verifierFailed) : pass.verifierFailed,
+    lexicalSupported: (previous?.lexicalSupported ?? 0) + pass.lexicalSupported,
+    verifiedSupported: (previous?.verifiedSupported ?? 0) + pass.verifiedSupported,
+    ...(pass.termFlagged ? { termFlagged: pass.termFlagged } : {}),
+    ...(pass.termFlags ? { termFlags: pass.termFlags } : {}),
+    ...(pass.unchecked ? { unchecked: pass.unchecked } : {}),
+    ...(pass.uncheckedKeys?.length ? { uncheckedKeys: pass.uncheckedKeys } : {}),
+  };
 }
