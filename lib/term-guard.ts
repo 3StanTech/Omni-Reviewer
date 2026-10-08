@@ -14,7 +14,13 @@ import { citationPattern, UNSOURCED_TOKEN } from "@/lib/citations";
  * set, and every run of 2 to 4 adjacent words of 2+ characters written as one
  * ("dsb sc" as "dsbsc"), so a hyphen or space variant of a term still matches.
  */
-export type SourceVocabulary = { text: string; words: ReadonlySet<string>; joined: ReadonlySet<string> };
+export type SourceVocabulary = {
+  text: string;
+  words: ReadonlySet<string>;
+  joined: ReadonlySet<string>;
+  /** The same vocabulary with British "ae"/"oe" spellings folded ("amoebic" as "amebic"). */
+  folded?: SourceVocabulary;
+};
 
 const MAX_JOINED_WORDS = 4;
 
@@ -54,9 +60,18 @@ const ORDINAL_EQUIVALENTS = new Map<string, string>(
   Object.entries(ORDINALS).flatMap(([spelled, numbered]) => [[spelled, numbered], [numbered, spelled]]),
 );
 
+/** "ae" and "oe" folded to "e" ("oedema" as "edema", "Haemoglobin" as "Hemoglobin"), so British and US spellings match. */
+function foldSpelling(text: string): string {
+  return text.replace(/[aoAO](?=[eE])/g, "");
+}
+
 /** Each text normalized on its own and joined with " | ", so no phrase matches across two texts. */
 export function buildSourceVocabulary(texts: readonly string[]): SourceVocabulary {
   const normalized = texts.map((text) => normalize(stripPossessives(canonicalizeGreek(text))));
+  return { ...vocabularyOf(normalized), folded: vocabularyOf(normalized.map(foldSpelling)) };
+}
+
+function vocabularyOf(normalized: readonly string[]): SourceVocabulary {
   const joined = new Set<string>();
   for (const text of normalized) {
     const words = text.split(" ").filter(Boolean);
@@ -151,6 +166,19 @@ export function specificTerms(sentence: string): string[] {
   return findTerms(sentence).map((found) => found.term);
 }
 
+const MAX_ITALIC_TERM_WORDS = 4;
+
+/**
+ * An italic span reads as one term ("*Pneumocystis jirovecii*") when it has at
+ * most 4 words and no sentence punctuation (no leading "("); an italic note or sentence is
+ * still checked word by word.
+ */
+function termLikeSpan(span: string): boolean {
+  // A genus initial ("*E. coli*") is not sentence punctuation.
+  if (span.startsWith("(") || /[:;?!]|\.\s/.test(span.replace(/^\p{Lu}\.\s/u, ""))) return false;
+  return span.split(/\s+/).filter(Boolean).length <= MAX_ITALIC_TERM_WORDS;
+}
+
 function findTerms(sentence: string): FoundTerm[] {
   const text = stripPossessives(canonicalizeGreek(
     sentence.split(UNSOURCED_TOKEN).join(" ").replace(citationPattern(), " ").replace(LIST_OR_QUOTE_PREFIX, ""),
@@ -175,7 +203,7 @@ function findTerms(sentence: string): FoundTerm[] {
   for (const match of text.matchAll(ITALIC_SPAN)) {
     if ((match.index ?? 0) < labelEnd) continue;
     const span = (match[1] ?? match[2]).trim();
-    if (span && !isRomanNumeral(span) && !isAllowlisted(span)) add(span);
+    if (span && termLikeSpan(span) && !isRomanNumeral(span) && !isAllowlisted(span)) add(span);
   }
 
   // Same length as `text`, so token offsets still locate the lead-in label.
@@ -255,8 +283,28 @@ function joinedPresent(term: string, vocab: SourceVocabulary): boolean {
   return joined.length >= 4 && /\p{L}/u.test(joined) && (vocab.words.has(joined) || vocab.joined.has(joined));
 }
 
+/** As written, or with both sides' "ae"/"oe" spellings folded ("amoebicides" and "AMEBICIDES"). */
 function termPresent(term: string, vocab: SourceVocabulary): boolean {
-  return exactTermPresent(term, vocab) || joinedPresent(term, vocab);
+  if (exactTermPresent(term, vocab) || joinedPresent(term, vocab)) return true;
+  const folded = foldSpelling(term);
+  return vocab.folded !== undefined && (exactTermPresent(folded, vocab.folded) || joinedPresent(folded, vocab.folded));
+}
+
+/** Each run of adjacent exact parts present as a phrase, and each ordinary part present as a word. */
+function partsPresent(words: readonly string[], exact: readonly boolean[], vocab: SourceVocabulary): boolean {
+  for (let start = 0; start < words.length; ) {
+    if (!exact[start]) {
+      if (!wordPresent(words[start], vocab)) return false;
+      start++;
+      continue;
+    }
+    let end = start;
+    while (end + 1 < words.length && exact[end + 1]) end++;
+    const run = words.slice(start, end + 1);
+    if (run.length === 1 ? !wordPresent(run[0], vocab, true) : !vocab.text.includes(` ${run.join(" ")} `)) return false;
+    start = end + 1;
+  }
+  return true;
 }
 
 function exactTermPresent(term: string, vocab: SourceVocabulary): boolean {
@@ -276,9 +324,13 @@ function exactTermPresent(term: string, vocab: SourceVocabulary): boolean {
     return new RegExp(` ${words[0]}\\p{L}* ${words.slice(1).join(" ")} `, "u").test(vocab.text);
   }
   if (vocab.text.includes(` ${words.join(" ")} `)) return true;
-  // A compound with a number or abbreviation ("IL-6-dependent") only matches as a
-  // whole; its ordinary words may differ in number ("6-month" and "6 months").
+  // A compound with a number or abbreviation ("IL-6-dependent") matches as a
+  // whole, its ordinary words differing in number ("6-month" and "6 months"), or
+  // when every part is present on its own ("BCG-vaccinated" as "BCG" and
+  // "vaccinated"): a run of adjacent number and abbreviation parts ("IL-6") as
+  // one whole phrase, each ordinary word by the usual rules.
   if (exact.some(Boolean)) {
+    if (partsPresent(words, exact, vocab)) return true;
     const phrase = words
       .map((word, index) => {
         if (!exact[index]) return `(?:${singular(word)}|${word})(?:e?s)?`;

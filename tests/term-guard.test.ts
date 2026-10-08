@@ -100,9 +100,12 @@ describe("absentTerms", () => {
     },
   );
 
-  it("requires the complete all-caps compound instead of scattered matching parts (R5)", () => {
+  // Phase 4 replaced R5's whole-compound rule: an abbreviation compound is also
+  // present when each part is ("BCG-vaccinated" as "BCG" and "vaccinated").
+  it("accepts an all-caps compound whose parts are each present", () => {
     const vocabulary = buildSourceVocabulary(["CRP is measured daily. A separate dependent signal exists."]);
-    expect(absentTerms("The CRP-dependent signal regulates the pathway.", vocabulary).length).toBeGreaterThan(0);
+    expect(absentTerms("The CRP-dependent signal regulates the pathway.", vocabulary)).toEqual([]);
+    expect(absentTerms("The CRP-dependent signal regulates the pathway.", buildSourceVocabulary(["A dependent signal exists."]))).toEqual(["CRP-dependent", "CRP"]);
   });
 
   it.each(["CRP-dependent", "CRP dependent"])(
@@ -305,5 +308,75 @@ describe("possessives, ordinals and aliases", () => {
 
   it("still flags a drug the source never mentions", () => {
     expect(absentTerms("Tigecycline covers resistant organisms.", buildSourceVocabulary(["Doxycycline covers many organisms."]))).toEqual(["Tigecycline"]);
+  });
+});
+
+describe("British and US spellings", () => {
+  it.each([
+    ["amoebicides", "AMEBICIDES and Amebicid agents"],
+    ["oedema", "edema"],
+    ["anaemia", "anemia"],
+    ["haemoglobin", "hemoglobin"],
+    ["amoebic", "amebic"],
+    ["oesophagus", "esophagus"],
+  ])("matches %s and %s in both directions", (british, us) => {
+    const sentence = (word: string) => `Treatment uses *${word.split(" ")[0]}* for this patient group.`;
+    expect(absentTerms(sentence(british), buildSourceVocabulary([`The source names ${us} here.`]))).toEqual([]);
+    expect(absentTerms(sentence(us), buildSourceVocabulary([`The source names ${british} here.`]))).toEqual([]);
+  });
+
+  it("matches a capitalized British spelling to a US source word", () => {
+    expect(absentTerms("Severe Anaemia follows haemolysis in these cases.", buildSourceVocabulary(["Severe anemia follows hemolysis."]))).toEqual([]);
+  });
+
+  it("still flags a term absent in either spelling", () => {
+    expect(absentTerms("Tigecycline treats amoebic colitis.", buildSourceVocabulary(["Metronidazole treats amebic colitis."]))).toEqual(["Tigecycline"]);
+  });
+});
+
+describe("italic spans", () => {
+  it("does not take an italic note as one term", () => {
+    const sentence = "The gain is 20 dB. *(Note: The dB value represents the negative of the loss in the channel.)*";
+    const terms = specificTerms(sentence);
+    expect(terms.some((term) => term.includes(" "))).toBe(false);
+    expect(terms).toEqual(["20"]);
+  });
+
+  it.each(["*Pneumocystis jirovecii*", "*Mycobacterium avium*", "*E. coli*"])("keeps the italic species %s as one term", (span) => {
+    expect(specificTerms(`The organism ${span} causes disease.`)).toContain(span.replace(/\*/g, ""));
+  });
+
+  it("checks a long italic sentence word by word", () => {
+    const terms = specificTerms("The rule holds. *Most cases respond quickly to Vancomycin therapy in adults*.");
+    expect(terms).toContain("Vancomycin");
+    expect(terms).not.toContain("Most cases respond quickly to Vancomycin therapy in adults");
+  });
+});
+
+describe("CXR alias", () => {
+  it.each(["chest X-ray", "chest x-ray", "chest xray", "chest x ray", "chest radiograph"])("treats CXR as present when the source says %s", (phrase) => {
+    expect(absentTerms("A CXR shows the cavitary lesion.", buildSourceVocabulary([`A ${phrase} shows the lesion.`]))).toEqual([]);
+  });
+
+  it("still flags CXR without a chest X-ray in the source", () => {
+    expect(absentTerms("A CXR shows the cavitary lesion.", buildSourceVocabulary(["A CT scan shows the lesion."]))).toEqual(["CXR"]);
+  });
+});
+
+describe("compounds of an abbreviation and ordinary words", () => {
+  it("finds a compound whose parts are each present on their own", () => {
+    expect(absentTerms("BCG-vaccinated children may test positive.", buildSourceVocabulary(["Children vaccinated with BCG may test positive."]))).toEqual([]);
+    expect(absentTerms("The IL-6-dependent pathway drives fever.", buildSourceVocabulary(["IL-6 drives fever; the pathway is dependent on it."]))).toEqual([]);
+  });
+
+  it("reports the abbreviation when only the ordinary part is present", () => {
+    expect(absentTerms("BCG-vaccinated children may test positive.", buildSourceVocabulary(["Vaccinated children may test positive."]))).toEqual(["BCG-vaccinated", "BCG"]);
+  });
+
+  it("still flags a compound with an absent ordinary part", () => {
+    const terms = absentTerms("Screening matters in high-TB-burden countries.", buildSourceVocabulary(["TB is common in high prevalence countries."]));
+    expect(terms).toContain("high-TB-burden");
+    expect(terms).toContain("burden");
+    expect(terms).not.toContain("TB");
   });
 });

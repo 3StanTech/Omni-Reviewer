@@ -14,4 +14,6 @@ export const ACRONYM_ALIASES: Readonly<Record<string, readonly string[]>> = {
   ],
   // AZT (azidothymidine) is the older name of zidovudine.
   AZT: ["zidovudine"],
+  // CXR is the usual shorthand for a chest X-ray (chest radiograph).
+  CXR: ["chest x-ray", "chest radiograph"],
 };
