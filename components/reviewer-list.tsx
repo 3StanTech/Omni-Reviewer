@@ -1,10 +1,9 @@
 "use client";
 
 import Link, { useLinkStatus } from "next/link";
-import { useId, useRef, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
-  CaretRight,
   Cards,
   CircleNotch,
   DotsThreeVertical,
@@ -36,6 +35,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Panel, PanelHeader } from "@/components/ui/panel";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatStamp } from "@/lib/format-generated-at";
 import { BATCH_ACCEPT } from "@/lib/generation-queue";
 import { useIsClient } from "@/lib/use-is-client";
@@ -94,28 +95,42 @@ type ReviewerListProps = {
   /** Make one queued pack per picked file. Absent hides the batch button. */
   onAddFiles?: (files: File[]) => void;
   addingFiles?: boolean;
+  /** Topic chips under the panel header (phones, or desktop with the shelf closed). */
+  topicChips?: ReactNode;
+  /** A topic switch is in flight: the panel keeps its frame and shows skeleton rows. */
+  loading?: boolean;
 };
 
-/** Hidden on phones, where the row's right side holds the actions. */
-function PackRowChevron() {
-  const { pending } = useLinkStatus();
-  if (pending) {
-    return (
-      <>
-        <CircleNotch
-          className="mt-2 size-4 shrink-0 animate-spin text-muted-foreground max-sm:hidden"
-          weight="bold"
-          aria-hidden
-        />
-        <span className="sr-only">Opening</span>
-      </>
-    );
-  }
+function PackRowsSkeleton() {
   return (
-    <CaretRight
-      className="mt-2 size-4 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100 max-sm:hidden"
-      weight="bold"
-    />
+    <div className="divide-y divide-divider" aria-busy="true" aria-live="polite">
+      <span className="sr-only">Loading study packs</span>
+      {[0, 1, 2].map((row) => (
+        <div key={row} className="flex items-center gap-3.5 px-4 py-3.5">
+          <Skeleton className="size-9 shrink-0 max-md:hidden" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-4 w-40 max-w-full" />
+            <Skeleton className="h-3 w-56 max-w-full" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A spinner while the pack opens; hidden on phones, where the row's right side holds the actions. */
+function PackRowPending() {
+  const { pending } = useLinkStatus();
+  if (!pending) return null;
+  return (
+    <>
+      <CircleNotch
+        className="size-4 shrink-0 self-center animate-spin text-muted-foreground max-sm:hidden"
+        weight="bold"
+        aria-hidden
+      />
+      <span className="sr-only">Opening</span>
+    </>
   );
 }
 
@@ -136,6 +151,8 @@ export function ReviewerList({
   reviewers,
   onAddFiles,
   addingFiles = false,
+  topicChips,
+  loading = false,
 }: ReviewerListProps) {
   const router = useRouter();
   const filesRef = useRef<HTMLInputElement>(null);
@@ -148,9 +165,27 @@ export function ReviewerList({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
+  if (loading) {
+    // Same frame as the loaded list below, so the topic chips keep their state.
+    return (
+      <>
+        <Panel aria-label="Study packs" className="overflow-hidden">
+          <PanelHeader
+            label="Study packs"
+            actions={<Skeleton className="h-8 w-36" />}
+          />
+          {topicChips}
+          <PackRowsSkeleton />
+        </Panel>
+      </>
+    );
+  }
+
   if (!topicId) {
     return (
-      <EmptyState
+      <div className="space-y-4">
+        {topicChips}
+        <EmptyState
         icon={<Notebook weight="duotone" className="size-5" />}
         title="Create a topic first"
         description="Topics are the tabs across the top. Start with a course or subject, then add study packs inside it."
@@ -160,6 +195,7 @@ export function ReviewerList({
           </p>
         }
       />
+      </div>
     );
   }
 
@@ -249,66 +285,72 @@ export function ReviewerList({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+    <>
+    <Panel aria-label="Study packs" className="overflow-hidden">
+      <PanelHeader
+        className="max-md:flex-wrap max-md:*:last:w-full"
+        label={
+          <>
             Study packs
-          </p>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {topicName
-              ? `In ${topicName}`
-              : "Select a topic to see its packs."}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {onAddFiles ? (
-            <>
-              <input
-                ref={filesRef}
-                type="file"
-                multiple
-                accept={BATCH_ACCEPT}
-                className="sr-only"
-                tabIndex={-1}
-                aria-hidden
-                onChange={(event) => {
-                  const files = Array.from(event.target.files ?? []);
-                  event.target.value = "";
-                  if (files.length > 0) onAddFiles(files);
-                }}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                disabled={addingFiles}
-                onClick={() => filesRef.current?.click()}
-              >
-                {addingFiles ? (
-                  <CircleNotch className="animate-spin" weight="bold" />
-                ) : (
-                  <UploadSimple weight="bold" />
-                )}
-                New packs from files
-              </Button>
-            </>
-          ) : null}
-          <Button
-            type="button"
-            onClick={() => {
-              setError(null);
-              setName("");
-              setCreateOpen(true);
-            }}
-          >
-            <Plus weight="bold" />
-            New pack
-          </Button>
-        </div>
-      </div>
-
+            <span className="tracking-normal normal-case">
+              {" · "}
+              {topicName ? `In ${topicName}` : "Select a topic to see its packs."}
+            </span>
+          </>
+        }
+        actions={
+          <>
+            {onAddFiles ? (
+              <>
+                <input
+                  ref={filesRef}
+                  type="file"
+                  multiple
+                  accept={BATCH_ACCEPT}
+                  className="sr-only"
+                  tabIndex={-1}
+                  aria-hidden
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []);
+                    event.target.value = "";
+                    if (files.length > 0) onAddFiles(files);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="pointer-fine:h-8 pointer-fine:min-h-8 max-md:flex-1"
+                  disabled={addingFiles}
+                  onClick={() => filesRef.current?.click()}
+                >
+                  {addingFiles ? (
+                    <CircleNotch className="animate-spin" weight="bold" />
+                  ) : (
+                    <UploadSimple weight="bold" />
+                  )}
+                  New packs from files
+                </Button>
+              </>
+            ) : null}
+            <Button
+              type="button"
+              className="pointer-fine:h-8 pointer-fine:min-h-8 max-md:flex-1"
+              onClick={() => {
+                setError(null);
+                setName("");
+                setCreateOpen(true);
+              }}
+            >
+              <Plus weight="bold" />
+              New pack
+            </Button>
+          </>
+        }
+      />
+      {topicChips}
       {reviewers.length === 0 ? (
         <EmptyState
+          className="rounded-none border-0 bg-transparent"
           icon={<Notebook weight="duotone" className="size-5" />}
           title="No study packs yet"
           description="A pack holds the sources you upload and the four study modes you generate from them."
@@ -327,22 +369,22 @@ export function ReviewerList({
           }
         />
       ) : (
-        <ul className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/80 bg-surface/40">
+        <ul className="divide-y divide-divider">
           {reviewers.map((reviewer) => (
-            <li key={reviewer.id} className="group flex items-center gap-2 pr-2">
+            <li key={reviewer.id} className="group flex items-center gap-1.5 pr-3 max-md:items-start max-md:py-2">
               <Link
                 href={`/topics/${topicId}/reviewers/${reviewer.id}`}
                 prefetch
-                className="flex min-h-14 min-w-0 flex-1 items-start gap-3 px-4 py-3 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+                className="flex min-h-14 min-w-0 flex-1 items-center gap-3.5 px-4 py-3.5 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 max-md:py-1.5"
               >
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-[calc(var(--radius)-3px)] bg-accent text-primary max-md:hidden">
                   <Notebook weight="duotone" className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="line-clamp-2 text-sm font-medium break-words text-foreground">
+                  <span className="line-clamp-2 text-[0.9375rem] font-semibold break-words text-foreground">
                     {reviewer.name}
                   </span>
-                  <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                  <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.8125rem] text-muted-foreground">
                     <GeneratedAtLabel iso={reviewer.lastGeneratedAt} />
                     {reviewer.dueTodayCount > 0 ? (
                       <span>{dueSplitCopy(reviewer.reviewDueCount, reviewer.newTodayCount)}</span>
@@ -351,7 +393,7 @@ export function ReviewerList({
                     <PackMastery mastery={reviewer.mastery} />
                   </span>
                 </span>
-                <PackRowChevron />
+                <PackRowPending />
               </Link>
               {reviewer.dueTodayCount > 0 ? (
                 <Button
@@ -421,6 +463,7 @@ export function ReviewerList({
           ))}
         </ul>
       )}
+    </Panel>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
@@ -577,6 +620,6 @@ export function ReviewerList({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }

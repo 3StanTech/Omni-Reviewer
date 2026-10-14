@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant dreamland (&:is([data-look="dreamland"] *));
 
 @theme inline {
   --color-background: var(--background);
@@ -48,6 +49,11 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-page: var(--page);
+  --color-card-head: var(--card-head);
+  --color-divider: var(--divider);
+  --color-rail: var(--rail);
+  --color-strip: var(--strip);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -57,64 +63,78 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Night: graphite chrome with a calm teal study accent. */
+/* Dream Land (default): warm cream page, pink chrome, sky-blue rails and star accents.
+   Block order matters: `:root` and `[data-look]` share specificity, so Day and Night
+   come after this block and override it. */
 :root,
-.dark,
-[data-look="night"] {
-  color-scheme: dark;
+[data-look="dreamland"] {
+  color-scheme: light;
   --font-ui: var(--font-plex);
   --font-reading: var(--font-serif);
-  --background: oklch(0.14 0.025 250);
-  --foreground: oklch(0.93 0.02 190);
-  --chrome: oklch(0.11 0.025 250);
-  --surface: oklch(0.19 0.03 245);
-  --card: oklch(0.19 0.03 245);
-  --card-foreground: oklch(0.93 0.02 190);
-  --popover: oklch(0.17 0.03 245);
-  --popover-foreground: oklch(0.93 0.02 190);
-  --primary: oklch(0.75 0.13 180);
-  --primary-foreground: oklch(0.14 0.03 240);
-  --secondary: oklch(0.24 0.03 245);
-  --secondary-foreground: oklch(0.93 0.02 190);
-  --muted: oklch(0.24 0.025 245);
-  --muted-foreground: oklch(0.7 0.03 190);
-  --accent: oklch(0.27 0.06 190);
-  --accent-foreground: oklch(0.95 0.02 190);
-  --destructive: oklch(0.68 0.17 25);
-  --border: oklch(0.42 0.035 245);
-  --input: oklch(0.42 0.035 245);
-  --ring: oklch(0.75 0.13 180);
-  --reading: oklch(0.2 0.032 245);
-  --reading-foreground: oklch(0.92 0.02 190);
-  --success: oklch(0.72 0.1 145);
-  --success-foreground: oklch(0.2 0.04 145);
-  --warning: oklch(0.78 0.12 90);
-  --warning-foreground: oklch(0.2 0.03 245);
-  --chart-1: oklch(0.75 0.13 180);
-  --chart-2: oklch(0.68 0.08 200);
-  --chart-3: oklch(0.5 0.05 245);
-  --chart-4: oklch(0.4 0.04 245);
-  --chart-5: oklch(0.3 0.035 245);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.13 0.025 250);
-  --sidebar-foreground: oklch(0.93 0.02 190);
-  --sidebar-primary: oklch(0.75 0.13 180);
-  --sidebar-primary-foreground: oklch(0.14 0.03 240);
-  --sidebar-accent: oklch(0.24 0.05 190);
-  --sidebar-accent-foreground: oklch(0.93 0.02 190);
-  --sidebar-border: oklch(0.42 0.035 245);
-  --sidebar-ring: oklch(0.75 0.13 180);
+  --page: #fff6ec;
+  --background: var(--page);
+  --foreground: #4a2236;
+  --chrome: #ffe4ee;
+  --surface: #fff1f6;
+  --card: #fffcf7;
+  --card-head: #fff1f6;
+  --divider: #f6dfe7;
+  --rail: #e6f1ff;
+  --strip: #e6f1ff;
+  --panel-shadow: 0 2px 0 #f3c6d6;
+  --card-foreground: #4a2236;
+  --popover: #fffcf7;
+  --popover-foreground: #4a2236;
+  --primary: #c2185b;
+  --primary-foreground: #ffffff;
+  --secondary: #ffe4ee;
+  --secondary-foreground: #4a2236;
+  --muted: #fbeef2;
+  --muted-foreground: #85566b;
+  --accent: #ffd3e2;
+  --accent-foreground: #4a2236;
+  --destructive: #b42318;
+  --border: #f3c6d6;
+  --input: #eebdcf;
+  --ring: #c2185b;
+  --reading: #fffcf7;
+  --reading-foreground: #4a2236;
+  --success: #3f7d4a;
+  --success-foreground: #fbf6ea;
+  --warning: #b45309;
+  --warning-foreground: #1f2a44;
+  --chart-1: #c2185b;
+  --chart-2: #85566b;
+  --chart-3: #e2799f;
+  --chart-4: #f3c6d6;
+  --chart-5: #fbeef2;
+  --radius: 1.25rem;
+  --star: #f2c230;
+  --sidebar: #ffe4ee;
+  --sidebar-foreground: #4a2236;
+  --sidebar-primary: #c2185b;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ffd3e2;
+  --sidebar-accent-foreground: #4a2236;
+  --sidebar-border: #f3c6d6;
+  --sidebar-ring: #c2185b;
 }
 
 [data-look="day"] {
   color-scheme: light;
   --font-ui: var(--font-plex);
   --font-reading: var(--font-serif);
-  --background: #ffffff;
+  --page: #f3f6fb;
+  --background: var(--page);
   --foreground: #172554;
   --chrome: #ffffff;
   --surface: #f8fafc;
   --card: #ffffff;
+  --card-head: #f7f9fd;
+  --divider: #e3e9f3;
+  --rail: #ffffff;
+  --strip: #ffffff;
+  --panel-shadow: 0 1px 2px rgb(23 37 84 / 5%);
   --card-foreground: #172554;
   --popover: #ffffff;
   --popover-foreground: #172554;
@@ -127,7 +147,7 @@
   --accent: #dbeafe;
   --accent-foreground: #172554;
   --destructive: #b42318;
-  --border: #d6deec;
+  --border: #cfd8e8;
   --input: #c8d3e6;
   --ring: #1d4ed8;
   --reading: #ffffff;
@@ -152,6 +172,60 @@
   --sidebar-ring: #1d4ed8;
 }
 
+/* Night: graphite chrome with a calm teal study accent. */
+.dark,
+[data-look="night"] {
+  color-scheme: dark;
+  --font-ui: var(--font-plex);
+  --font-reading: var(--font-serif);
+  --page: oklch(0.12 0.022 250);
+  --background: var(--page);
+  --foreground: oklch(0.93 0.02 190);
+  --chrome: oklch(0.105 0.022 250);
+  --surface: oklch(0.19 0.03 245);
+  --card: oklch(0.185 0.03 245);
+  --card-head: oklch(0.215 0.032 245);
+  --divider: oklch(0.26 0.03 245);
+  --rail: oklch(0.185 0.03 245);
+  --strip: oklch(0.185 0.03 245);
+  --panel-shadow: 0 1px 0 oklch(1 0 0 / 4%) inset, 0 8px 24px oklch(0 0 0 / 28%);
+  --card-foreground: oklch(0.93 0.02 190);
+  --popover: oklch(0.17 0.03 245);
+  --popover-foreground: oklch(0.93 0.02 190);
+  --primary: oklch(0.75 0.13 180);
+  --primary-foreground: oklch(0.14 0.03 240);
+  --secondary: oklch(0.24 0.03 245);
+  --secondary-foreground: oklch(0.93 0.02 190);
+  --muted: oklch(0.24 0.025 245);
+  --muted-foreground: oklch(0.72 0.03 190);
+  --accent: oklch(0.27 0.06 190);
+  --accent-foreground: oklch(0.95 0.02 190);
+  --destructive: oklch(0.68 0.17 25);
+  --border: oklch(0.33 0.035 245);
+  --input: oklch(0.33 0.035 245);
+  --ring: oklch(0.75 0.13 180);
+  --reading: oklch(0.185 0.03 245);
+  --reading-foreground: oklch(0.92 0.02 190);
+  --success: oklch(0.72 0.1 145);
+  --success-foreground: oklch(0.2 0.04 145);
+  --warning: oklch(0.78 0.12 90);
+  --warning-foreground: oklch(0.2 0.03 245);
+  --chart-1: oklch(0.75 0.13 180);
+  --chart-2: oklch(0.68 0.08 200);
+  --chart-3: oklch(0.5 0.05 245);
+  --chart-4: oklch(0.4 0.04 245);
+  --chart-5: oklch(0.3 0.035 245);
+  --radius: 0.75rem;
+  --sidebar: oklch(0.15 0.026 248);
+  --sidebar-foreground: oklch(0.93 0.02 190);
+  --sidebar-primary: oklch(0.75 0.13 180);
+  --sidebar-primary-foreground: oklch(0.14 0.03 240);
+  --sidebar-accent: oklch(0.24 0.05 190);
+  --sidebar-accent-foreground: oklch(0.93 0.02 190);
+  --sidebar-border: oklch(0.33 0.035 245);
+  --sidebar-ring: oklch(0.75 0.13 180);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -159,11 +233,15 @@
 
   html {
     @apply font-sans;
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   body {
     @apply bg-background text-foreground antialiased;
+    min-height: 100%;
+  }
+
+  html[data-look="night"] body {
     background-image:
       radial-gradient(
         ellipse 120% 80% at 50% -20%,
@@ -176,11 +254,6 @@
         transparent 50%
       );
     background-attachment: fixed;
-    min-height: 100%;
-  }
-
-  html[data-look="day"] body {
-    background-image: none;
   }
 
   ::selection {
@@ -589,7 +662,8 @@
   .study-side-panel,
   .study-side-panel-backdrop,
   .annotation-menu-anchor,
-  .annotation-menu-backdrop {
+  .annotation-menu-backdrop,
+  .kirby-companion {
     display: none !important;
   }
 
@@ -777,4 +851,122 @@ html[data-focus="on"] main {
   .prose-study > hr:last-child {
     display: none;
   }
+}
+
+/* Dream Land: pill buttons, as in the approved mock. */
+@layer utilities {
+  [data-look="dreamland"] [data-slot="button"] {
+    border-radius: 9999px;
+  }
+}
+
+/* Dream Land: section dividers in the reading article become dashed with a centred star.
+   Screen only; print keeps its own page breaks. */
+@media screen {
+  [data-look="dreamland"] .study-sections .prose-study > h2:not(:first-child) {
+    position: relative;
+    border-top-style: dashed;
+  }
+
+  [data-look="dreamland"] .study-sections .prose-study > h2:not(:first-child)::before {
+    content: "★";
+    position: absolute;
+    top: -13px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0 10px;
+    background: var(--reading);
+    color: var(--star);
+    font-family: system-ui, sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.5;
+    letter-spacing: 0;
+  }
+}
+
+/* Dream Land: the desk greeting speaks through a bubble whose tail points right, toward Kirby. */
+[data-look="dreamland"] .desk-greeting-bubble {
+  position: relative;
+  padding: 16px 22px;
+  background-color: var(--card);
+  border: 1.5px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--panel-shadow);
+}
+
+[data-look="dreamland"] .desk-greeting-bubble::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -11px;
+  width: 20px;
+  height: 20px;
+  margin-top: -10px;
+  background: var(--card);
+  border-top: 1.5px solid var(--border);
+  border-right: 1.5px solid var(--border);
+  border-radius: 0 4px 0 0;
+  transform: rotate(45deg);
+}
+
+@media (max-width: 640px) {
+  [data-look="dreamland"] .desk-greeting-bubble {
+    padding: 12px 16px;
+  }
+}
+
+/* Kirby companion (Dream Land only; fan art drawn in SVG). Gradients come from <KirbyDefs/>. */
+.kirby-companion .kirby { display: block; width: 100%; height: auto; overflow: visible; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.kirby-companion .tb { transform-box: fill-box; transform-origin: 50% 100%; }
+.kirby-companion .tc { transform-box: fill-box; transform-origin: 50% 50%; }
+.kirby-companion .k-outline { stroke: #e2799f; stroke-width: 1.6; }
+.kirby-companion .eyes-happy, .kirby-companion .eyes-sad, .kirby-companion .eyes-sleep, .kirby-companion .mouth-open, .kirby-companion .mouth-sad,
+.kirby-companion .k-burst, .kirby-companion .k-sweat, .kirby-companion .k-zzz, .kirby-companion .k-poyo { opacity: 0; }
+.kirby-companion .eyes-open, .kirby-companion .eyes-happy, .kirby-companion .eyes-sad, .kirby-companion .eyes-sleep, .kirby-companion .blush,
+.kirby-companion .mouth-closed, .kirby-companion .mouth-open, .kirby-companion .mouth-sad { transition: opacity .12s; }
+.kirby-companion .arm-l, .kirby-companion .arm-r { transition: transform .25s; }
+.kirby-companion .k-bob { animation: k-bob 3.2s ease-in-out infinite; }
+.kirby-companion .eyes-open { animation: k-blink 5s infinite; }
+@keyframes k-bob { 0%, 100% { transform: translateY(0) scale(1, 1); } 50% { transform: translateY(-2.5px) scale(1.01, .99); } }
+@keyframes k-blink { 0%, 93%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.08); } 97% { transform: scaleY(1); } }
+/* hover: wave and blush */
+.kirby-companion .kirby.k-hover .arm-r { animation: k-wave .5s ease-in-out infinite alternate; }
+.kirby-companion .kirby.k-hover .blush { opacity: .85; }
+@keyframes k-wave { from { transform: rotate(-20deg); } to { transform: rotate(-75deg); } }
+/* press: squash, then stretch hop, "poyo!" */
+.kirby-companion .kirby.k-press .k-jump { animation: k-press .55s cubic-bezier(.3,.7,.4,1); }
+.kirby-companion .kirby.k-press .k-poyo { animation: k-pop 1s ease-out; }
+@keyframes k-press { 0% { transform: none; } 20% { transform: scale(1.12, .84); } 50% { transform: translateY(-14px) scale(.92, 1.1); } 80% { transform: translateY(0) scale(1.05, .95); } 100% { transform: none; } }
+@keyframes k-pop { 0% { opacity: 0; transform: translateY(6px) scale(.7); } 25% { opacity: 1; transform: translateY(0) scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: translateY(-8px); } }
+/* correct: victory hop with a spin, arms up, happy face, star burst */
+.kirby-companion .kirby.k-happy .k-jump { animation: k-victory 1.1s cubic-bezier(.3,.7,.4,1); }
+.kirby-companion .kirby.k-happy .arm-l { transform: rotate(48deg); }
+.kirby-companion .kirby.k-happy .arm-r { transform: rotate(-48deg); }
+.kirby-companion .kirby.k-happy .eyes-open { opacity: 0; animation: none; }
+.kirby-companion .kirby.k-happy .eyes-happy, .kirby-companion .kirby.k-happy .mouth-open { opacity: 1; }
+.kirby-companion .kirby.k-happy .mouth-closed { opacity: 0; }
+.kirby-companion .kirby.k-happy .blush { opacity: .9; }
+.kirby-companion .kirby.k-happy .k-burst { opacity: 1; }
+.kirby-companion .kirby.k-happy .k-burst path { animation: k-burst .9s ease-out forwards; }
+@keyframes k-victory { 0% { transform: none; } 15% { transform: scale(1.1, .88); } 45% { transform: translateY(-26px) rotate(180deg) scale(.95, 1.05); } 70% { transform: translateY(-6px) rotate(360deg); } 85% { transform: translateY(0) rotate(360deg) scale(1.08, .92); } 100% { transform: rotate(360deg); } }
+@keyframes k-burst { 0% { opacity: 0; transform: translate(0, 0) scale(.3) rotate(0); } 25% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--bx), var(--by)) scale(1) rotate(90deg); } }
+/* wrong: droop, squish, wobbly mouth, sweat drop */
+.kirby-companion .kirby.k-sad .k-jump { animation: k-droop 1.4s ease-in-out; }
+.kirby-companion .kirby.k-sad .eyes-open { opacity: 0; animation: none; }
+.kirby-companion .kirby.k-sad .eyes-sad, .kirby-companion .kirby.k-sad .mouth-sad, .kirby-companion .kirby.k-sad .k-sweat { opacity: 1; }
+.kirby-companion .kirby.k-sad .mouth-closed { opacity: 0; }
+.kirby-companion .kirby.k-sad .arm-l { transform: rotate(-18deg); }
+.kirby-companion .kirby.k-sad .arm-r { transform: rotate(18deg); }
+.kirby-companion .kirby.k-sad .k-sweat { animation: k-sweat 1.4s ease-in forwards; }
+@keyframes k-droop { 0% { transform: none; } 20% { transform: scale(1.08, .9) translateX(-3px); } 35% { transform: scale(1.08, .9) translateX(3px); } 50% { transform: scale(1.08, .9) translateX(-2px); } 100% { transform: none; } }
+@keyframes k-sweat { 0% { transform: translateY(-4px); } 100% { transform: translateY(6px); } }
+/* sleepy after a while without the pointer moving */
+.kirby-companion .kirby.k-sleep .eyes-open { opacity: 0; animation: none; }
+.kirby-companion .kirby.k-sleep .eyes-sleep, .kirby-companion .kirby.k-sleep .k-zzz { opacity: 1; }
+.kirby-companion .kirby.k-sleep .k-zzz { animation: k-zzz 2.4s ease-in-out infinite; }
+.kirby-companion .kirby.k-sleep .k-bob { animation-duration: 5s; }
+@keyframes k-zzz { 0% { transform: translate(0, 4px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translate(6px, -10px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .kirby-companion * { animation: none !important; }
 }

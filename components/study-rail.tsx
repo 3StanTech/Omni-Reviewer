@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ArrowDown, ArrowUp, NotePencil } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, CaretDown, NotePencil } from "@phosphor-icons/react";
 
 import { useOptionalAsk } from "@/components/ask-provider";
+import { RAIL_HEADER_CLASS } from "@/components/mode-toolbar";
 import { scrollToStudyEnd, scrollToTop } from "@/components/scroll-jump";
 import { ContentsList, NotesList, useSectionMastery } from "@/components/study-side-panel";
 import { buttonVariants } from "@/components/ui/button";
+import { Panel, PanelHeader } from "@/components/ui/panel";
 import type { AnnotationRecord } from "@/lib/annotations";
 import { currentHeadingIndex, readingProgress } from "@/lib/reading-position";
 import { STUDY_HEADING_CLOBBER_PREFIX, studyOutline, type StudyHeading } from "@/lib/study-outline";
@@ -121,7 +123,6 @@ function useRailFollow(navRef: RefObject<HTMLElement | null>, currentId: string 
   }, [navRef, currentId]);
 }
 
-const RAIL_HEADING_CLASS = "text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 const RAIL_BUTTON_CLASS = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-9 w-full justify-start");
 
 type StudyRailProps = {
@@ -146,32 +147,48 @@ export function StudyRailBody({ headings, annotations, currentId, progress }: { 
   useRailFollow(navRef, currentId);
   return (
     <div className="flex flex-col gap-4 text-sm">
-      <section aria-label="Contents" className="space-y-2">
-        <div className="flex items-baseline justify-between gap-2">
-          <h3 className={RAIL_HEADING_CLASS}>Contents</h3>
-          <span className="text-xs tabular-nums text-muted-foreground" aria-label={`Read ${progress} percent`}>{progress}%</span>
+      <Panel aria-label="Contents" className="bg-rail">
+        <PanelHeader
+          label="Contents"
+          className={RAIL_HEADER_CLASS}
+          actions={<span className="text-xs tabular-nums" aria-label={`Read ${progress} percent`}>{progress}%</span>}
+        />
+        <div className="space-y-1 p-2">
+          <button type="button" className={RAIL_BUTTON_CLASS} onClick={scrollToTop}>
+            <ArrowUp weight="bold" aria-hidden />
+            Top
+          </button>
+          <nav ref={navRef} aria-label="Document contents" className="px-2.5 py-1">
+            <ContentsList headings={headings} sections={sections} currentId={currentId} />
+          </nav>
+          <button type="button" className={RAIL_BUTTON_CLASS} onClick={scrollToStudyEnd}>
+            <ArrowDown weight="bold" aria-hidden />
+            End
+          </button>
         </div>
-        <button type="button" className={RAIL_BUTTON_CLASS} onClick={scrollToTop}>
-          <ArrowUp weight="bold" aria-hidden />
-          Top
-        </button>
-        <nav ref={navRef} aria-label="Document contents" className="pl-2.5">
-          <ContentsList headings={headings} sections={sections} currentId={currentId} />
-        </nav>
-        <button type="button" className={RAIL_BUTTON_CLASS} onClick={scrollToStudyEnd}>
-          <ArrowDown weight="bold" aria-hidden />
-          End
-        </button>
-      </section>
-      <details className="group border-t border-border/60 pt-3">
-        <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-md px-2.5 font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+        <div className="space-y-1.5 border-t border-divider px-4 pt-2.5 pb-3 text-xs text-muted-foreground">
+          <p>Reading progress {progress}%</p>
+          <div aria-hidden className="h-1.5 overflow-hidden rounded-full bg-divider">
+            <div className="h-full rounded-full bg-primary" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
+      </Panel>
+      <Panel as="details" className="group bg-rail">
+        {/* The summary is the panel's header band; the caret comes last visually. */}
+        <summary
+          className={cn(
+            "flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-[calc(var(--radius)-1px)] px-4 py-2.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40 group-open:rounded-b-none group-open:border-b group-open:border-divider [&::-webkit-details-marker]:hidden",
+            RAIL_HEADER_CLASS,
+          )}
+        >
+          <CaretDown weight="bold" aria-hidden className="order-last ml-auto group-open:rotate-180" />
           <NotePencil weight="bold" aria-hidden />
           Notes ({noteCount})
         </summary>
-        <div className="px-2.5">
+        <div className="px-4 pb-3">
           <NotesList annotations={annotations} />
         </div>
-      </details>
+      </Panel>
     </div>
   );
 }

@@ -56,6 +56,13 @@ export const StudyPackContext = createContext<{ reviewerName: string }>({ review
 const UNSOURCED_MISMATCH_MESSAGE =
   "Could not match this tag to the saved document. Use Edit to change the sentence.";
 
+/**
+ * On screen, every h2 after the document's first element opens a section behind a hairline
+ * (the `study-sections` article is the stable hook for mood-specific dividers). Print keeps its own rules.
+ */
+const SECTION_DIVIDER_CLASS =
+  "not-print:[&_.prose-study>h2:not(:first-child)]:mt-6 not-print:[&_.prose-study>h2:not(:first-child)]:border-t not-print:[&_.prose-study>h2:not(:first-child)]:border-divider not-print:[&_.prose-study>h2:not(:first-child)]:pt-5";
+
 /** Selection-driven capture waits until the selection has stopped changing (touch handles, shift+arrows). */
 const SELECTION_SETTLE_MS = 350;
 
@@ -712,7 +719,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
             }}
             onKeyUp={captureSelectionNow}
             onTouchEnd={captureSelectionNow}
-            className="print-document reading-surface rounded-xl px-5 py-6 shadow-[0_8px_30px_oklch(0_0_0/20%)] sm:px-8 sm:py-8"
+            className={`print-document reading-surface study-sections rounded-[var(--radius)] border border-border px-5 py-6 shadow-[var(--panel-shadow)] print:border-0 sm:px-8 sm:py-8 ${SECTION_DIVIDER_CLASS}`}
           >
             <UnsourcedActionsProvider value={unsourcedActions}>
               <MarkdownBody source={view.content} annotations={activeAnnotations} hideModePrefix />

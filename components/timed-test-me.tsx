@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
+import { KirbyCompanion } from "@/components/kirby-companion";
 import { SittingRecap } from "@/components/sitting-recap";
 import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
@@ -22,6 +23,9 @@ import { isStudyKeyTarget } from "@/lib/study-keys";
 import { DEFAULT_TIMED_TEST_SECONDS } from "@/lib/test-timing-constants";
 import type { TestMeItem } from "@/lib/types";
 import { readApiError, cn } from "@/lib/utils";
+
+/** The share of correct answers at which Kirby celebrates the timed recap. */
+const RECAP_HAPPY_RATIO = 0.6;
 
 type AttemptStats = {
   itemId: string;
@@ -343,23 +347,34 @@ export function TimedTestMe({
       .filter((candidate) => results[candidate.id] === false)
       .map((missed) => [missed.explanation, missed.answer].filter(Boolean).join("\n"));
     const startedAtMs = Date.parse(session.startedAt);
+    // Kirby stays out of the run and reacts once when the recap mounts (Dream Land only).
+    const outcome = items.length > 0 && score / items.length >= RECAP_HAPPY_RATIO ? "happy" : "sad";
     return (
-      <SittingRecap
-        title="Timed run complete"
-        lines={[
-          `${score} of ${items.length} correct`,
-          ...(finishedAt !== null
-            ? [`Studied for ${formatSittingDuration(Math.max(0, finishedAt - startedAtMs))}`]
-            : []),
-        ]}
-        focusSection={recapFocusSection({ lockedIn, missedTexts })?.title ?? null}
-      >
-        <p className="text-sm text-muted-foreground">Your attempts and misses are saved.</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button type="button" onClick={reset}><ArrowCounterClockwise weight="bold" />Start again</Button>
-          <Button type="button" variant="ghost" onClick={onExit}>Back to study list</Button>
+      <div className="dreamland:flex dreamland:flex-col dreamland:gap-2 dreamland:sm:flex-row-reverse dreamland:sm:items-start dreamland:sm:gap-[18px]">
+        <KirbyCompanion
+          size="md"
+          reaction={{ outcome, key: 1 }}
+          className="shrink-0 max-sm:w-16 max-sm:self-end"
+        />
+        <div className="min-w-0 dreamland:sm:flex-1">
+          <SittingRecap
+            title="Timed run complete"
+            lines={[
+              `${score} of ${items.length} correct`,
+              ...(finishedAt !== null
+                ? [`Studied for ${formatSittingDuration(Math.max(0, finishedAt - startedAtMs))}`]
+                : []),
+            ]}
+            focusSection={recapFocusSection({ lockedIn, missedTexts })?.title ?? null}
+          >
+            <p className="text-sm text-muted-foreground">Your attempts and misses are saved.</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button type="button" onClick={reset}><ArrowCounterClockwise weight="bold" />Start again</Button>
+              <Button type="button" variant="ghost" onClick={onExit}>Back to study list</Button>
+            </div>
+          </SittingRecap>
         </div>
-      </SittingRecap>
+      </div>
     );
   }
 

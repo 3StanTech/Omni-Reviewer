@@ -21,6 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Panel } from "@/components/ui/panel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
 import { FocusToggle, useFocusMode } from "@/components/focus-mode";
@@ -285,12 +286,17 @@ export function ViewTabs({
           No overflow here: it would clip the menus and the Contents popover. The tab list scrolls instead. */}
       {/* The wrapper stays in Focus mode so the Focus toggle (the way out, and where focus lands) stays visible;
           tabs, mode tools and More hide individually. */}
-      <div className="print-hide sticky top-14 z-20 -mx-1 flex flex-wrap items-end gap-x-2 gap-y-1 border-b border-border bg-background px-1 pt-2 in-data-[focus=on]:border-b-0">
+      {/* A framed bar (Panel look): tabs divided by hairlines, the selected one on the card colour, tools
+          behind a divider. Focus mode drops the frame so only the Focus toggle shows, as before. */}
+      <div className="print-hide sticky top-14 z-20 flex flex-wrap items-end rounded-[var(--radius)] border border-border bg-strip shadow-[var(--panel-shadow)] in-data-[focus=on]:border-transparent in-data-[focus=on]:bg-background in-data-[focus=on]:shadow-none">
         <TabsList
           data-focus-hide
           variant="line"
           className={cn(
             "min-w-0 flex-1 overflow-x-auto border-b-0",
+            // Phones: the tabs own row 1 so the tools wrap to row 2. The rounding clips the selected tab's
+            // fill to the frame's corners (top corners only on phones).
+            "rounded-l-[calc(var(--radius)-1px)] max-sm:basis-full max-sm:rounded-t-[calc(var(--radius)-1px)] max-sm:rounded-bl-none",
             compact && "min-h-11 gap-0 p-0",
           )}
           aria-label="Study modes"
@@ -302,14 +308,16 @@ export function ViewTabs({
               title={item.job}
               className={cn(
                 "min-w-[6.5rem]",
-                compact && "min-h-11 min-w-0 flex-1 px-2 py-1.5 text-sm",
+                // Important: the line variant's own border, fill and text rules are more specific.
+                "border-r! border-r-divider! data-active:bg-card! data-active:text-foreground! max-sm:last:border-r-0!",
+                compact && "min-h-11 min-w-0 flex-1 px-2 py-1.5 text-sm sm:min-w-[6.5rem] sm:flex-none",
               )}
             >
               {item.label}
             </TabsTrigger>
           ))}
         </TabsList>
-        <div className="flex shrink-0 items-center gap-1 pb-1 max-sm:w-full max-sm:justify-end">
+        <div className="flex min-h-11 shrink-0 items-center gap-1 self-stretch border-l border-divider px-1.5 max-sm:w-full max-sm:justify-between max-sm:border-t max-sm:border-l-0 in-data-[focus=on]:border-0">
           <ModeToolsSlot />
           <FocusToggle />
           <MoreMenu
@@ -411,8 +419,10 @@ export function ViewTabs({
       <aside aria-label="Study rail" className={cn("print-hide hidden", railActive && "@min-[64rem]/pack:block")}>
         <div className="sticky top-[7.5rem] flex max-h-[calc(100vh-8.5rem)] flex-col gap-4 overflow-y-auto pb-4">
           <ModeRailSlot />
-          {tab === "test_me" || tab === "carded" ? (
-            <SectionMasteryList headings={lockedInHeadings} sections={sectionMastery} />
+          {(tab === "test_me" || tab === "carded") && lockedInHeadings.some((heading) => heading.level <= 2) ? (
+            <Panel className="bg-rail p-4 text-sm">
+              <SectionMasteryList headings={lockedInHeadings} sections={sectionMastery} />
+            </Panel>
           ) : null}
           {railPack}
         </div>
@@ -458,7 +468,7 @@ export function ViewTabs({
 /** The strip element the active mode's tools render into (relative: the Contents popover positions against it). */
 function ModeToolsSlot() {
   const slotRef = useModeToolbarSlotRef();
-  return <div ref={slotRef} data-focus-hide className="relative flex items-center gap-1 empty:hidden" />;
+  return <div ref={slotRef} data-focus-hide className="relative flex items-center gap-1 empty:hidden max-sm:flex-1 max-sm:justify-between" />;
 }
 
 /** The rail element the active mode's rail section renders into (Contents and Notes for the documents). */

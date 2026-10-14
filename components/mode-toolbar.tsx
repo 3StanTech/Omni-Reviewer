@@ -22,6 +22,9 @@ import { useOptionalAsk } from "@/components/ask-provider";
  * renders them as real menu items with the shared menu's keyboard handling.
  */
 
+/** Rail panel header band: the card header tint mixed toward the rail colour (rail panels use `bg-rail`). */
+export const RAIL_HEADER_CLASS = "bg-[color-mix(in_srgb,var(--rail)_70%,var(--card-head))]";
+
 export type ModeMenuItem = {
   /** Stable per item, e.g. "pin", "earlier", "check-again", "open-slides". */
   id: string;

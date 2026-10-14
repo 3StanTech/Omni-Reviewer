@@ -11,7 +11,6 @@ import { TodayCard } from "@/components/today-card";
 import { TodayModal, type TodayHrefs } from "@/components/today-modal";
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
 import { useTopicNav } from "@/components/topic-shelf";
-import { Skeleton } from "@/components/ui/skeleton";
 import { outlineHeadingHref } from "@/lib/study-outline";
 import type { TodayPlan } from "@/lib/today-plan";
 import { useGenerationQueue } from "@/lib/use-generation-queue";
@@ -46,26 +45,6 @@ type StudyHomeProps = {
   userId?: string | null;
 };
 
-function ReviewerListSkeleton() {
-  return (
-    <div className="space-y-4" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading study packs</span>
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-2">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-4 w-40" />
-        </div>
-        <Skeleton className="h-11 w-36" />
-      </div>
-      <div className="overflow-hidden rounded-xl border border-border/80">
-        <Skeleton className="h-16 w-full rounded-none" />
-        <Skeleton className="h-16 w-full rounded-none" />
-        <Skeleton className="h-16 w-full rounded-none" />
-      </div>
-    </div>
-  );
-}
-
 export function StudyHome({
   topics,
   selectedId,
@@ -97,7 +76,7 @@ export function StudyHome({
   const effectiveSelected = topicPending ? optimisticId : selectedId;
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-5">
       {today ? (
         <>
           <TodayCard plan={today.plan} hrefs={hrefs} onOpenPlan={() => setTodayOpen(true)} />
@@ -109,13 +88,6 @@ export function StudyHome({
           />
         </>
       ) : null}
-      <div className={shelfOpen ? "md:hidden" : undefined}>
-        <TopicTabs
-          topics={topics}
-          selectedId={effectiveSelected}
-          onOptimisticSelect={setOptimisticId}
-        />
-      </div>
       <GenerationQueuePanel
         rows={queue.rows}
         status={queue.status}
@@ -123,19 +95,25 @@ export function StudyHome({
         retry={queue.retry}
         checkAgain={queue.checkAgain}
       />
-      {topicPending ? (
-        <ReviewerListSkeleton />
-      ) : (
-        <ReviewerList
-          topicId={selectedId}
-          topicName={topicName}
-          reviewers={reviewers}
-          onAddFiles={userId && selectedId
-            ? (files) => void queue.enqueueFiles(files, selectedId)
-            : undefined}
-          addingFiles={queue.status.uploading}
-        />
-      )}
+      <ReviewerList
+        topicId={selectedId}
+        topicName={topicName}
+        reviewers={reviewers}
+        loading={topicPending}
+        topicChips={
+          <div className={shelfOpen ? "md:hidden" : undefined}>
+            <TopicTabs
+              topics={topics}
+              selectedId={effectiveSelected}
+              onOptimisticSelect={setOptimisticId}
+            />
+          </div>
+        }
+        onAddFiles={userId && selectedId
+          ? (files) => void queue.enqueueFiles(files, selectedId)
+          : undefined}
+        addingFiles={queue.status.uploading}
+      />
     </div>
   );
 }

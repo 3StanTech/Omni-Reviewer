@@ -6,14 +6,15 @@
 
 ## Scene
 
-Default look is **Night**: graphite chrome with teal study accents. Day is a clean white/cobalt workspace. Both use one shared study layout with progressive disclosure. Not Inter as default display.
+Default look is **Dream Land**: a Kirby-inspired cream and pastel desk made for Yana, with the Kirby companion. Day is a clean cobalt workspace on a tinted page; Night is graphite chrome with teal study accents. All three use one shared study layout with progressive disclosure. Not Inter as default display.
 
-Looks are chrome, not new objects. Switch them from **Change today's mood** (header). Menu order: Day, Night. Persist in `localStorage` key `omni-look`. Default remains Night. Stored Thea/RemNote values map to Day.
+Looks are chrome, not new objects. Switch them from **Change today's mood** (header). Menu order: Dream Land, Day, Night. Persist in `localStorage` key `omni-look`; a browser with no saved look opens in Dream Land. Stored Thea/RemNote values map to Day; any other unknown value maps to Dream Land. The early script in `app/layout.tsx` sets `data-look` before first paint, so a saved look never flashes another one.
 
 | Look | Scene |
 | --- | --- |
-| Night | Graphite shell, teal accent, dark reading surface. `html.dark`. |
-| Day | White workspace, cobalt primary, calm reading surface. |
+| Dream Land | Cream page, pink sidebar and top bar, sky tabs bar and rail, berry-pink primary, 20px rounded panels, pill buttons, dashed star dividers between reading sections, Kirby companion. `color-scheme: light`. |
+| Day | Tinted cool page (`#f3f6fb`) behind white cards, cobalt primary, calm white reading surface. |
+| Night | Graphite page, raised slate cards, teal accent, dark reading surface, lamp wash. `html.dark`. |
 
 ## Typography
 
@@ -28,7 +29,9 @@ Scale (approx): 12 / 14 / 16 / 18 / 20 / 24 / 30. Ratio ~1.125–1.2. Tracking n
 
 ## Color
 
-Dark product shell by default (`html.dark` and `data-look="night"`). Light looks set `color-scheme: light` and drop the lamp wash.
+Night is the only dark look (`html.dark` and `data-look="night"`) and the only one with the lamp wash. Day and Dream Land set `color-scheme: light`. Token blocks in `app/globals.css` run `:root, [data-look="dreamland"]`, then Day, then Night: `:root` and `[data-look]` share specificity, so `:root` must come first or it would override later looks.
+
+Structure tokens: `--page` (page tint, mapped to `--background`), `--card-head` (panel header band), `--divider` (hairlines inside panels), `--rail` and `--strip` (side panel and tabs bar surfaces), `--panel-shadow`. Dream Land adds `--star` for star accents.
 
 | Token | Intent |
 | --- | --- |
@@ -48,10 +51,11 @@ Accent is for selection and primary CTAs only, not decoration.
 
 ## Layout
 
+- **Panels**: every group on the desk and the pack-page chrome is a `Panel` (`components/ui/panel.tsx`) with an optional `PanelHeader` band (small uppercase label left, actions right). Rows inside a panel are split by `--divider` hairlines. Looks restyle panels through tokens only; no per-look markup.
 - App shell: slim top bar (wordmark, Change today's mood, sign out), content column max 1024px on the desk. The pack page is wide: header and main up to 90rem (1440px).
 - Home: topic tab strip full width, then reviewer list. The topic shelf is a separate home library surface.
 - Workspace: header (breadcrumb; title with a meta line: exam countdown · Generated stamp), then one sticky **strip**, then the study document. Before first generate, sources stay expanded inline above the study.
-- **Strip**: mode tabs left; the active mode's tools right (Locked In and Summary: claims chip `N/M sourced`, Contents, Notes, Edit, Download; Test Me and Carded: Focus), then **More** (⋯). Solid background, no backdrop filter (it would trap fixed sheets). On phones: tabs on one row, tools on a second, labels hidden behind icons, every control 44px. In Focus mode only the Focus toggle stays.
+- **Strip**: a framed panel (`bg-strip`, rounded border, tabs split by dividers, selected tab on the card surface with the underline); mode tabs left; the active mode's tools right (Locked In and Summary: claims chip `N/M sourced`, Contents, Notes, Edit, Download; Test Me and Carded: Focus), then **More** (⋯). Solid background, no backdrop filter (it would trap fixed sheets). On phones: tabs on one row, tools on a second, labels hidden behind icons, every control 44px. In Focus mode only the Focus toggle stays.
 - **More**: (1) the mode's own actions (Check again, Open slides, Pin, Earlier version), (2) Redo for the active mode with its one-line description and requests left today, (3) pack items: Sources (n) with any unreadable pages, Exam date. Sources and Exam date open dialogs.
 - **Generation section** (once study modes exist): shown above the study only while modes are missing or a job is running, failed or partial. A finished job shows a short Pack ready line that clears itself.
 - **Rail** (pack page): a sticky 17.5rem column right of the study content when the pack container is at least 64rem wide (a container query, so the topic shelf and Ask padding count) and Ask is closed. Sections, in order: the mode's own section, then Pack.
@@ -69,12 +73,14 @@ Accent is for selection and primary CTAs only, not decoration.
 ## Components
 
 - **Topic tabs**: horizontal scroll if needed; selected = amber underline or filled chip.
-- **Today card**: one card at the top of the desk for all topics: "N to review · M new", weak sections and minutes (wraps, never truncated; a zero part is left out), **Start studying** to the first Do-first item, **See the plan** for the Today dialog, and **How cards come back** (the `StudyHelp` explainer). Empty: Nothing due today.
+- **Today card**: one panel at the top of the desk for all topics, with a "Today / All topics" header band and stat columns (to review, new, weak sections, minutes) split by dividers: "N to review · M new", weak sections and minutes (wraps, never truncated; a zero part is left out), **Start studying** to the first Do-first item, **See the plan** for the Today dialog, and **How cards come back** (the `StudyHelp` explainer). Empty: Nothing due today.
 - **StudyHelp** ("How cards come back", `Question` icon; icon only below 640px): a popover on desktop, a bottom sheet on phones. It explains New (up to 20 a day per pack, or spread out until the exam), To review, Again (tomorrow) and Good (about 3 days, then 2 weeks, then 2 months, then longer; never after the exam), and Weak (under 60% correct across 3 or more answers). Shown on the Today card and in Carded.
 - **Pack rows**: name up to two lines (never clipped); meta line wraps: generated stamp or Not generated yet, "N to review · M new" when above 0 (zero parts left out), exam date when set, mastery, weak section (described as "Under 60% correct on 3 or more answers"). A small **Review** button when cards are due (else **Resume** for an active sitting), then the overflow menu (rename/delete).
 - **Topic shelf**: Due today shows the all-topics total (cards to review plus today's new cards), equal to the Today card; each topic shows its own count when above 0. Below 768px it is a drawer that starts closed on every load.
 - **Dates**: one stamp, `Oct 6, 1:36 PM`, in the viewer's zone. Server renders show the label without a time (no UTC text). Days read `Oct 9`.
 - **Change today's mood**: not a primary CTA. Hover/focus opens the look menu on fine pointers; click toggles on coarse pointers.
+- **Desk greeting**: "Good morning/afternoon/evening, Name" with the subtitle. In Dream Land it becomes a speech bubble whose tail points at Kirby on the right, and the name gets "!" (Day and Night keep the plain greeting, no "!"). Gated by CSS (`dreamland:` variant), never by React state, so it never flashes.
+- **Kirby companion** (`components/kirby-companion.tsx`, Dream Land only): hand-coded SVG fan art for this private app; never add Nintendo assets or ship it publicly. Gradients render once in `KirbyDefs` (root layout), never inside a hidden subtree. Places: the desk greeting (124px, 84px on phones), untimed Test Me beside the question and on its recap (the last answer reacts there), the timed Test Me recap only (never during the timer), and Carded beside the card (112px; 64px in the panel corner at 640px and below, without narrowing the question or card). States: idle bob and blink; eyes and lean follow the pointer; hover waves; click squashes with "poyo!"; sleeps after 20 s without pointer movement; a saved correct answer or Good plays the victory hop with a star burst; a wrong answer or Again plays a droop with a sweat drop. Reactions fire only after an answer or rating is accepted (never on a 409 or an error); a replayed Carded save reacts with the rating the server saved, not the button tapped. Reduced motion stops every animation while expressions still change. Print-hidden. Kirby never covers study text, choices, the card or its buttons.
 - **Citation chips**: small mono `p.14` buttons inline after a claim. They open the source modal and are never part of the annotation text.
 - **Not from your uploaded sources**: amber tag with WarningCircle after an unsupported claim. Hover or focus underlines the claim in the warning color. The popover explains and offers Keep or Delete sentence.
 - **Source modal**: built on the shared Dialog. PDF pages render to a canvas, fit to width, with Slide N of M and previous/next. It closes with Escape or the backdrop and returns focus.
@@ -117,3 +123,4 @@ Accent is for selection and primary CTAs only, not decoration.
 - Em dash in UI strings
 - Second icon family
 - Regenerating on tab focus or page open
+- Official Nintendo assets, logos or fonts (Kirby is hand-drawn SVG only)

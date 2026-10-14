@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BookOpen } from "@phosphor-icons/react/dist/ssr";
 import type { ReactNode } from "react";
 
+import { DeskGreeting } from "@/components/desk-greeting";
 import { MoodControl } from "@/components/mood-control";
 import { SearchPacks } from "@/components/search-packs";
 import { SignOutButton } from "@/components/sign-out-button";
@@ -27,6 +28,8 @@ type AppShellProps = {
   showTopicShelf?: boolean;
   /** The pack page uses the desktop width (90rem) for its document and rail; other pages stay at 64rem. */
   wide?: boolean;
+  /** The desk shows the title as Kirby's greeting (a plain title outside Dream Land). */
+  companion?: boolean;
 };
 
 export function AppShell({
@@ -42,6 +45,7 @@ export function AppShell({
   dueTodayTotal = 0,
   showTopicShelf = true,
   wide = false,
+  companion = false,
 }: AppShellProps) {
   return (
     <TopicNavProvider>
@@ -95,7 +99,9 @@ export function AppShell({
               className,
             )}
           >
-            {(title || subtitle) && (
+            {companion && title ? (
+              <DeskGreeting title={title} subtitle={subtitle} />
+            ) : (title || subtitle) && (
               <div className="mb-6 space-y-1">
                 {title ? (
                   <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">

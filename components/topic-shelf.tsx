@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  CalendarBlank,
+  CalendarCheck,
   CircleNotch,
   DotsThreeVertical,
   PencilSimple,
@@ -26,6 +26,7 @@ import { useIsClient } from "@/lib/use-is-client";
 
 import type { TopicListItem } from "@/components/topic-tabs";
 import { Button } from "@/components/ui/button";
+import { Panel, PanelHeader } from "@/components/ui/panel";
 import {
   Dialog,
   DialogContent,
@@ -287,129 +288,134 @@ export function TopicShelf({
     <aside
       id={TOPIC_SHELF_ID}
       className={cn(
-        "fixed inset-y-0 left-0 z-50 flex h-svh w-[min(228px,86vw)] shrink-0 flex-col overflow-y-auto border-r border-border bg-chrome md:sticky md:z-auto md:w-[228px]",
+        "fixed inset-y-0 left-0 z-50 flex h-svh w-[min(228px,86vw)] shrink-0 flex-col overflow-y-auto border-r border-border bg-sidebar md:sticky md:z-auto md:w-[228px]",
         !isClient && "max-md:hidden",
       )}
       aria-label="Topic shelf"
     >
-      <div className="flex flex-col gap-1 p-3">
-        <div
-          className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-muted-foreground"
+      <div className="flex flex-col gap-3 p-3">
+        <Panel
+          as="div"
+          className="flex items-center gap-2 px-3 py-2.5 text-sm"
           title={DUE_TODAY_DESCRIPTION}
         >
-          <CalendarBlank className="size-4 shrink-0" />
+          <CalendarCheck className="size-4 shrink-0 text-muted-foreground" />
           <span>Due today</span>
-          <span className="ml-auto tabular-nums text-foreground" aria-describedby={DUE_TODAY_DESCRIPTION_ID}>
+          <span className="ml-auto font-semibold tabular-nums text-foreground" aria-describedby={DUE_TODAY_DESCRIPTION_ID}>
             {dueTodayTotal}
           </span>
           <span id={DUE_TODAY_DESCRIPTION_ID} hidden>
             {DUE_TODAY_DESCRIPTION}
           </span>
-        </div>
+        </Panel>
 
-        <div className="mt-3 mb-1 flex items-center justify-between gap-2 px-2.5">
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Topics
-          </p>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label="New topic"
-            onClick={() => {
-              setError(null);
-              setName("");
-              setCreateOpen(true);
-            }}
-          >
-            <Plus weight="bold" />
-          </Button>
-        </div>
+        <Panel as="div" className="overflow-hidden">
+          <PanelHeader
+            className="py-1.5 pr-2"
+            label="Topics"
+            actions={
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className="pointer-coarse:size-11"
+                aria-label="New topic"
+                onClick={() => {
+                  setError(null);
+                  setName("");
+                  setCreateOpen(true);
+                }}
+              >
+                <Plus weight="bold" />
+              </Button>
+            }
+          />
 
-        {topics.length === 0 ? (
-          <p className="px-2.5 text-sm text-muted-foreground">
-            No topics yet. Create one to hold your study packs.
-          </p>
-        ) : (
-          <nav aria-label="Topics" className="flex flex-col gap-0.5">
-            {topics.map((topic) => {
-              const selected = topic.id === selectedId;
-              const due = dueByTopic?.[topic.id] ?? 0;
-              return (
-                <div
-                  key={topic.id}
-                  className={cn(
-                    "group flex items-center rounded-lg transition-colors duration-150",
-                    selected
-                      ? "bg-primary/12 text-foreground"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                >
-                  <Link
-                    href={`/?topic=${topic.id}`}
-                    scroll={false}
-                    prefetch
-                    aria-current={selected ? "page" : undefined}
-                    className="min-h-11 min-w-0 flex-1 truncate rounded-lg px-2.5 py-2 text-sm font-medium text-inherit no-underline outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
-                    onClick={() => selectTopic(topic.id)}
+          {topics.length === 0 ? (
+            <p className="p-3 text-sm text-muted-foreground">
+              No topics yet. Create one to hold your study packs.
+            </p>
+          ) : (
+            <nav aria-label="Topics" className="flex flex-col divide-y divide-divider p-1">
+              {topics.map((topic) => {
+                const selected = topic.id === selectedId;
+                const due = dueByTopic?.[topic.id] ?? 0;
+                return (
+                  <div
+                    key={topic.id}
+                    className={cn(
+                      "group flex items-start rounded-[calc(var(--radius)-4px)] transition-colors duration-150",
+                      selected
+                        ? "bg-accent font-semibold text-foreground"
+                        : "text-foreground hover:bg-muted",
+                    )}
                   >
-                    {topic.name}
-                  </Link>
-                  {due > 0 ? (
-                    <span
-                      className="ml-auto pl-1 tabular-nums text-xs text-muted-foreground"
-                      aria-label={`${due} due today`}
+                    <Link
+                      href={`/?topic=${topic.id}`}
+                      scroll={false}
+                      prefetch
+                      aria-current={selected ? "page" : undefined}
+                      className="min-h-10 min-w-0 flex-1 rounded-[calc(var(--radius)-4px)] px-2 py-2 text-sm break-words text-inherit no-underline outline-none focus-visible:ring-3 focus-visible:ring-ring/40 pointer-coarse:min-h-11"
+                      onClick={() => selectTopic(topic.id)}
                     >
-                      {due}
-                    </span>
-                  ) : null}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          className={cn(
-                            "mr-1 opacity-70 group-hover:opacity-100 pointer-coarse:size-11",
-                            selected && "opacity-100",
-                          )}
-                          aria-label={`Topic actions for ${topic.name}`}
-                        />
-                      }
-                    >
-                      <DotsThreeVertical weight="bold" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-40">
-                      <DropdownMenuItem
-                        onClick={() => {
-                          setActiveTopic(topic);
-                          setName(topic.name);
-                          setError(null);
-                          setRenameOpen(true);
-                        }}
+                      {topic.name}
+                    </Link>
+                    {due > 0 ? (
+                      <span
+                        className="mt-2.5 ml-auto rounded-full bg-muted px-1.5 py-px text-xs font-normal tabular-nums text-foreground"
+                        aria-label={`${due} due today`}
                       >
-                        <PencilSimple />
-                        Rename
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onClick={() => {
-                          setActiveTopic(topic);
-                          setError(null);
-                          setDeleteOpen(true);
-                        }}
+                        {due}
+                      </span>
+                    ) : null}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className={cn(
+                              "mx-0.5 mt-1.5 opacity-70 group-hover:opacity-100 pointer-coarse:mt-0 pointer-coarse:size-11",
+                              selected && "opacity-100",
+                            )}
+                            aria-label={`Topic actions for ${topic.name}`}
+                          />
+                        }
                       >
-                        <Trash />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              );
-            })}
-          </nav>
-        )}
+                        <DotsThreeVertical weight="bold" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-40">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setActiveTopic(topic);
+                            setName(topic.name);
+                            setError(null);
+                            setRenameOpen(true);
+                          }}
+                        >
+                          <PencilSimple />
+                          Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => {
+                            setActiveTopic(topic);
+                            setError(null);
+                            setDeleteOpen(true);
+                          }}
+                        >
+                          <Trash />
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                );
+              })}
+            </nav>
+          )}
+        </Panel>
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

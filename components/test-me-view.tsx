@@ -12,6 +12,7 @@ import {
 
 import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
 import { EmptyState } from "@/components/empty-state";
+import { KirbyCompanion, type KirbyReaction } from "@/components/kirby-companion";
 import { SittingRecap } from "@/components/sitting-recap";
 import { MarkdownBody } from "@/components/study-markdown";
 import { OpenCitedSlide, TimedTestMe } from "@/components/timed-test-me";
@@ -51,6 +52,13 @@ type TestMeViewProps = {
   onAttemptStatsChange: (stats: AttemptStats[]) => void;
   lockedIn?: string | null;
 };
+
+/**
+ * Kirby beside a practice panel in Dream Land: a right column from 640px, the panel's
+ * top-right corner below it (the text beside him gets `dreamland:max-sm:mr-16`).
+ */
+const KIRBY_PRACTICE_PLACEMENT =
+  "shrink-0 max-sm:absolute max-sm:right-2 max-sm:top-0.5 max-sm:w-16 sm:sticky sm:top-[120px]";
 
 const KEY_HINT_STYLE = `.study-key-hint{display:none}@media (pointer: fine){.study-key-hint{display:block}}`;
 
@@ -205,6 +213,7 @@ function UntimedSitting({
   const [openedAt, setOpenedAt] = useState<number | null>(() => (initialView.finished ? null : Date.now()));
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const inFlight = useRef(false);
+  const [kirby, setKirby] = useState<KirbyReaction | null>(null);
 
   const sittingItems = useMemo(
     () => session ? sittingItemsForIds(items, session.itemIds) : items,
@@ -293,6 +302,8 @@ function UntimedSitting({
       });
       if (!response.ok) throw new Error(await readApiError(response));
       applySession((await response.json()) as UntimedSittingPayload);
+      // The new sitting's Kirby mounts fresh; a kept reaction would replay the last answer.
+      setKirby(null);
     } catch (caught) {
       setSaveMessage(caught instanceof Error ? caught.message : "Could not start that sitting.");
     } finally {
@@ -340,6 +351,9 @@ function UntimedSitting({
         selectedAnswer: answer,
         correct: isCorrect(answer, item.answer),
       };
+      if (!data.alreadySaved) {
+        setKirby({ outcome: accepted.correct ? "happy" : "sad", key: Date.now() });
+      }
       const answeredIds = new Set([...session.answers.map((entry) => entry.itemId), accepted.itemId]);
       if (data.completed === true || session.itemIds.every((itemId) => answeredIds.has(itemId))) markFinished();
       setSession((current) => {
@@ -421,8 +435,14 @@ function UntimedSitting({
       }),
     });
     return (
-      <div className="space-y-4">
-        <div className="flex justify-end">{timedRunButton}</div>
+      <div className="space-y-4 dreamland:sm:grid dreamland:sm:grid-cols-[minmax(0,1fr)_auto] dreamland:sm:items-start dreamland:sm:gap-x-[18px] dreamland:sm:gap-y-4 dreamland:sm:space-y-0">
+        <div className="flex justify-end dreamland:sm:col-span-2">{timedRunButton}</div>
+        {/* The final answer completes the sitting, so its reaction plays here (Dream Land only). */}
+        <KirbyCompanion
+          size="md"
+          reaction={kirby}
+          className="shrink-0 max-sm:ml-auto max-sm:w-16 sm:col-start-2 sm:row-start-2"
+        />
         <SittingRecap
           title="Sitting complete"
           score={{ correct: score, total: sittingItems.length }}
@@ -545,6 +565,7 @@ function UntimedSitting({
         submitted={submitted}
         saveBusy={saveBusy}
         correct={correct}
+        kirby={kirby}
         onSelect={(value) => {
           setSelected(value);
           setSaveMessage(null);
@@ -590,6 +611,7 @@ function SittingItem({
   submitted,
   saveBusy,
   correct,
+  kirby,
   onSelect,
   onEnter,
 }: {
@@ -599,97 +621,106 @@ function SittingItem({
   submitted: boolean;
   saveBusy: boolean;
   correct: boolean | undefined;
+  kirby: KirbyReaction | null;
   onSelect: (value: string) => void;
   onEnter: () => void;
 }) {
   const locked = submitted || saveBusy;
 
   return (
-    <article className="rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6">
-      <div id={questionId} className="mb-4 text-sm font-medium leading-relaxed text-foreground">
-        <MarkdownBody source={item.question} />
-      </div>
-
-      {item.choices ? (
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby={questionId}>
-          {item.choices.map((choice, choiceIndex) => {
-            const choiceId = controlId(item.id, `choice-${choiceIndex + 1}`);
-            const active = selected === choice;
-            return (
-              <button
-                key={choiceId}
-                id={choiceId}
-                name={controlId(item.id, "choices")}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                disabled={locked}
-                className={cn(
-                  "flex min-h-11 min-w-0 items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
-                  active
-                    ? "border-primary/50 bg-primary/10 text-foreground"
-                    : "border-border/80 bg-background/40 text-muted-foreground hover:border-border hover:text-foreground",
-                )}
-                onClick={() => onSelect(choice)}
-              >
-                <span
-                  aria-hidden
-                  className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold tabular-nums text-foreground"
-                >
-                  {choiceIndex + 1}
-                </span>
-                <span className="min-w-0 flex-1 break-words">
-                  <MarkdownBody source={choice} inline />
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        <label
-          htmlFor={controlId(item.id, "answer")}
-          className="grid gap-1 text-xs text-muted-foreground"
-        >
-          <span id={controlId(item.id, "answer-label")}>Open response</span>
-          <input
-            id={controlId(item.id, "answer")}
-            name={controlId(item.id, "answer")}
-            value={selected}
-            disabled={locked}
-            onChange={(event) => onSelect(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              onEnter();
-            }}
-            className="min-h-11 rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
-            aria-labelledby={`${questionId} ${controlId(item.id, "answer-label")}`}
-          />
-        </label>
-      )}
-
-      {submitted ? (
-        <div className="mt-4 space-y-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-3" role="status">
-          <p
-            className={cn(
-              "inline-flex items-center gap-1 text-sm font-medium",
-              correct ? "text-success" : "text-destructive",
-            )}
+    <article className="rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6 dreamland:relative">
+      <div className="dreamland:sm:flex dreamland:sm:items-start dreamland:sm:gap-[18px]">
+        <div className="min-w-0 dreamland:sm:flex-1">
+          <div
+            id={questionId}
+            className="mb-4 text-sm font-medium leading-relaxed text-foreground dreamland:max-sm:mr-16 dreamland:max-sm:min-h-10"
           >
-            {correct ? <CheckCircle weight="fill" /> : <XCircle weight="fill" />}
-            {correct ? "Correct" : "Incorrect. The main point:"}
-          </p>
-          <div className="text-sm text-muted-foreground">
-            <strong className="text-foreground">Answer:</strong>{" "}
-            <MarkdownBody source={item.answer} inline />
+            <MarkdownBody source={item.question} />
           </div>
-          {item.explanation ? <MarkdownBody source={item.explanation} /> : null}
-          <div className="flex flex-wrap gap-2 empty:-mt-2">
-            {correct ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
-            {correct ? null : <ExplainThisButton request={{ kind: "explain", target: { type: "test_item", itemId: item.id, chosen: selected.slice(0, EXPLAIN_CHOSEN_MAX_CHARS) } }} />}
-          </div>
+
+          {item.choices ? (
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby={questionId}>
+              {item.choices.map((choice, choiceIndex) => {
+                const choiceId = controlId(item.id, `choice-${choiceIndex + 1}`);
+                const active = selected === choice;
+                return (
+                  <button
+                    key={choiceId}
+                    id={choiceId}
+                    name={controlId(item.id, "choices")}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    disabled={locked}
+                    className={cn(
+                      "flex min-h-11 min-w-0 items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+                      active
+                        ? "border-primary/50 bg-primary/10 text-foreground"
+                        : "border-border/80 bg-background/40 text-muted-foreground hover:border-border hover:text-foreground",
+                    )}
+                    onClick={() => onSelect(choice)}
+                  >
+                    <span
+                      aria-hidden
+                      className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold tabular-nums text-foreground"
+                    >
+                      {choiceIndex + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 break-words">
+                      <MarkdownBody source={choice} inline />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <label
+              htmlFor={controlId(item.id, "answer")}
+              className="grid gap-1 text-xs text-muted-foreground"
+            >
+              <span id={controlId(item.id, "answer-label")}>Open response</span>
+              <input
+                id={controlId(item.id, "answer")}
+                name={controlId(item.id, "answer")}
+                value={selected}
+                disabled={locked}
+                onChange={(event) => onSelect(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                  event.preventDefault();
+                  onEnter();
+                }}
+                className="min-h-11 rounded-lg border border-border/80 bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+                aria-labelledby={`${questionId} ${controlId(item.id, "answer-label")}`}
+              />
+            </label>
+          )}
+
+          {submitted ? (
+            <div className="mt-4 space-y-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-3" role="status">
+              <p
+                className={cn(
+                  "inline-flex items-center gap-1 text-sm font-medium",
+                  correct ? "text-success" : "text-destructive",
+                )}
+              >
+                {correct ? <CheckCircle weight="fill" /> : <XCircle weight="fill" />}
+                {correct ? "Correct" : "Incorrect. The main point:"}
+              </p>
+              <div className="text-sm text-muted-foreground">
+                <strong className="text-foreground">Answer:</strong>{" "}
+                <MarkdownBody source={item.answer} inline />
+              </div>
+              {item.explanation ? <MarkdownBody source={item.explanation} /> : null}
+              <div className="flex flex-wrap gap-2 empty:-mt-2">
+                {correct ? null : <OpenCitedSlide texts={[item.explanation, item.answer]} />}
+                {correct ? null : <ExplainThisButton request={{ kind: "explain", target: { type: "test_item", itemId: item.id, chosen: selected.slice(0, EXPLAIN_CHOSEN_MAX_CHARS) } }} />}
+              </div>
+            </div>
+          ) : null}
         </div>
-      ) : null}
+        <KirbyCompanion size="md" reaction={kirby} className={KIRBY_PRACTICE_PLACEMENT} />
+      </div>
     </article>
   );
 }

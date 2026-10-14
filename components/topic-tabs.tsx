@@ -153,35 +153,16 @@ export function TopicTabs({
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Topics
-        </p>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            setError(null);
-            setName("");
-            setCreateOpen(true);
-          }}
-        >
-          <Plus weight="bold" />
-          New topic
-        </Button>
-      </div>
-
+    <div className="flex items-center gap-2 p-2">
       {topics.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="min-w-0 flex-1 px-2 text-sm text-muted-foreground">
           No topics yet. Create one to hold your study packs.
         </p>
       ) : (
         <div
           role="tablist"
           aria-label="Topics"
-          className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1"
+          className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto"
         >
           {topics.map((topic) => {
             const selected = topic.id === selectedId;
@@ -189,10 +170,10 @@ export function TopicTabs({
               <div
                 key={topic.id}
                 className={cn(
-                  "group flex shrink-0 items-center rounded-xl border transition-colors",
+                  "group flex shrink-0 items-center rounded-full border transition-colors",
                   selected
-                    ? "border-primary/40 bg-primary/12 text-foreground"
-                    : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+                    ? "border-primary bg-accent font-semibold text-foreground"
+                    : "border-divider bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >
                 <Link
@@ -201,7 +182,7 @@ export function TopicTabs({
                   prefetch
                   role="tab"
                   aria-selected={selected}
-                  className="min-h-11 rounded-xl px-3.5 py-2 text-sm font-medium text-inherit no-underline outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+                  className="flex min-h-10 items-center rounded-full py-1.5 pr-1 pl-3.5 text-sm whitespace-nowrap text-inherit no-underline outline-none focus-visible:ring-3 focus-visible:ring-ring/40 pointer-coarse:min-h-11"
                   onClick={() => selectTopic(topic.id)}
                 >
                   {topic.name}
@@ -214,7 +195,7 @@ export function TopicTabs({
                         variant="ghost"
                         size="icon-sm"
                         className={cn(
-                          "mr-1 size-8 opacity-70 group-hover:opacity-100 pointer-coarse:size-11",
+                          "mr-1 size-8 rounded-full opacity-70 group-hover:opacity-100 pointer-coarse:size-11",
                           selected && "opacity-100",
                         )}
                         aria-label={`Topic actions for ${topic.name}`}
@@ -259,6 +240,20 @@ export function TopicTabs({
           ) : null}
         </div>
       )}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="shrink-0 pointer-fine:h-9 pointer-fine:min-h-9 max-sm:w-11 max-sm:px-0"
+        onClick={() => {
+          setError(null);
+          setName("");
+          setCreateOpen(true);
+        }}
+      >
+        <Plus weight="bold" />
+        <span className="max-sm:sr-only">New topic</span>
+      </Button>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>

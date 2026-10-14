@@ -7,6 +7,7 @@ import {
   STIX_Two_Math,
 } from "next/font/google";
 
+import { KirbyDefs } from "@/components/kirby-companion";
 import { LookProvider } from "@/components/look-provider";
 
 import "./globals.css";
@@ -36,7 +37,7 @@ const uiMono = IBM_Plex_Mono({
   weight: ["400", "500"],
 });
 
-const lookBootstrap = `(function(){try{var v=localStorage.getItem("omni-look");var look=v==="day"||v==="night"?v:(v==="thea"||v==="remnote"?"day":"night");var el=document.documentElement;el.setAttribute("data-look",look);el.classList.toggle("dark",look==="night");}catch(e){}})();`;
+const lookBootstrap = `(function(){try{var v=localStorage.getItem("omni-look");var look=v==="dreamland"||v==="day"||v==="night"?v:(v==="thea"||v==="remnote"?"day":"dreamland");var el=document.documentElement;el.setAttribute("data-look",look);el.classList.toggle("dark",look==="night");}catch(e){}})();`;
 
 export const metadata: Metadata = {
   title: "Omni-Reviewer",
@@ -49,11 +50,11 @@ export const metadata: Metadata = {
   },
 };
 
-// Day look `--background: #ffffff`; Night look `--background:
-// oklch(0.14 0.025 250)` converted to hex (app/globals.css).
+// Light: the default Dream Land look's `--page: #fff6ec`. Dark: the Night look's
+// page tone converted to hex (app/globals.css).
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: light)", color: "#fff6ec" },
     { media: "(prefers-color-scheme: dark)", color: "#030a13" },
   ],
   viewportFit: "cover",
@@ -63,11 +64,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      data-look="night"
-      className={`dark ${uiSans.variable} ${readingSerif.variable} ${uiMono.variable} ${mathFont.variable} h-full antialiased`}
+      data-look="dreamland"
+      className={`${uiSans.variable} ${readingSerif.variable} ${uiMono.variable} ${mathFont.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="flex min-h-full flex-col font-sans">
+        <KirbyDefs />
         <Script id="omni-look" strategy="beforeInteractive">
           {lookBootstrap}
         </Script>

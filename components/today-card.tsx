@@ -7,13 +7,48 @@ import { CalendarCheck, CaretRight } from "@phosphor-icons/react";
 import type { TodayHrefs } from "@/components/today-modal";
 import { StudyHelp } from "@/components/study-help";
 import { Button } from "@/components/ui/button";
-import { todayBarParts, WEAK_SECTION_DEFINITION, type DoFirstItem, type TodayPlan } from "@/lib/today-plan";
+import { Panel } from "@/components/ui/panel";
+import {
+  todayBarParts,
+  WEAK_SECTION_DEFINITION,
+  type DoFirstItem,
+  type TodayBarData,
+  type TodayPlan,
+} from "@/lib/today-plan";
 
 /** Where Start studying goes: the first Do-first item's mode in its pack. */
 export function startHref(item: DoFirstItem, hrefs: TodayHrefs): string {
   if (item.kind === "review") return hrefs.review(item.packId);
   if (item.kind === "retest") return hrefs.retest(item.packId);
   return hrefs.reread(item.packId, item.sectionId);
+}
+
+type TodayStat = { value: string; label: string; weak?: boolean };
+
+/** The card's stat columns, in the summary's order; a zero part is left out. */
+function todayStats(bar: TodayBarData): TodayStat[] {
+  const stats: TodayStat[] = [];
+  if (bar.reviewCards > 0) stats.push({ value: String(bar.reviewCards), label: "to review" });
+  if (bar.newCards > 0) stats.push({ value: String(bar.newCards), label: "new" });
+  if (bar.weakSections > 0) {
+    stats.push({
+      value: String(bar.weakSections),
+      label: bar.weakSections === 1 ? "weak section" : "weak sections",
+      weak: true,
+    });
+  }
+  if (bar.exam) {
+    stats.push(
+      bar.exam.days === 0
+        ? { value: "Today", label: `${bar.exam.topicName} exam` }
+        : {
+            value: String(bar.exam.days),
+            label: `${bar.exam.days === 1 ? "day" : "days"} to ${bar.exam.topicName} exam`,
+          },
+    );
+  }
+  if (bar.minutes > 0) stats.push({ value: `~${bar.minutes}`, label: "minutes" });
+  return stats;
 }
 
 /** The desk's Today card: the summary, Start studying, and the full plan. Covers all topics. */
@@ -28,21 +63,29 @@ export function TodayCard({
 }) {
   const weakDefinitionId = useId();
   const parts = plan.empty ? [] : todayBarParts(plan.bar);
+  const stats = plan.empty ? [] : todayStats(plan.bar);
   const first = plan.doFirst[0];
   return (
-    <section
-      aria-label="Today"
-      className="flex flex-col gap-3 rounded-xl border border-primary/40 bg-primary/8 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"
-    >
-      <div className="min-w-0">
-        <p className="flex items-center gap-2 text-base font-semibold">
-          <CalendarCheck weight="bold" aria-hidden className="size-5 shrink-0 text-primary" />
+    <Panel aria-label="Today">
+      {/* PanelHeader's look without its truncating label: the card never truncates. */}
+      <div
+        data-slot="panel-header"
+        className="flex items-center justify-between gap-3 rounded-t-[var(--radius)] border-b border-divider bg-card-head px-4 py-2.5"
+      >
+        <p className="flex items-center gap-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          <CalendarCheck weight="bold" aria-hidden className="size-4 shrink-0" />
           Today
         </p>
-        <p className="mt-1 text-sm break-words text-muted-foreground">
-          {plan.empty
-            ? "Nothing due today"
-            : parts.map((part, index) => (
+        <span className="text-xs font-medium text-muted-foreground">All topics</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-4 p-4">
+        {plan.empty ? (
+          <p className="text-sm text-muted-foreground">Nothing due today</p>
+        ) : (
+          <>
+            {/* The summary as one sentence for screen readers; the columns below show it. */}
+            <p className="sr-only">
+              {parts.map((part, index) => (
                 <Fragment key={part.text}>
                   {index > 0 ? " · " : null}
                   {part.weak ? (
@@ -54,31 +97,47 @@ export function TodayCard({
                   )}
                 </Fragment>
               ))}
-          {parts.some((part) => part.weak) ? (
-            <span id={weakDefinitionId} hidden>
-              {WEAK_SECTION_DEFINITION}
-            </span>
+              {parts.some((part) => part.weak) ? (
+                <span id={weakDefinitionId} hidden>
+                  {WEAK_SECTION_DEFINITION}
+                </span>
+              ) : null}
+            </p>
+            <div aria-hidden className="flex min-w-0 flex-wrap gap-y-3">
+              {stats.map((stat) => (
+                <div
+                  key={stat.label}
+                  className="min-w-0 border-l border-divider px-4 first:border-l-0 first:pl-0 max-sm:px-3 max-sm:first:pl-0"
+                  title={stat.weak ? WEAK_SECTION_DEFINITION : undefined}
+                >
+                  <p className="text-[1.375rem] leading-tight font-bold tabular-nums break-words text-foreground">
+                    {stat.value}
+                  </p>
+                  <p className="text-xs break-words text-muted-foreground">{stat.label}</p>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <div className="flex flex-wrap items-center gap-1.5 md:ml-auto max-md:w-full">
+          {first ? (
+            <Button nativeButton={false} className="min-h-11" render={<Link href={startHref(first, hrefs)} />}>
+              Start studying
+            </Button>
           ) : null}
-        </p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-        {first ? (
-          <Button nativeButton={false} className="min-h-11" render={<Link href={startHref(first, hrefs)} />}>
-            Start studying
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-11"
+            aria-haspopup="dialog"
+            onClick={onOpenPlan}
+          >
+            See the plan
+            <CaretRight weight="bold" data-icon="inline-end" />
           </Button>
-        ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          className="min-h-11"
-          aria-haspopup="dialog"
-          onClick={onOpenPlan}
-        >
-          See the plan
-          <CaretRight weight="bold" data-icon="inline-end" />
-        </Button>
-        <StudyHelp />
+          <StudyHelp />
+        </div>
       </div>
-    </section>
+    </Panel>
   );
 }

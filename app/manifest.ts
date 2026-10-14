@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 
-// Night look `--background: oklch(0.14 0.025 250)` in app/globals.css.
-const NIGHT_BACKGROUND = "#030a13";
+// Dream Land (the default look) `--page: #fff6ec` in app/globals.css.
+const DEFAULT_BACKGROUND = "#fff6ec";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
@@ -13,8 +13,8 @@ export default function manifest(): MetadataRoute.Manifest {
     scope: "/",
     display: "standalone",
     categories: ["education"],
-    background_color: NIGHT_BACKGROUND,
-    theme_color: NIGHT_BACKGROUND,
+    background_color: DEFAULT_BACKGROUND,
+    theme_color: DEFAULT_BACKGROUND,
     icons: [
       { src: "/icon/192", sizes: "192x192", type: "image/png", purpose: "any" },
       { src: "/icon/512", sizes: "512x512", type: "image/png", purpose: "any" },

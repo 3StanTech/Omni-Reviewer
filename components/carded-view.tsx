@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CaretLeft,
   CaretRight,
@@ -13,6 +13,7 @@ import {
 import { ExplainThisButton } from "@/components/ask-provider";
 import { CardExport } from "@/components/card-export";
 import { EmptyState } from "@/components/empty-state";
+import { KirbyCompanion, type KirbyReaction } from "@/components/kirby-companion";
 import { useSourceViewer } from "@/components/source-modal";
 import { SittingRecap } from "@/components/sitting-recap";
 import { StudyHelp } from "@/components/study-help";
@@ -102,6 +103,23 @@ function todayCards(cards: DurableCardView[], examDate: string | null, nowMs: nu
   ).map((entry) => entry.card);
 }
 
+function reactionFor(rating: "again" | "good"): KirbyReaction {
+  return { outcome: rating === "good" ? "happy" : "sad", key: Date.now() };
+}
+
+/**
+ * A recap with Kirby in Dream Land: above it on phones, a right column from 640px.
+ * The last rating's reaction plays when the recap mounts. Day and Night render the recap alone.
+ */
+function WithKirby({ reaction, children }: { reaction: KirbyReaction | null; children: ReactNode }) {
+  return (
+    <div className="dreamland:flex dreamland:flex-col dreamland:gap-2 dreamland:sm:flex-row-reverse dreamland:sm:items-start dreamland:sm:gap-[18px]">
+      <KirbyCompanion size="md" reaction={reaction} className="shrink-0 max-sm:w-16 max-sm:self-end" />
+      <div className="min-w-0 dreamland:sm:flex-1">{children}</div>
+    </div>
+  );
+}
+
 function gradePreview(card: DurableCardView, rating: "again" | "good"): string {
   return intervalCopy(card.nextIntervals[rating].days);
 }
@@ -161,6 +179,8 @@ export function CardedView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scheduleHint, setScheduleHint] = useState<string | null>(null);
+  // Kirby's latest rating reaction (Dream Land only); cleared when a new round starts.
+  const [kirby, setKirby] = useState<KirbyReaction | null>(null);
   const sourceViewer = useSourceViewer();
   const advanceTimer = useRef<number | null>(null);
   const reviewEpoch = useRef(0);
@@ -180,6 +200,7 @@ export function CardedView({
     setAgainIds([]);
     setSessionStartedAt(now);
     setLastRatedAt(null);
+    setKirby(null);
     setFlipped(false);
     setClozeRevealed(false);
     setScheduleHint(null);
@@ -243,6 +264,7 @@ export function CardedView({
     setPracticeIndex(0);
     setPracticeTally({ again: 0, good: 0 });
     setPracticeAgainIds([]);
+    setKirby(null);
     setFlipped(false);
     setClozeRevealed(false);
     setEditing(false);
@@ -257,6 +279,7 @@ export function CardedView({
     if (rating === "again") {
       setPracticeAgainIds((current) => current.includes(card.id) ? current : [...current, card.id]);
     }
+    setKirby(reactionFor(rating));
     setPracticeIndex((index) => index + 1);
     setFlipped(false);
     setClozeRevealed(false);
@@ -308,12 +331,15 @@ export function CardedView({
       });
       if (epoch !== reviewEpoch.current) return;
       if (!response.ok) throw new Error(await readApiError(response));
-      const data = (await response.json()) as { card: DurableCardView };
+      // A replayed request reports the rating its first attempt saved, which may differ from this tap.
+      const data = (await response.json()) as { card: DurableCardView; rating: "again" | "good" };
+      const saved = data.rating;
       onCardsChange(durableCards.map((item) => item.id === data.card.id ? data.card : item));
       setRatedIds((current) => current.includes(card.id) ? current : [...current, card.id]);
-      setTally((current) => ({ ...current, [rating]: current[rating] + 1 }));
-      if (rating === "again") setAgainIds((current) => current.includes(card.id) ? current : [...current, card.id]);
+      setTally((current) => ({ ...current, [saved]: current[saved] + 1 }));
+      if (saved === "again") setAgainIds((current) => current.includes(card.id) ? current : [...current, card.id]);
       setLastRatedAt(Date.now());
+      setKirby(reactionFor(saved));
       requestIds.current.delete(card.id);
       setScheduleHint(`Next review ${intervalCopy(data.card.intervalDays)}`);
       if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
@@ -492,7 +518,7 @@ export function CardedView({
       : `${dueSession.completed} of ${dueSession.total}`;
 
   return (
-    <div data-carded-root className="mx-auto flex w-full max-w-lg flex-col gap-4">
+    <div data-carded-root className="mx-auto flex w-full max-w-lg flex-col gap-4 dreamland:sm:max-w-[40rem]">
       <div className="flex items-start justify-between gap-2 text-sm text-muted-foreground">
         <div className="space-y-1">
           <p>{sessionLabel}</p>
@@ -526,29 +552,33 @@ export function CardedView({
         />
       ) : null}
       {mode === "due" && dueSession.finished ? (
-        <SittingRecap
-          title="Session complete"
-          lines={[
-            `${dueSession.completed} cards · ${tally.good} Good · ${tally.again} Again`,
-            `Studied for ${formatSittingDuration(recapEndedAt - sessionStartedAt)}`,
-          ]}
-          focusSection={recapFocus}
-          returns={recapReturns}
-        >
-          <p className="text-sm text-muted-foreground">Newly due cards wait for the next session.</p>
-          {practiceButtons(queue, againIds)}
-        </SittingRecap>
+        <WithKirby reaction={kirby}>
+          <SittingRecap
+            title="Session complete"
+            lines={[
+              `${dueSession.completed} cards · ${tally.good} Good · ${tally.again} Again`,
+              `Studied for ${formatSittingDuration(recapEndedAt - sessionStartedAt)}`,
+            ]}
+            focusSection={recapFocus}
+            returns={recapReturns}
+          >
+            <p className="text-sm text-muted-foreground">Newly due cards wait for the next session.</p>
+            {practiceButtons(queue, againIds)}
+          </SittingRecap>
+        </WithKirby>
       ) : null}
       {practiceDone ? (
-        <SittingRecap
-          title="Practice done"
-          lines={[
-            `${practiceCards.length} cards · ${practiceTally.good} Good · ${practiceTally.again} Again`,
-            "Practice ratings are not saved. Schedules did not change.",
-          ]}
-        >
-          {practiceButtons(practiceCaptured, practiceAgainIds, true)}
-        </SittingRecap>
+        <WithKirby reaction={kirby}>
+          <SittingRecap
+            title="Practice done"
+            lines={[
+              `${practiceCards.length} cards · ${practiceTally.good} Good · ${practiceTally.again} Again`,
+              "Practice ratings are not saved. Schedules did not change.",
+            ]}
+          >
+            {practiceButtons(practiceCaptured, practiceAgainIds, true)}
+          </SittingRecap>
+        </WithKirby>
       ) : null}
 
       {card ? (
@@ -599,48 +629,55 @@ export function CardedView({
       ) : null}
 
       {card ? (
-      <div className="carded-scene">
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={toggleFlip}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              toggleFlip();
-            }
-          }}
-          className={cn(
-            "carded-flipper group outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
-            flipped && "is-flipped",
-          )}
-          aria-label="Flip"
-          aria-pressed={flipped}
-        >
-          <div className="carded-face carded-front">
-            <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-              Front
-            </span>
-            <MarkdownBody source={frontSource} />
-            <span className="mt-6 text-xs text-muted-foreground">Flip</span>
-          </div>
+      <div className="dreamland:relative dreamland:sm:flex dreamland:sm:items-start dreamland:sm:gap-[18px]">
+        <div className="carded-scene min-w-0 dreamland:max-sm:mr-16 dreamland:sm:flex-1">
           <div
-            className="carded-face carded-back"
-            inert={!flipped}
-            onClick={(event) => {
-              if (isInteractiveInsideFace(event.target)) event.stopPropagation();
-            }}
+            role="button"
+            tabIndex={0}
+            onClick={toggleFlip}
             onKeyDown={(event) => {
-              if (isInteractiveInsideFace(event.target)) event.stopPropagation();
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                toggleFlip();
+              }
             }}
+            className={cn(
+              "carded-flipper group outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+              flipped && "is-flipped",
+            )}
+            aria-label="Flip"
+            aria-pressed={flipped}
           >
-            <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-              Back
-            </span>
-            <MarkdownBody source={card.back} />
-            <span className="mt-6 text-xs text-muted-foreground">Flip</span>
+            <div className="carded-face carded-front">
+              <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+                Front
+              </span>
+              <MarkdownBody source={frontSource} />
+              <span className="mt-6 text-xs text-muted-foreground">Flip</span>
+            </div>
+            <div
+              className="carded-face carded-back"
+              inert={!flipped}
+              onClick={(event) => {
+                if (isInteractiveInsideFace(event.target)) event.stopPropagation();
+              }}
+              onKeyDown={(event) => {
+                if (isInteractiveInsideFace(event.target)) event.stopPropagation();
+              }}
+            >
+              <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+                Back
+              </span>
+              <MarkdownBody source={card.back} />
+              <span className="mt-6 text-xs text-muted-foreground">Flip</span>
+            </div>
           </div>
         </div>
+        <KirbyCompanion
+          size="md"
+          reaction={kirby}
+          className="shrink-0 max-sm:absolute max-sm:top-0 max-sm:right-0 max-sm:w-16 sm:sticky sm:top-[120px]"
+        />
       </div>
       ) : null}
 

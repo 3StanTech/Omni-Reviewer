@@ -40,5 +40,9 @@ export async function POST(
   const result = await reviewCard({ reviewerId, userId, cardId, ...parsed.data });
   if (!result) return NextResponse.json({ error: "Card not found" }, { status: 404 });
   if ("stale" in result) return NextResponse.json({ error: "This card changed elsewhere. Reload before reviewing.", stale: true }, { status: 409 });
-  return NextResponse.json({ card: serializeCard(result) });
+  return NextResponse.json({
+    card: serializeCard(result),
+    rating: result.savedRating,
+    replayed: result.replayed,
+  });
 }

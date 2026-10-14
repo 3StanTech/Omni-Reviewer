@@ -11,11 +11,11 @@ import {
 } from "react";
 import { readLocalStorage, writeLocalStorage } from "@/lib/safe-storage";
 
-export type LookId = "day" | "night";
+export type LookId = "dreamland" | "day" | "night";
 
-export const LOOK_IDS: LookId[] = ["day", "night"];
+export const LOOK_IDS: LookId[] = ["dreamland", "day", "night"];
 
-export const DEFAULT_LOOK: LookId = "night";
+export const DEFAULT_LOOK: LookId = "dreamland";
 export const LOOK_STORAGE_KEY = "omni-look";
 
 const LOOK_CHANGE_EVENT = "omni-look-change";

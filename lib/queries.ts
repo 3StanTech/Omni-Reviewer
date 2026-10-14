@@ -3316,6 +3316,9 @@ export async function recordTestAttempts(args: {
   return { stats: await listTestAttemptStats(args.reviewerId, args.userId) };
 }
 
+/** A saved card review: the card as stored now, the rating that was saved, and whether this request replayed an earlier save. */
+export type ReviewedCard = LearningCard & { savedRating: CardRating; replayed: boolean };
+
 export async function reviewCard(args: {
   reviewerId: string;
   userId: string;
@@ -3323,7 +3326,7 @@ export async function reviewCard(args: {
   expectedRevision: number;
   rating: CardRating;
   clientRequestId?: string;
-}): Promise<LearningCard | { stale: true } | null> {
+}): Promise<ReviewedCard | { stale: true } | null> {
   const reviewer = await getReviewer(args.reviewerId, args.userId);
   if (!reviewer) return null;
   const [current] = await db
@@ -3381,7 +3384,11 @@ export async function reviewCard(args: {
         revision = revision + 1,
         updated_at = ${reviewedAt}
   `;
-  const enrich = async (row: Card) => (await toLearningCards([row], reviewer.examDate))[0]!;
+  const enrich = async (row: Card, savedRating: CardRating, replayed: boolean): Promise<ReviewedCard> => ({
+    ...(await toLearningCards([row], reviewer.examDate))[0]!,
+    savedRating,
+    replayed,
+  });
   if (!requestId) {
     const result = await db.execute(sql`
       WITH updated AS (
@@ -3428,7 +3435,7 @@ export async function reviewCard(args: {
     `);
     const [updated] = result.rows;
     if (!updated) return { stale: true as const };
-    return enrich(normalizeReviewedCard(updated, current));
+    return enrich(normalizeReviewedCard(updated, current), args.rating, false);
   }
   const result = await db.execute(sql`
     WITH existing_request AS MATERIALIZED (
@@ -3488,9 +3495,9 @@ export async function reviewCard(args: {
     INNER JOIN inserted ON inserted.card_id = updated.id
   `);
   const [updated] = result.rows;
-  if (updated) return enrich(normalizeReviewedCard(updated, current));
+  if (updated) return enrich(normalizeReviewedCard(updated, current), args.rating, false);
   const [replay] = await db
-    .select({ cardId: cardReviews.cardId })
+    .select({ rating: cardReviews.rating })
     .from(cardReviews)
     .where(
       and(
@@ -3506,7 +3513,7 @@ export async function reviewCard(args: {
       .from(cards)
       .where(and(eq(cards.id, args.cardId), eq(cards.reviewerId, args.reviewerId)))
       .limit(1);
-    return enrich(latest ?? current);
+    return enrich(latest ?? current, replay.rating, true);
   }
   return { stale: true as const };
 }

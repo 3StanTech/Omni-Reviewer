@@ -81,6 +81,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
       selectedTopicId={selectedId}
       dueByTopic={dueByTopic}
       dueTodayTotal={dueTodayTotal}
+      companion
     >
       <StudyHome
         topics={serializedTopics}

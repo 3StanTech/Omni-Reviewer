@@ -11,9 +11,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const LOOK_MENU: { id: LookId; label: string }[] = [
-  { id: "day", label: "Day" },
-  { id: "night", label: "Night" },
+// Swatch = the mood's page tone ringed by its accent (values from app/globals.css).
+const LOOK_MENU: { id: LookId; label: string; page: string; accent: string }[] = [
+  { id: "dreamland", label: "Dream Land", page: "#ffe4ee", accent: "#c2185b" },
+  { id: "day", label: "Day", page: "#f3f6fb", accent: "#1d4ed8" },
+  { id: "night", label: "Night", page: "#151c2b", accent: "#4fd1c5" },
 ];
 
 const MOOD_LABEL = "Change today's mood";
@@ -121,7 +123,14 @@ export function MoodControl() {
               )}
               onClick={() => selectLook(item.id)}
             >
-              <span>{item.label}</span>
+              <span className="flex items-center gap-2.5">
+                <span
+                  aria-hidden="true"
+                  className="size-[18px] shrink-0 rounded-full border border-black/15"
+                  style={{ background: item.page, boxShadow: `inset 0 0 0 5px ${item.accent}` }}
+                />
+                {item.label}
+              </span>
               {selected ? <Check weight="bold" className="size-4" /> : null}
             </button>
           );

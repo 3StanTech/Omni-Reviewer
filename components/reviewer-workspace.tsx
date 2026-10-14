@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { CalendarBlank, CaretRight, Files } from "@phosphor-icons/react";
 
 import type { ViewsPayload } from "@/lib/serialize-view";
 import {
@@ -17,9 +18,10 @@ import { ViewTabs } from "@/components/view-tabs";
 import { GenerationControls, type FreeRequestQuota } from "@/components/generation-controls";
 import { GenerationStatus } from "@/components/generation-status";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
-import type { ModeMenuItem } from "@/components/mode-toolbar";
+import { RAIL_HEADER_CLASS, type ModeMenuItem } from "@/components/mode-toolbar";
 import { PackReadyNotice } from "@/components/pack-ready-notice";
 import { Button } from "@/components/ui/button";
+import { Panel, PanelHeader } from "@/components/ui/panel";
 import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
@@ -95,6 +97,8 @@ export type SerializedAttemptStats = {
 };
 
 const MS_PER_DAY = 86_400_000;
+/** A full-width row in the rail's Pack panel. */
+const RAIL_PACK_ITEM_CLASS = "h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2.5 font-normal last:rounded-b-[calc(var(--radius)-1px)]";
 const READING_SLIDES_NOTE =
   "Reading slide images first. Generate unlocks when it finishes.";
 
@@ -491,18 +495,26 @@ export function ReviewerWorkspace({
 
   // The rail repeats the pack items (More keeps them: the rail is not always visible).
   const railPack = hasViews ? (
-    <section aria-labelledby="rail-pack-heading" className="space-y-1">
-      <h3 id="rail-pack-heading" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+    <Panel aria-labelledby="rail-pack-heading" className="bg-rail">
+      <PanelHeader className={RAIL_HEADER_CLASS} label={<span id="rail-pack-heading">
         Pack
-      </h3>
-      <Button type="button" variant="ghost" size="sm" className="h-9 min-h-9 w-full justify-start" onClick={() => setSourcesOpen(true)}>
-        {sourcesLabel}
-      </Button>
-      {unreadableHint ? <p className="px-3 text-xs text-muted-foreground">{unreadableHint}</p> : null}
-      <Button type="button" variant="ghost" size="sm" className="h-9 min-h-9 w-full justify-start" onClick={() => setExamDateOpen(true)}>
-        {examDateLabel}
-      </Button>
-    </section>
+      </span>} />
+      <div className="divide-y divide-divider">
+        <div>
+          <Button type="button" variant="ghost" size="sm" className={RAIL_PACK_ITEM_CLASS} onClick={() => setSourcesOpen(true)}>
+            <Files weight="bold" aria-hidden />
+            {sourcesLabel}
+            <CaretRight weight="bold" aria-hidden className="ml-auto text-muted-foreground" />
+          </Button>
+          {unreadableHint ? <p className="px-4 pb-2.5 text-xs text-muted-foreground">{unreadableHint}</p> : null}
+        </div>
+        <Button type="button" variant="ghost" size="sm" className={RAIL_PACK_ITEM_CLASS} onClick={() => setExamDateOpen(true)}>
+          <CalendarBlank weight="bold" aria-hidden />
+          {examDateLabel}
+          <CaretRight weight="bold" aria-hidden className="ml-auto text-muted-foreground" />
+        </Button>
+      </div>
+    </Panel>
   ) : null;
 
   // Client only: the countdown and the stamp depend on the viewer's clock and zone.
@@ -703,8 +715,8 @@ export function ReviewerWorkspace({
   return (
     <AskProvider reviewerId={reviewerId} sections={sectionMastery} initialSavedCount={savedAnswerCount} onCardCreated={refreshCards}>
     <FocusModeProvider>
-    <div data-draft-guarded className={hasViews ? "flex flex-col gap-10" : "flex flex-col gap-8"}>
-      <div data-focus-hide className="min-w-0 space-y-1">
+    <div data-draft-guarded className={hasViews ? "flex flex-col gap-4" : "flex flex-col gap-8"}>
+      <Panel as="div" data-focus-hide className="min-w-0 space-y-1 p-4 print:border-0 print:p-0 print:shadow-none">
         <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
           <Link
             href={`/?topic=${topicId}`}
@@ -728,7 +740,7 @@ export function ReviewerWorkspace({
             <p className="text-sm text-muted-foreground">{headerMeta.join(" \u00b7 ")}</p>
           ) : null}
         </div>
-      </div>
+      </Panel>
 
       {hasViews ? (
         <>
