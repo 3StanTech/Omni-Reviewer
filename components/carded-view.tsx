@@ -249,6 +249,7 @@ export function CardedView({
     setClozeRevealed(false);
     setScheduleHint(null);
     setError(null);
+    setKirby(null);
   }
 
   function enterDue() {

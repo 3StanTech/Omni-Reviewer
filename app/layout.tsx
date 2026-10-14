@@ -9,6 +9,7 @@ import {
 
 import { KirbyDefs } from "@/components/kirby-companion";
 import { LookProvider } from "@/components/look-provider";
+import { LOOK_THEME_COLOR } from "@/lib/look-theme";
 
 import "./globals.css";
 
@@ -37,7 +38,8 @@ const uiMono = IBM_Plex_Mono({
   weight: ["400", "500"],
 });
 
-const lookBootstrap = `(function(){try{var v=localStorage.getItem("omni-look");var look=v==="dreamland"||v==="day"||v==="night"?v:(v==="thea"||v==="remnote"?"day":"dreamland");var el=document.documentElement;el.setAttribute("data-look",look);el.classList.toggle("dark",look==="night");}catch(e){}})();`;
+// Mirrors normalizeLook and applyLookToDocument (components/look-provider.tsx) before first paint.
+const lookBootstrap = `(function(){try{var c=${JSON.stringify(LOOK_THEME_COLOR)};var v=localStorage.getItem("omni-look");var look=v==="dreamland"||v==="day"||v==="night"?v:(v==="thea"||v==="remnote"?"day":"dreamland");var el=document.documentElement;el.setAttribute("data-look",look);el.classList.toggle("dark",look==="night");var m=document.querySelectorAll('meta[name="theme-color"]');for(var i=0;i<m.length;i++)m[i].setAttribute("content",c[look]);}catch(e){}})();`;
 
 export const metadata: Metadata = {
   title: "Omni-Reviewer",
@@ -50,13 +52,11 @@ export const metadata: Metadata = {
   },
 };
 
-// Light: the default Dream Land look's `--page: #fff6ec`. Dark: the Night look's
-// page tone converted to hex (app/globals.css).
+// One unqualified theme-color: the browser bar follows the chosen mood, not the OS
+// scheme. Server HTML carries the default Dream Land tone; lookBootstrap and
+// applyLookToDocument rewrite it from LOOK_THEME_COLOR (lib/look-theme.ts).
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fff6ec" },
-    { media: "(prefers-color-scheme: dark)", color: "#030a13" },
-  ],
+  themeColor: LOOK_THEME_COLOR.dreamland,
   viewportFit: "cover",
 };
 

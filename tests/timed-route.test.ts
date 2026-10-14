@@ -103,7 +103,7 @@ describe("timed Test Me route contracts", () => {
     });
   });
 
-  it("resumes an active persisted session with its answered item ids", async () => {
+  it("resumes an active persisted session with its answered items and their saved correctness", async () => {
     activeSessionMock.mockResolvedValue({
       id: "session-000000000000001",
       userId: "user-1",
@@ -113,15 +113,19 @@ describe("timed Test Me route contracts", () => {
       expiresAt: new Date(Date.now() + 59_000),
       status: "active",
       completedAt: null,
-      answeredCount: 1,
-      answeredItemIds: ["q1"],
+      answeredCount: 2,
+      answeredItemIds: ["q1", "q2"],
+      answeredResults: { q1: true, q2: false },
     });
     const response = await sessionGet(
       new Request("https://omni-reviewer.example/api/reviewers/reviewer-1/test-attempts/session?expectedRevision=2"),
       { params: Promise.resolve({ id: "reviewer-1" }) },
     );
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ answeredItemIds: ["q1"] });
+    await expect(response.json()).resolves.toMatchObject({
+      answeredItemIds: ["q1", "q2"],
+      answeredResults: { q1: true, q2: false },
+    });
   });
 
   it("returns a successful empty sentinel when no session exists yet", async () => {

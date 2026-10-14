@@ -39,7 +39,7 @@ reading mode, select text to add an allowlisted highlight or note. Annotations
 are owner- and revision-scoped, and displaced quotes remain available under
 Earlier version. Contents, Notes, and reading position are optional disclosures.
 
-The active visual choices are Day and Night. Existing Thea-Style or
+The moods are Dream Land (the default), Day and Night. Existing Thea-Style or
 RemNote-Style local preferences are normalized to Day without changing study
 data.
 

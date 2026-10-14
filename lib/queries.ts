@@ -1601,6 +1601,8 @@ export type TimedTestSessionRow = {
   completedAt: Date | null;
   answeredCount: number;
   answeredItemIds: string[];
+  /** Saved correctness per answered item, so a resumed run keeps its score. */
+  answeredResults: Record<string, boolean>;
 };
 
 function asSessionDate(value: unknown, field: string): Date {
@@ -1621,6 +1623,21 @@ function asAnsweredItemIds(value: unknown): string[] {
   return Array.isArray(parsed)
     ? parsed.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function asAnsweredResults(value: unknown): Record<string, boolean> {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed) as unknown;
+    } catch {
+      parsed = {};
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return Object.fromEntries(
+    Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean"),
+  );
 }
 
 function normalizeTimedSessionRow(row: Record<string, unknown>): TimedTestSessionRow {
@@ -1650,6 +1667,7 @@ function normalizeTimedSessionRow(row: Record<string, unknown>): TimedTestSessio
         : null,
     answeredCount,
     answeredItemIds: asAnsweredItemIds(row.answered_item_ids ?? row.answeredItemIds),
+    answeredResults: asAnsweredResults(row.answered_results ?? row.answeredResults),
   };
 }
 
@@ -1719,9 +1737,10 @@ export async function getActiveTimedTestSession(args: {
     .limit(1);
   if (!row || !row.expiresAt) return null;
   const attempts = await db
-    .select({ itemId: testAttempts.itemId })
+    .select({ itemId: testAttempts.itemId, correct: testAttempts.correct })
     .from(testAttempts)
-    .where(eq(testAttempts.sessionId, row.id));
+    .where(eq(testAttempts.sessionId, row.id))
+    .orderBy(asc(testAttempts.attemptedAt));
   return {
     id: row.id,
     userId: row.userId,
@@ -1733,6 +1752,7 @@ export async function getActiveTimedTestSession(args: {
     completedAt: row.completedAt,
     answeredCount: row.answeredCount,
     answeredItemIds: attempts.map((attempt) => attempt.itemId),
+    answeredResults: Object.fromEntries(attempts.map((attempt) => [attempt.itemId, attempt.correct])),
   };
 }
 
@@ -1830,7 +1850,15 @@ export async function createOrResumeTimedTestSession(args: {
           WHERE a.session_id = claimed.id
         ),
         '[]'::json
-      ) AS answered_item_ids
+      ) AS answered_item_ids,
+      COALESCE(
+        (
+          SELECT JSON_OBJECT_AGG(a.item_id, a.correct)
+          FROM test_attempts AS a
+          WHERE a.session_id = claimed.id
+        ),
+        '{}'::json
+      ) AS answered_results
     FROM claimed
   `);
   const row = result.rows[0] as Record<string, unknown> | undefined;

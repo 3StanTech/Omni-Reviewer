@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { LOOK_THEME_COLOR } from "@/lib/look-theme";
 import { readLocalStorage, writeLocalStorage } from "@/lib/safe-storage";
 
 export type LookId = "dreamland" | "day" | "night";
@@ -42,6 +43,10 @@ export function applyLookToDocument(look: LookId) {
   const root = document.documentElement;
   root.dataset.look = look;
   root.classList.toggle("dark", look === "night");
+  // The browser bar follows the mood, not the OS scheme.
+  document
+    .querySelectorAll('meta[name="theme-color"]')
+    .forEach((meta) => meta.setAttribute("content", LOOK_THEME_COLOR[look]));
 }
 
 function readStoredLook(): LookId {
@@ -66,6 +71,20 @@ export function LookProvider({ children }: { children: ReactNode }) {
 
   useLayoutEffect(() => {
     applyLookToDocument(look);
+    // Navigation can re-insert the server's theme-color meta; keep it on the mood.
+    const color = LOOK_THEME_COLOR[look];
+    const observer = new MutationObserver(() => {
+      document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+        if (meta.getAttribute("content") !== color) meta.setAttribute("content", color);
+      });
+    });
+    observer.observe(document.head, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["content"],
+    });
+    return () => observer.disconnect();
   }, [look]);
 
   const setLook = useCallback((next: LookId) => {

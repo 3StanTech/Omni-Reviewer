@@ -45,6 +45,7 @@ function sessionResponse(row: TimedTestSessionRow, userId: string, reviewerId: s
     durationSeconds: timed.durationSeconds,
     answeredCount: row.answeredCount,
     answeredItemIds: row.answeredItemIds,
+    answeredResults: row.answeredResults,
   };
 }
 

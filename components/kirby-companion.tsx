@@ -39,20 +39,26 @@ const LABEL_FONT: CSSProperties = { fontFamily: "var(--font-ui), sans-serif" };
 
 /* One passive pointermove listener and one idle timer serve every mounted Kirby. */
 const instances = new Set<SVGSVGElement>();
+/* Kirbys mid-reaction; the idle sleep waits until their reaction ends. */
+const reacting = new Set<SVGSVGElement>();
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
+let lastActivity = 0;
+let reducedMotion: MediaQueryList | undefined;
 
 function sleepAll() {
-  for (const kirby of instances) kirby.classList.add("k-sleep");
+  for (const kirby of instances) if (!reacting.has(kirby)) kirby.classList.add("k-sleep");
 }
 
 function wake() {
   for (const kirby of instances) kirby.classList.remove("k-sleep");
+  lastActivity = Date.now();
   clearTimeout(idleTimer);
   idleTimer = setTimeout(sleepAll, SLEEP_AFTER_MS);
 }
 
 function followPointer(event: PointerEvent) {
   wake();
+  if (reducedMotion?.matches) return;
   for (const kirby of instances) {
     const rect = kirby.getBoundingClientRect();
     if (!rect.width) continue;
@@ -72,23 +78,41 @@ function followPointer(event: PointerEvent) {
   }
 }
 
+/* Reduced motion keeps Kirby still: drop any pointer-driven look and lean. */
+function onMotionPreference() {
+  if (!reducedMotion?.matches) return;
+  for (const kirby of instances) {
+    kirby.querySelector(".k-look")?.removeAttribute("transform");
+    kirby.querySelector(".k-lean")?.removeAttribute("transform");
+  }
+}
+
 function register(kirby: SVGSVGElement) {
   instances.add(kirby);
   if (instances.size === 1) {
     window.addEventListener("pointermove", followPointer, { passive: true });
+    reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reducedMotion.addEventListener("change", onMotionPreference);
   }
   wake();
 }
 
 function unregister(kirby: SVGSVGElement) {
   instances.delete(kirby);
+  reacting.delete(kirby);
   if (instances.size === 0) {
     window.removeEventListener("pointermove", followPointer);
+    reducedMotion?.removeEventListener("change", onMotionPreference);
+    reducedMotion = undefined;
     clearTimeout(idleTimer);
   }
 }
 
-/** Plays one timed state; the reflow restarts it when the same state plays twice in a row. */
+/**
+ * Plays one timed state; the reflow restarts it when the same state plays twice in a row.
+ * Sleep is held off while it plays, then resumes if the idle interval has already passed
+ * (otherwise the pending idle timer still covers it).
+ */
 function play(
   kirby: SVGSVGElement,
   timer: { current: ReturnType<typeof setTimeout> | undefined },
@@ -97,8 +121,15 @@ function play(
   kirby.classList.remove("k-happy", "k-sad", "k-press", "k-sleep");
   void kirby.getBoundingClientRect();
   kirby.classList.add(`k-${state}`);
+  reacting.add(kirby);
   clearTimeout(timer.current);
-  timer.current = setTimeout(() => kirby.classList.remove(`k-${state}`), STATE_MS[state]);
+  timer.current = setTimeout(() => {
+    kirby.classList.remove(`k-${state}`);
+    reacting.delete(kirby);
+    if (instances.has(kirby) && Date.now() - lastActivity >= SLEEP_AFTER_MS) {
+      kirby.classList.add("k-sleep");
+    }
+  }, STATE_MS[state]);
 }
 
 /** Kirby's gradients, rendered once in the root layout (never inside a hidden subtree). */

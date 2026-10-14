@@ -351,9 +351,8 @@ function UntimedSitting({
         selectedAnswer: answer,
         correct: isCorrect(answer, item.answer),
       };
-      if (!data.alreadySaved) {
-        setKirby({ outcome: accepted.correct ? "happy" : "sad", key: Date.now() });
-      }
+      // A replayed answer (alreadySaved) gets no reaction, and drops any earlier one.
+      setKirby(data.alreadySaved ? null : { outcome: accepted.correct ? "happy" : "sad", key: Date.now() });
       const answeredIds = new Set([...session.answers.map((entry) => entry.itemId), accepted.itemId]);
       if (data.completed === true || session.itemIds.every((itemId) => answeredIds.has(itemId))) markFinished();
       setSession((current) => {

@@ -42,6 +42,8 @@ type TimedSessionResponse = {
   durationSeconds: number;
   answeredCount?: number;
   answeredItemIds?: string[];
+  /** Saved correctness per answered item; absent from older responses. */
+  answeredResults?: Record<string, boolean>;
 };
 
 type TimedSessionLookupResponse = TimedSessionResponse | { session: null };
@@ -105,6 +107,20 @@ export function TimedTestMe({
     const answeredItemIds = Array.isArray(data.answeredItemIds)
       ? data.answeredItemIds.filter((itemId) => typeof itemId === "string")
       : [];
+    const currentItems = itemsRef.current;
+    // Restore the saved score for answered items still in this run's question list.
+    const answeredResults: Record<string, boolean> = {};
+    if (data.answeredResults && typeof data.answeredResults === "object") {
+      for (const [itemId, correct] of Object.entries(data.answeredResults)) {
+        if (
+          typeof correct === "boolean" &&
+          answeredItemIds.includes(itemId) &&
+          currentItems.some((item) => item.id === itemId)
+        ) {
+          answeredResults[itemId] = correct;
+        }
+      }
+    }
     if (
       !data.sessionToken ||
       !data.sessionId ||
@@ -114,7 +130,6 @@ export function TimedTestMe({
     ) {
       return false;
     }
-    const currentItems = itemsRef.current;
     const nextIndex = currentItems.findIndex((candidate) => !answeredItemIds.includes(candidate.id));
     setSession({ ...data, expiresAtMs, answeredItemIds });
     setStarted(true);
@@ -124,7 +139,7 @@ export function TimedTestMe({
     setIndex(nextIndex === -1 ? Math.max(0, currentItems.length - 1) : nextIndex);
     setSelected("");
     setSubmitted(false);
-    setResults({});
+    setResults(answeredResults);
     setSecondsRemaining(Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000)));
     return true;
   }, []);
