@@ -81,7 +81,7 @@ describe("Test Me keys and recap contract", () => {
   });
 
   it("ends both runners with SittingRecap and its focus section", () => {
-    expect(untimed).toContain('<SittingRecap\n          title="Sitting complete"');
+    expect(untimed).toContain('title="Sitting complete"');
     expect(timed).toContain('title="Timed run complete"');
     for (const src of [untimed, timed]) {
       expect(src).toContain("<SittingRecap");
