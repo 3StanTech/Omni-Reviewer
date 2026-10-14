@@ -101,7 +101,7 @@
   --reading-foreground: #4a2236;
   --success: #3f7d4a;
   --success-foreground: #fbf6ea;
-  --warning: #b45309;
+  --warning: #78350f; /* AA 4.5:1 for unsourced-tag text on its /28 hover tint */
   --warning-foreground: #1f2a44;
   --chart-1: #c2185b;
   --chart-2: #85566b;
@@ -154,7 +154,7 @@
   --reading-foreground: #172554;
   --success: #3f7d4a;
   --success-foreground: #fbf6ea;
-  --warning: #b45309;
+  --warning: #78350f; /* AA 4.5:1 for unsourced-tag text on its /28 hover tint */
   --warning-foreground: #1f2a44;
   --chart-1: #1d4ed8;
   --chart-2: #526078;

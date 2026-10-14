@@ -295,8 +295,9 @@ export function ViewTabs({
           className={cn(
             "min-w-0 flex-1 overflow-x-auto border-b-0",
             // Phones: the tabs own row 1 so the tools wrap to row 2. The rounding clips the selected tab's
-            // fill to the frame's corners (top corners only on phones).
-            "rounded-l-[calc(var(--radius)-1px)] max-sm:basis-full max-sm:rounded-t-[calc(var(--radius)-1px)] max-sm:rounded-bl-none",
+            // fill to the frame's corners (top corners only on phones). The `data-[variant=line]:` prefix outranks the line
+            // variant's `rounded-none` in ui/tabs.tsx.
+            "data-[variant=line]:rounded-l-[calc(var(--radius)-1px)] max-sm:basis-full max-sm:data-[variant=line]:rounded-t-[calc(var(--radius)-1px)] max-sm:data-[variant=line]:rounded-bl-none",
             compact && "min-h-11 gap-0 p-0",
           )}
           aria-label="Study modes"

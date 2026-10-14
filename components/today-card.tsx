@@ -7,7 +7,7 @@ import { CalendarCheck, CaretRight } from "@phosphor-icons/react";
 import type { TodayHrefs } from "@/components/today-modal";
 import { StudyHelp } from "@/components/study-help";
 import { Button } from "@/components/ui/button";
-import { Panel } from "@/components/ui/panel";
+import { Panel, PanelHeader } from "@/components/ui/panel";
 import {
   todayBarParts,
   WEAK_SECTION_DEFINITION,
@@ -67,17 +67,12 @@ export function TodayCard({
   const first = plan.doFirst[0];
   return (
     <Panel aria-label="Today">
-      {/* PanelHeader's look without its truncating label: the card never truncates. */}
-      <div
-        data-slot="panel-header"
-        className="flex items-center justify-between gap-3 rounded-t-[var(--radius)] border-b border-divider bg-card-head px-4 py-2.5"
-      >
-        <p className="flex items-center gap-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-          <CalendarCheck weight="bold" aria-hidden className="size-4 shrink-0" />
-          Today
-        </p>
-        <span className="text-xs font-medium text-muted-foreground">All topics</span>
-      </div>
+      <PanelHeader
+        label="Today"
+        icon={<CalendarCheck weight="bold" aria-hidden className="size-4 shrink-0" />}
+        actions={<span className="text-xs font-medium text-muted-foreground">All topics</span>}
+        wrapLabel
+      />
       <div className="flex flex-wrap items-center gap-4 p-4">
         {plan.empty ? (
           <p className="text-sm text-muted-foreground">Nothing due today</p>

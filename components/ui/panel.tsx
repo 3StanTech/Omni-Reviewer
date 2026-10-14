@@ -33,10 +33,12 @@ type PanelHeaderProps = {
   label: React.ReactNode;
   icon?: React.ReactNode;
   actions?: React.ReactNode;
+  /** Let the label wrap instead of truncating (the Today card never truncates). */
+  wrapLabel?: boolean;
   className?: string;
 };
 
-function PanelHeader({ label, icon, actions, className }: PanelHeaderProps) {
+function PanelHeader({ label, icon, actions, wrapLabel = false, className }: PanelHeaderProps) {
   return (
     <div
       data-slot="panel-header"
@@ -47,7 +49,7 @@ function PanelHeader({ label, icon, actions, className }: PanelHeaderProps) {
     >
       <div className="flex min-w-0 items-center gap-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
         {icon}
-        <span className="truncate">{label}</span>
+        <span className={wrapLabel ? undefined : "truncate"}>{label}</span>
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </div>

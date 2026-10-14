@@ -35,12 +35,12 @@ Structure tokens: `--page` (page tint, mapped to `--background`), `--card-head` 
 
 | Token | Intent |
 | --- | --- |
-| `--background` | Graphite night or white day workspace |
+| `--background` | Warm cream (Dream Land), pale blue-grey (Day) or graphite (Night) workspace |
 | `--chrome` / header | Slightly cooler / darker frame |
 | `--card` / `--surface` | Raised panels |
 | `--foreground` | Cool readable foreground |
 | `--muted-foreground` | Secondary labels |
-| `--primary` | Teal night or cobalt day action |
+| `--primary` | Berry (Dream Land), cobalt (Day) or teal (Night) action |
 | `--reading` | Calm reading surface |
 | `--reading-foreground` | Readable document text |
 | `--success` | Available for success states; unused for Ready (badge no longer shown) |
@@ -53,7 +53,7 @@ Accent is for selection and primary CTAs only, not decoration.
 
 - **Panels**: every group on the desk and the pack-page chrome is a `Panel` (`components/ui/panel.tsx`) with an optional `PanelHeader` band (small uppercase label left, actions right). Rows inside a panel are split by `--divider` hairlines. Looks restyle panels through tokens only; no per-look markup.
 - App shell: slim top bar (wordmark, Change today's mood, sign out), content column max 1024px on the desk. The pack page is wide: header and main up to 90rem (1440px).
-- Home: topic tab strip full width, then reviewer list. The topic shelf is a separate home library surface.
+- Home: Today card, the generation queue while it has rows, then the Study packs panel, whose topic chips sit under its header band and above the pack rows. The topic shelf is a separate home library surface.
 - Workspace: header (breadcrumb; title with a meta line: exam countdown · Generated stamp), then one sticky **strip**, then the study document. Before first generate, sources stay expanded inline above the study.
 - **Strip**: a framed panel (`bg-strip`, rounded border, tabs split by dividers, selected tab on the card surface with the underline); mode tabs left; the active mode's tools right (Locked In and Summary: claims chip `N/M sourced`, Contents, Notes, Edit, Download; Test Me and Carded: Focus), then **More** (⋯). Solid background, no backdrop filter (it would trap fixed sheets). On phones: tabs on one row, tools on a second, labels hidden behind icons, every control 44px. In Focus mode only the Focus toggle stays.
 - **More**: (1) the mode's own actions (Check again, Open slides, Pin, Earlier version), (2) Redo for the active mode with its one-line description and requests left today, (3) pack items: Sources (n) with any unreadable pages, Exam date. Sources and Exam date open dialogs.
@@ -80,7 +80,7 @@ Accent is for selection and primary CTAs only, not decoration.
 - **Dates**: one stamp, `Oct 6, 1:36 PM`, in the viewer's zone. Server renders show the label without a time (no UTC text). Days read `Oct 9`.
 - **Change today's mood**: not a primary CTA. Hover/focus opens the look menu on fine pointers; click toggles on coarse pointers.
 - **Desk greeting**: "Good morning/afternoon/evening, Name" with the subtitle. In Dream Land it becomes a speech bubble whose tail points at Kirby on the right, and the name gets "!" (Day and Night keep the plain greeting, no "!"). Gated by CSS (`dreamland:` variant), never by React state, so it never flashes.
-- **Kirby companion** (`components/kirby-companion.tsx`, Dream Land only): hand-coded SVG fan art for this private app; never add Nintendo assets or ship it publicly. Gradients render once in `KirbyDefs` (root layout), never inside a hidden subtree. Places: the desk greeting (124px, 84px on phones), untimed Test Me beside the question and on its recap (the last answer reacts there), the timed Test Me recap only (never during the timer), and Carded beside the card (112px; 64px in the panel corner at 640px and below, without narrowing the question or card). States: idle bob and blink; eyes and lean follow the pointer; hover waves; click squashes with "poyo!"; sleeps after 20 s without pointer movement; a saved correct answer or Good plays the victory hop with a star burst; a wrong answer or Again plays a droop with a sweat drop. Reactions fire only after an answer or rating is accepted (never on a 409 or an error); a replayed Carded save reacts with the rating the server saved, not the button tapped. Reduced motion stops every animation while expressions still change. Print-hidden. Kirby never covers study text, choices, the card or its buttons.
+- **Kirby companion** (`components/kirby-companion.tsx`, Dream Land only): hand-coded SVG fan art for this private app; never add Nintendo assets or ship it publicly. Gradients render once in `KirbyDefs` (root layout), never inside a hidden subtree. Places: the desk greeting (124px, 84px on phones), untimed Test Me beside the question and on its recap (the last answer reacts there), the timed Test Me recap only (never during the timer), and Carded beside the card (112px; 64px in the panel corner at 640px and below, where the question and card reserve a 64px right margin for it). States: idle bob and blink; eyes and lean follow the pointer; hover waves; click squashes with "poyo!"; sleeps after 20 s without pointer movement; a saved correct answer or Good plays the victory hop with a star burst; a wrong answer or Again plays a droop with a sweat drop. Reactions fire only after an answer or rating is accepted (never on a 409 or an error); a replayed Carded save reacts with the rating the server saved, not the button tapped. Reduced motion stops every animation while expressions still change. Print-hidden. Kirby never covers study text, choices, the card or its buttons.
 - **Citation chips**: small mono `p.14` buttons inline after a claim. They open the source modal and are never part of the annotation text.
 - **Not from your uploaded sources**: amber tag with WarningCircle after an unsupported claim. Hover or focus underlines the claim in the warning color. The popover explains and offers Keep or Delete sentence.
 - **Source modal**: built on the shared Dialog. PDF pages render to a canvas, fit to width, with Slide N of M and previous/next. It closes with Escape or the backdrop and returns focus.
