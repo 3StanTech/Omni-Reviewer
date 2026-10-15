@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { stripCitations } from "@/lib/citations";
 import { parseCardedItems } from "@/lib/learning";
 import { isClozeCardFront, renderClozeText } from "@/lib/learning";
+import { kirbyHat, type KirbyHatId } from "@/lib/kirby-hat";
 import {
   captureDueQueue,
   type CapturedCard,
@@ -112,10 +113,18 @@ function reactionFor(rating: "again" | "good"): KirbyReaction {
  * A recap with Kirby in Dream Land: above it on phones, a right column from 640px.
  * The last rating's reaction plays when the recap mounts. Day and Night render the recap alone.
  */
-function WithKirby({ reaction, children }: { reaction: KirbyReaction | null; children: ReactNode }) {
+function WithKirby({
+  reaction,
+  hat,
+  children,
+}: {
+  reaction: KirbyReaction | null;
+  hat: KirbyHatId;
+  children: ReactNode;
+}) {
   return (
     <div className="dreamland:flex dreamland:flex-col dreamland:gap-2 dreamland:sm:flex-row-reverse dreamland:sm:items-start dreamland:sm:gap-[18px]">
-      <KirbyCompanion size="md" reaction={reaction} className="shrink-0 max-sm:w-16 max-sm:self-end" />
+      <KirbyCompanion size="md" reaction={reaction} hat={hat} className="shrink-0 max-sm:w-16 max-sm:self-end" />
       <div className="min-w-0 dreamland:sm:flex-1">{children}</div>
     </div>
   );
@@ -182,6 +191,8 @@ export function CardedView({
   const [scheduleHint, setScheduleHint] = useState<string | null>(null);
   // Kirby's latest rating reaction (Dream Land only); cleared when a new round starts.
   const [kirby, setKirby] = useState<KirbyReaction | null>(null);
+  // The pack's copy hat on every Carded Kirby (Dream Land only).
+  const hat = kirbyHat(reviewerId);
   const sourceViewer = useSourceViewer();
   const advanceTimer = useRef<number | null>(null);
   const reviewEpoch = useRef(0);
@@ -556,10 +567,18 @@ export function CardedView({
         />
       ) : null}
       {mode === "due" && dueSession.finished && firstAllDue.show ? (
-        <FirstCelebration kind="all-due" onDone={firstAllDue.dismiss} />
+        <FirstCelebration
+          kind="all-due"
+          onDone={firstAllDue.dismiss}
+          onShow={() => setKirby({ outcome: "dance", key: Date.now() })}
+        />
       ) : null}
       {mode === "due" && dueSession.finished ? (
-        <WithKirby reaction={kirby}>
+        // A finished due session with a saved rating ends in the victory dance (Dream Land only).
+        <WithKirby
+          reaction={kirby && dueSession.completed > 0 ? { outcome: "dance", key: kirby.key } : kirby}
+          hat={hat}
+        >
           <SittingRecap
             title="Session complete"
             lines={[
@@ -575,7 +594,7 @@ export function CardedView({
         </WithKirby>
       ) : null}
       {practiceDone ? (
-        <WithKirby reaction={kirby}>
+        <WithKirby reaction={kirby} hat={hat}>
           <SittingRecap
             title="Practice done"
             lines={[
@@ -683,6 +702,7 @@ export function CardedView({
         <KirbyCompanion
           size="md"
           reaction={kirby}
+          hat={hat}
           className="shrink-0 max-sm:absolute max-sm:top-0 max-sm:right-0 max-sm:w-16 sm:sticky sm:top-[120px]"
         />
       </div>

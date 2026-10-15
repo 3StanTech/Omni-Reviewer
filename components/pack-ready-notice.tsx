@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { CheckCircle } from "@phosphor-icons/react";
 
 /** How long the success line stays before it clears itself. */
@@ -8,9 +8,18 @@ export const PACK_READY_MS = 6000;
 
 /**
  * A short success line shown above the study after a generation finishes, in
- * place of the full generation section. Calls `onDone` once after 6 s.
+ * place of the full generation section. Calls `onDone` once after 6 s. `kirby` sits beside
+ * the line (Dream Land) without touching the timer.
  */
-export function PackReadyNotice({ label = "Pack ready", onDone }: { label?: string; onDone: () => void }) {
+export function PackReadyNotice({
+  label = "Pack ready",
+  onDone,
+  kirby,
+}: {
+  label?: string;
+  onDone: () => void;
+  kirby?: ReactNode;
+}) {
   // The latest handler, so a re-render never restarts the timer.
   const onDoneRef = useRef(onDone);
   useEffect(() => {
@@ -22,7 +31,7 @@ export function PackReadyNotice({ label = "Pack ready", onDone }: { label?: stri
     return () => window.clearTimeout(timer);
   }, []);
 
-  return (
+  const line = (
     <p
       role="status"
       data-focus-hide
@@ -31,5 +40,12 @@ export function PackReadyNotice({ label = "Pack ready", onDone }: { label?: stri
       <CheckCircle aria-hidden weight="fill" className="size-4 text-primary" />
       {label}
     </p>
+  );
+  if (!kirby) return line;
+  return (
+    <div data-focus-hide className="print-hide flex items-end gap-2 self-start">
+      {line}
+      {kirby}
+    </div>
   );
 }

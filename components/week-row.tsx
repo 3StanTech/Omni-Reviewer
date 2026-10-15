@@ -1,3 +1,4 @@
+import { CafeTreat, type CafeTreatKind, type CafeTreatState, MaximTomato } from "@/components/kirby-art";
 import { streakLine, type StudyDayState, type StudyWeek } from "@/lib/study-week";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,27 @@ const DOT_CLASS: Record<StudyDayState, string> = {
   future: "bg-muted-foreground/10",
 };
 
+/* Dream Land: a Café treat per day (Mon shortcake through Sun pancakes) in place of the dot. */
+const DAY_TREAT: Record<keyof typeof DAY_NAMES, CafeTreatKind> = {
+  Mon: "shortcake",
+  Tue: "pudding",
+  Wed: "cookie",
+  Thu: "parfait",
+  Fri: "donut",
+  Sat: "macaron",
+  Sun: "pancakes",
+};
+
+const TREAT_STATE: Record<StudyDayState, CafeTreatState> = {
+  studied: "full",
+  "today-studied": "full",
+  today: "outline",
+  missed: "plate",
+  future: "faint",
+};
+
+const TODAY_RING = "ring-2 ring-primary/50 ring-offset-2 ring-offset-card";
+
 /** The week as one sentence: the studied days, then the streak line. */
 export function weekRowLabel(week: StudyWeek): string {
   const studied = week.days
@@ -28,7 +50,10 @@ export function weekRowLabel(week: StudyWeek): string {
   return `${lead} ${streakLine(week)}.`;
 }
 
-/** Seven Mon-Sun dots for the current Manila week, with the streak line. */
+/**
+ * Seven Mon-Sun dots for the current Manila week, with the streak line. Dream Land swaps
+ * the dots for Café treats and adds a Maxim Tomato beside a streak of three days or more.
+ */
 export function WeekRow({ week }: { week: StudyWeek }) {
   return (
     <div
@@ -42,12 +67,27 @@ export function WeekRow({ week }: { week: StudyWeek }) {
             <span className="text-xs text-muted-foreground">{day.label}</span>
             <span
               data-day-state={day.state}
-              className={cn("size-2.5 rounded-full", DOT_CLASS[day.state])}
+              className={cn("size-2.5 rounded-full dreamland:hidden", DOT_CLASS[day.state])}
             />
+            <span
+              className={cn(
+                "hidden size-7 items-center justify-center rounded-full dreamland:flex",
+                (day.state === "today" || day.state === "today-studied") && TODAY_RING,
+              )}
+            >
+              <CafeTreat kind={DAY_TREAT[day.label]} state={TREAT_STATE[day.state]} className="w-6" />
+            </span>
           </li>
         ))}
       </ol>
-      <p className="text-sm font-medium text-foreground">{streakLine(week)}</p>
+      <div className="flex items-center gap-1.5">
+        {week.streak >= 3 ? (
+          <span className="hidden w-6 shrink-0 dreamland:block">
+            <MaximTomato />
+          </span>
+        ) : null}
+        <p className="text-sm font-medium text-foreground">{streakLine(week)}</p>
+      </div>
     </div>
   );
 }

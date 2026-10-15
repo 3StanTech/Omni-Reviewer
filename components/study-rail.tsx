@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, CaretDown, NotePencil } from "@phosphor-icons/react";
 
 import { useOptionalAsk } from "@/components/ask-provider";
+import { WarpStar } from "@/components/kirby-art";
 import { RAIL_HEADER_CLASS } from "@/components/mode-toolbar";
 import { scrollToStudyEnd, scrollToTop } from "@/components/scroll-jump";
 import { ContentsList, NotesList, useSectionMastery } from "@/components/study-side-panel";
@@ -168,8 +169,17 @@ export function StudyRailBody({ headings, annotations, currentId, progress }: { 
         </div>
         <div className="space-y-1.5 border-t border-divider px-4 pt-2.5 pb-3 text-xs text-muted-foreground">
           <p>Reading progress {progress}%</p>
-          <div aria-hidden className="h-1.5 overflow-hidden rounded-full bg-divider">
-            <div className="h-full rounded-full bg-primary" style={{ width: `${progress}%` }} />
+          <div aria-hidden className="relative">
+            <div className="h-1.5 overflow-hidden rounded-full bg-divider">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${progress}%` }} />
+            </div>
+            {/* Dream Land: the Warp Star rides the head of the bar, trail behind it. */}
+            <span
+              className="pointer-events-none absolute top-1/2 hidden w-7 -translate-x-[78%] -translate-y-1/2 print-hide dreamland:block"
+              style={{ left: `${progress}%` }}
+            >
+              <WarpStar />
+            </span>
           </div>
         </div>
       </Panel>

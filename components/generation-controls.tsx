@@ -2,6 +2,7 @@
 
 import { CircleNotch, Sparkle } from "@phosphor-icons/react";
 
+import { KirbyCompanion } from "@/components/kirby-companion";
 import { Button } from "@/components/ui/button";
 import type { GenerationState } from "@/lib/use-generation";
 import { cn } from "@/lib/utils";
@@ -61,14 +62,20 @@ export function GenerationControls({
         <p className="text-xs text-muted-foreground">{help}</p>
       </div>
       {quota ? (
-        <p
-          className={cn(
-            "text-xs",
-            quota.remaining < LOW_QUOTA_THRESHOLD ? "text-warning" : "text-muted-foreground",
-          )}
-        >
-          {quota.remaining} of {quota.limit} free requests left today
-        </p>
+        <div className="flex items-center gap-2">
+          <p
+            className={cn(
+              "text-xs",
+              quota.remaining < LOW_QUOTA_THRESHOLD ? "text-warning" : "text-muted-foreground",
+            )}
+          >
+            {quota.remaining} of {quota.limit} free requests left today
+            {/* Free requests reset at 00:00 UTC, 8:00 AM in Manila. */}
+            {quota.remaining === 0 ? ". More at 8:00 AM." : null}
+          </p>
+          {/* Full tummy: nothing left to inhale today (Dream Land only). */}
+          {quota.remaining === 0 ? <KirbyCompanion size="xs" pose="full" className="shrink-0" /> : null}
+        </div>
       ) : null}
       {busyReason ? (
         <p role="status" className="text-xs text-muted-foreground">

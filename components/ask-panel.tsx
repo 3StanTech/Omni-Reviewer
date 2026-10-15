@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject 
 import { CaretDown, CaretRight, ChatCircleDots, CircleNotch, PaperPlaneRight } from "@phosphor-icons/react";
 
 import { AskMessage, type MakeCardResult } from "@/components/ask-message";
+import { WaddleDee } from "@/components/kirby-art";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MAX_ASK_QUESTION_CHARS, type ChatMessageDto } from "@/lib/ask-types";
@@ -130,7 +131,8 @@ export function AskPanel({
         )}
         onClick={() => onOpenChange(true)}
       >
-        <ChatCircleDots weight="bold" className="size-[1.125rem]" aria-hidden />
+        <ChatCircleDots weight="bold" className="size-[1.125rem] dreamland:hidden" aria-hidden />
+        <WaddleDee className="hidden w-[1.375rem] dreamland:block" />
         <span className="max-[640px]:sr-only">Ask</span>
       </button>
     );
@@ -170,7 +172,8 @@ export function AskPanel({
       )}
     >
       <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <ChatCircleDots weight="bold" className="size-[1.125rem] text-primary" aria-hidden />
+        <ChatCircleDots weight="bold" className="size-[1.125rem] text-primary dreamland:hidden" aria-hidden />
+        <WaddleDee className="hidden w-[1.375rem] dreamland:block" />
         <h2 id={titleId} className="min-w-0 flex-1 text-sm font-semibold">Ask this pack</h2>
         {!empty ? (
           <Button

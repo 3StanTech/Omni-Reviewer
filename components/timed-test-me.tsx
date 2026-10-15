@@ -13,7 +13,8 @@ import {
 
 import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
 import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
-import { KirbyCompanion } from "@/components/kirby-companion";
+import { KirbyCompanion, type KirbyOutcome } from "@/components/kirby-companion";
+import { ReadyGo, GO_MS, READY_MS, waitMs, type ReadyGoPhase } from "@/components/ready-go";
 import { SittingRecap } from "@/components/sitting-recap";
 import { useSourceViewer } from "@/components/source-modal";
 import { MarkdownBody } from "@/components/study-markdown";
@@ -21,12 +22,15 @@ import { Button } from "@/components/ui/button";
 import { parseCitations, stripCitations, type Citation } from "@/lib/citations";
 import { formatSittingDuration, recapFocusSection } from "@/lib/sitting-recap";
 import { isStudyKeyTarget } from "@/lib/study-keys";
+import { kirbyHat } from "@/lib/kirby-hat";
 import { DEFAULT_TIMED_TEST_SECONDS } from "@/lib/test-timing-constants";
 import type { TestMeItem } from "@/lib/types";
 import { readApiError, cn } from "@/lib/utils";
 
 /** The share of correct answers at which Kirby celebrates the timed recap. */
 const RECAP_HAPPY_RATIO = 0.6;
+/** The share at which the celebration becomes the victory dance. */
+const RECAP_DANCE_RATIO = 0.8;
 
 type AttemptStats = {
   itemId: string;
@@ -98,6 +102,17 @@ export function TimedTestMe({
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   // Set only when this run's last accepted answer finishes it, never mid-run or on a resumed recap.
   const firstSitting = useFirstCelebration("sitting", finishedAt !== null);
+  // The first-sitting cheer makes the recap Kirby dance again (Dream Land only).
+  const [cheerDance, setCheerDance] = useState<number | null>(null);
+  // "Ready... Go!" runs before the session POST, so it never eats timed seconds.
+  const [countdown, setCountdown] = useState<ReadyGoPhase | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const inFlight = useRef(false);
   const itemsRef = useRef(items);
   useEffect(() => {
@@ -201,6 +216,13 @@ export function TimedTestMe({
   async function startRun() {
     setBusy(true);
     setMessage(null);
+    setCountdown("ready");
+    await waitMs(READY_MS);
+    if (!mounted.current) return;
+    setCountdown("go");
+    await waitMs(GO_MS);
+    if (!mounted.current) return;
+    setCountdown(null);
     try {
       const response = await fetch(`/api/reviewers/${reviewerId}/test-attempts/session`, {
         method: "POST",
@@ -305,6 +327,7 @@ export function TimedTestMe({
     setMessage(null);
     setLoadingSession(false);
     setFinishedAt(null);
+    setCheerDance(null);
   }
 
   useEffect(() => {
@@ -338,7 +361,7 @@ export function TimedTestMe({
 
   if (!started || !session) {
     return (
-      <section className="space-y-4 rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6" aria-labelledby="timed-test-title">
+      <section className="relative space-y-4 rounded-xl border border-border/80 bg-surface/50 p-4 sm:p-6" aria-labelledby="timed-test-title">
         <div className="flex items-start gap-3">
           <Clock weight="duotone" className="mt-0.5 size-6 shrink-0 text-primary" />
           <div>
@@ -356,6 +379,7 @@ export function TimedTestMe({
           <Button type="button" variant="ghost" onClick={onExit} disabled={busy}>Back to study list</Button>
         </div>
         {message ? <p role="alert" className="text-sm text-destructive">{message}</p> : null}
+        <ReadyGo phase={countdown} hat={kirbyHat(reviewerId)} />
       </section>
     );
   }
@@ -365,17 +389,22 @@ export function TimedTestMe({
       .filter((candidate) => results[candidate.id] === false)
       .map((missed) => [missed.explanation, missed.answer].filter(Boolean).join("\n"));
     const startedAtMs = Date.parse(session.startedAt);
-    // Kirby stays out of the run and reacts once when the recap mounts (Dream Land only).
-    const outcome = items.length > 0 && score / items.length >= RECAP_HAPPY_RATIO ? "happy" : "sad";
+    // Kirby stays out of the run and reacts once when the recap mounts (Dream Land only):
+    // the victory dance from 80%, happy from 60%, sad below.
+    const ratio = items.length > 0 ? score / items.length : 0;
+    const outcome: KirbyOutcome = ratio >= RECAP_DANCE_RATIO ? "dance" : ratio >= RECAP_HAPPY_RATIO ? "happy" : "sad";
     return (
       <div className="dreamland:flex dreamland:flex-col dreamland:gap-2 dreamland:sm:flex-row-reverse dreamland:sm:items-start dreamland:sm:gap-[18px]">
         <KirbyCompanion
           size="md"
-          reaction={{ outcome, key: 1 }}
+          reaction={cheerDance !== null ? { outcome: "dance", key: cheerDance } : { outcome, key: 1 }}
+          hat={kirbyHat(reviewerId)}
           className="shrink-0 max-sm:w-16 max-sm:self-end"
         />
         <div className="min-w-0 space-y-3 dreamland:sm:flex-1">
-          {firstSitting.show ? <FirstCelebration kind="sitting" onDone={firstSitting.dismiss} /> : null}
+          {firstSitting.show ? (
+            <FirstCelebration kind="sitting" onDone={firstSitting.dismiss} onShow={() => setCheerDance(Date.now())} />
+          ) : null}
           <SittingRecap
             title="Timed run complete"
             lines={[

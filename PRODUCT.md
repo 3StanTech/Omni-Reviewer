@@ -67,7 +67,7 @@ Generated only on explicit Generate or Redo. Tab changes never call the model. S
 
 1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables, KaTeX, and legacy semantic ink spans rendered neutrally; GFM footnotes are unsupported). Source of truth. It supports explicit Edit, Save changes, and Cancel.
 2. **Summary** - detailed summary of Locked In for last-minute review. It uses the same explicit Markdown editor and save/revision contract as Locked In.
-3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains. This mode has a last question. It does not schedule tomorrow's work. The recap shows the score with a percent, a breakdown by Locked In section, and each miss with the reader's answer beside the correct one.
+3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains; it opens with a short "Ready... Go!" (about 1.4 s) before the session is created, so the countdown never uses timed seconds. This mode has a last question. It does not schedule tomorrow's work. The recap shows the score with a percent, a breakdown by Locked In section, and each miss with the reader's answer beside the correct one.
 4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome ("Remaining: N to review · M new"). Each button shows its next interval. The session recap offers Practice missed and Practice all, which re-run cards without saving ratings or changing due dates; there is no Restart. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
 
 Looks (Dream Land, the default, plus Day and Night) are chrome only; Dream Land also shows the Kirby companion. Legacy Thea-Style and RemNote-Style values in local storage normalize to Day; they do not add objects or layouts.
@@ -114,9 +114,10 @@ A one-line bar on the desk sums up the day: cards due, weak sections, the neares
 ### First week
 
 - **Guide.** Until the first pack is generated, the desk shows three steps (topic, pack with a ready handout, Generate) with the current one highlighted.
-- **Greeting.** The desk subtitle follows one order in Manila time: birthday (from `BIRTHDAY_DATES`), first run, late night (23:00-03:59), cards waiting with minutes, then all caught up.
+- **Greeting.** The desk subtitle follows one order in Manila time: birthday (from `BIRTHDAY_DATES`), belated birthday during first run when the birthday was 1 to 30 days ago, first run, late night (23:00-03:59), cards waiting with minutes, then all caught up. The Dream Land Kirby follows the same order (see DESIGN.md).
 - **Study day.** A Manila calendar date with at least one Test Me answer or saved card rating. Carded practice saves no ratings, so it does not count.
 - **Week row and streak.** The Today card shows Mon-Sun dots for the current week. The streak counts consecutive study days ending today when today has study, else ending yesterday.
+- **Kirby world (Dream Land only).** Kirby and his world (copy hats per pack, Café treats on the week row, Maxim Tomato at a 3-day streak, Warp Star progress, Waddle Dee helper, Green Greens hills) are decoration on top of the same study paths: print-hidden, still under reduced motion, never covering study content, and reacting only to server-accepted results. Day and Night show none of it.
 - **Firsts.** The first generated pack, first finished sitting and first day with nothing left due each cheer once. `GET /api/firsts` returns the signed-in user's counts; a pack or sitting cheers only when its count is 1. The all-due day has no stored history, so a per-device flag (`omni-first-*`) keeps it to once per device. No schema change and no model calls.
 
 ## Generation
@@ -195,6 +196,7 @@ The header button opens a dialog that searches every pack the signed-in user own
 - Forgot password is public at `/forgot-password`. It emails a hashed, single-use, one-hour reset link via Resend. The success copy does not reveal whether the email exists. `/reset-password` is also public.
 - Middleware/proxy protects pages and APIs; unauthenticated pages go to `/login` except forgot/reset password; APIs return 401.
 - Every topic/reviewer/source/view/job API is scoped by session user. Cross-user ids return 404 (no existence leak).
+- Unknown or malformed URLs show a friendly not-found page, and unexpected errors show a recovery page (Try again, Back to desk); study data is never touched by either.
 - `OPENROUTER_API_KEY` is server-only. Client never reads it.
 - Source bytes are private application data. Upload paths, metadata, and
   retrieval are scoped to the signed-in owner and reviewer; clients must not

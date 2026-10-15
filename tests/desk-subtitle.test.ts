@@ -73,3 +73,13 @@ describe("parseBirthdayDates", () => {
     expect(parseBirthdayDates("").size).toBe(0);
   });
 });
+
+describe("deskSubtitle belated birthday", () => {
+  it("greets a first run 1 to 30 days after the birthday, before the plain first-run line", () => {
+    const firstRun = { ...base, firstRun: true, birthday: "09-26" }; // base is Oct 15, day 19
+    expect(deskSubtitle(firstRun)).toBe("Happy belated birthday, Yana! Let's set up your first study pack.");
+    expect(deskSubtitle({ ...firstRun, firstName: null })).toBe("Happy belated birthday! Let's set up your first study pack.");
+    expect(deskSubtitle({ ...firstRun, now: new Date("2026-10-26T16:00:00Z") })).toBe("Let's set up your first study pack."); // day 31
+    expect(deskSubtitle({ ...firstRun, firstRun: false })).toBe("All caught up! Nothing due today.");
+  });
+});

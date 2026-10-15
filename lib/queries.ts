@@ -118,10 +118,18 @@ export async function listTopics(userId: string): Promise<Topic[]> {
     .orderBy(asc(topics.sortOrder), asc(topics.createdAt));
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Ids arrive from URLs; a malformed one must not reach a uuid cast (it would throw, not 404). */
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
 export async function getTopic(
   id: string,
   userId: string,
 ): Promise<Topic | null> {
+  if (!isUuid(id)) return null;
   const [row] = await db
     .select()
     .from(topics)
@@ -684,6 +692,7 @@ export async function getReviewer(
   id: string,
   userId: string,
 ): Promise<Reviewer | null> {
+  if (!isUuid(id)) return null;
   const [row] = await db
     .select({
       id: reviewers.id,

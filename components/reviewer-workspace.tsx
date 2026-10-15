@@ -20,6 +20,7 @@ import { GenerationStatus } from "@/components/generation-status";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { RAIL_HEADER_CLASS, type ModeMenuItem } from "@/components/mode-toolbar";
 import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
+import { cueKirby, KirbyCompanion, type KirbyPose } from "@/components/kirby-companion";
 import { PackReadyNotice } from "@/components/pack-ready-notice";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelHeader } from "@/components/ui/panel";
@@ -33,6 +34,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatStamp } from "@/lib/format-generated-at";
+import { kirbyHat } from "@/lib/kirby-hat";
 import type { ViewKind } from "@/lib/types";
 import { useIsClient } from "@/lib/use-is-client";
 import { readApiError } from "@/lib/utils";
@@ -100,10 +102,21 @@ export type SerializedAttemptStats = {
 const MS_PER_DAY = 86_400_000;
 /** A full-width row in the rail's Pack panel. */
 const RAIL_PACK_ITEM_CLASS = "h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2.5 font-normal last:rounded-b-[calc(var(--radius)-1px)]";
+/** The Pack ready line's Kirby, reached by the first-pack cheer. */
+const PACK_READY_AREA = "pack-ready";
+const POP_OUT = { outcome: "popout", key: 1 } as const;
+/** Pop-out length in the Kirby engine; the cheer's dance waits for it. */
+const POP_OUT_MS = 900;
+
+function danceAfterPopOut() {
+  window.setTimeout(() => cueKirby(PACK_READY_AREA, "dance"), POP_OUT_MS);
+}
+
 const READING_SLIDES_NOTE =
   "Reading page images first. Generate unlocks when it finishes.";
 
-function examCountdownCopy(examDate: string): string | null {
+/** Whole days from today to the exam (0 on the day, negative after), or null for a bad date. */
+function examDaysAway(examDate: string): number | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(examDate);
   if (!match) return null;
   const year = Number(match[1]);
@@ -112,7 +125,10 @@ function examCountdownCopy(examDate: string): string | null {
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const examStart = new Date(year, month - 1, day);
-  const days = Math.round((examStart.getTime() - todayStart.getTime()) / MS_PER_DAY);
+  return Math.round((examStart.getTime() - todayStart.getTime()) / MS_PER_DAY);
+}
+
+function examCountdownCopy(days: number): string {
   if (days > 0) return `Exam in ${days} days`;
   if (days === 0) return "Exam today";
   return "Exam date passed";
@@ -208,9 +224,8 @@ export function ReviewerWorkspace({
       ),
     [views],
   );
-  const examCountdown = currentExamDate
-    ? examCountdownCopy(currentExamDate)
-    : null;
+  const examDays = currentExamDate ? examDaysAway(currentExamDate) : null;
+  const examCountdown = examDays === null ? null : examCountdownCopy(examDays);
 
   const sourcesAreMediaOnly = useMemo(() => {
     if (sources.length === 0) return false;
@@ -258,7 +273,9 @@ export function ReviewerWorkspace({
 
   function applyGenerated(next: ViewsPayload) {
     setViews(next);
-    setGeneratedAt(stampFromViews(next) ?? new Date().toISOString());
+    // Progress polls carry views before any mode is saved; keep the stamp until one is.
+    const stamp = stampFromViews(next);
+    if (stamp) setGeneratedAt(stamp);
   }
 
   function refreshCards() {
@@ -523,6 +540,17 @@ export function ReviewerWorkspace({
     isClient ? examCountdown : null,
     !generatedAt ? "Not generated yet" : generatedStamp ? `Generated ${generatedStamp}` : null,
   ].filter((item): item is string => Boolean(item));
+  // Exam headband from three days out through the exam day, from the same countdown
+  // as the meta line (client only, like it). The bubble's words repeat "Exam today".
+  const headbandKirby =
+    isClient && examDays !== null && examDays >= 0 && examDays <= 3 ? (
+      <KirbyCompanion
+        size="xs"
+        accessory="headband"
+        say={examDays === 0 ? "Good luck today!" : null}
+        className="shrink-0 self-end max-sm:[&_.kirby-say]:hidden"
+      />
+    ) : null;
 
   const sourcePanel = (
     <div data-focus-hide className="print-hide">
@@ -537,20 +565,32 @@ export function ReviewerWorkspace({
     </div>
   );
 
+  // The section's Kirby inhales while a job is queued or running and is puzzled when the
+  // server reports it failed or partial; no Kirby otherwise (one per area).
+  const generationPose: KirbyPose | null =
+    generation.state.status === "queued" || generation.state.status === "running" || generation.state.busy
+      ? "inhale"
+      : (generation.state.status === "failed" || generation.state.status === "partial") && !generation.state.dismissed
+        ? "puzzled"
+        : null;
+
   const generateSection = (
     <section data-focus-hide className="print-hide space-y-3" aria-labelledby="generate-heading">
-      <div>
-        <h2
-          id="generate-heading"
-          className="text-sm font-semibold tracking-tight text-foreground"
-        >
-          Study pack
-        </h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {hasViews
-            ? "Generate missing fills study modes that are not generated yet."
-            : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2
+            id="generate-heading"
+            className="text-sm font-semibold tracking-tight text-foreground"
+          >
+            Study pack
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {hasViews
+              ? "Generate missing fills study modes that are not generated yet."
+              : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
+          </p>
+        </div>
+        {generationPose ? <KirbyCompanion size="sm" pose={generationPose} className="shrink-0" /> : null}
       </div>
       <GenerationControls
         state={generation.state}
@@ -643,8 +683,23 @@ export function ReviewerWorkspace({
   const readyLabel = finishedRedoKind
     ? `${MODE_KIT_ITEMS.find((item) => item.kind === finishedRedoKind)?.label ?? "Pack"} ready`
     : "Pack ready";
+  // Kirby pops out of the inhale in the pack's copy hat, only after a run this visit watched.
   const generationNotice = finishedJob ? (
-    <PackReadyNotice label={readyLabel} onDone={generation.dismiss} />
+    <PackReadyNotice
+      label={readyLabel}
+      onDone={generation.dismiss}
+      kirby={
+        sawRun ? (
+          <KirbyCompanion
+            size="sm"
+            area={PACK_READY_AREA}
+            hat={kirbyHat(reviewerId)}
+            reaction={POP_OUT}
+            className="shrink-0"
+          />
+        ) : null
+      }
+    />
   ) : !hasCompleteViews || jobVisible ? (
     generateSection
   ) : null;
@@ -724,37 +779,42 @@ export function ReviewerWorkspace({
     <AskProvider reviewerId={reviewerId} sections={sectionMastery} initialSavedCount={savedAnswerCount} onCardCreated={refreshCards}>
     <FocusModeProvider>
     <div data-draft-guarded className={hasViews ? "flex flex-col gap-4" : "flex flex-col gap-8"}>
-      <Panel as="div" data-focus-hide className="min-w-0 space-y-1 p-4 print:border-0 print:p-0 print:shadow-none">
-        <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
-          <Link
-            href={`/?topic=${topicId}`}
-            className="rounded outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
-            onClick={(event) => {
-              if (!requestDraftAction({ type: "href", href: `/?topic=${topicId}` })) {
-                event.preventDefault();
-              }
-            }}
-          >
-            {topicName}
-          </Link>
-          <span aria-hidden>/</span>
-          <span className="text-foreground">{reviewerName}</span>
-        </nav>
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
-            {reviewerName}
-          </h1>
-          {headerMeta.length > 0 ? (
-            <p className="text-sm text-muted-foreground">{headerMeta.join(" \u00b7 ")}</p>
-          ) : null}
+      <Panel as="div" data-focus-hide className="flex min-w-0 items-start gap-3 p-4 print:border-0 print:p-0 print:shadow-none">
+        <div className="min-w-0 flex-1 space-y-1">
+          <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+            <Link
+              href={`/?topic=${topicId}`}
+              className="rounded outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
+              onClick={(event) => {
+                if (!requestDraftAction({ type: "href", href: `/?topic=${topicId}` })) {
+                  event.preventDefault();
+                }
+              }}
+            >
+              {topicName}
+            </Link>
+            <span aria-hidden>/</span>
+            <span className="text-foreground">{reviewerName}</span>
+          </nav>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
+              {reviewerName}
+            </h1>
+            {headerMeta.length > 0 ? (
+              <p className="text-sm text-muted-foreground">{headerMeta.join(" \u00b7 ")}</p>
+            ) : null}
+          </div>
         </div>
+        {headbandKirby}
       </Panel>
 
       {hasViews ? (
         <>
           {generationNotice}
           {/* Outlives Pack ready's 6 s on its own 8 s timer. */}
-          {firstPack.show ? <FirstCelebration kind="pack" onDone={firstPack.dismiss} /> : null}
+          {firstPack.show ? (
+            <FirstCelebration kind="pack" onDone={firstPack.dismiss} onShow={danceAfterPopOut} />
+          ) : null}
           {studySection}
           {sourcesDialog}
         </>

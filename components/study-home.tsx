@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { FirstRunGuide, type FirstRunGuideState } from "@/components/first-run-guide";
 import { GenerationQueuePanel } from "@/components/generation-queue-panel";
+import { GreenGreens } from "@/components/green-greens";
+import { cueKirby } from "@/components/kirby-companion";
 import {
   ReviewerList,
   type ReviewerListItem,
@@ -86,9 +88,11 @@ export function StudyHome({
   const effectiveSelected = topicPending ? optimisticId : selectedId;
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-1 flex-col gap-5">
       {firstRun ? <FirstRunGuide state={firstRun} /> : null}
-      {firstPack.show ? <FirstCelebration kind="pack" onDone={firstPack.dismiss} /> : null}
+      {firstPack.show ? (
+        <FirstCelebration kind="pack" onDone={firstPack.dismiss} onShow={() => cueKirby("desk", "dance")} />
+      ) : null}
       {today ? (
         <>
           <TodayCard plan={today.plan} hrefs={hrefs} onOpenPlan={() => setTodayOpen(true)} week={week} />
@@ -126,6 +130,7 @@ export function StudyHome({
           : undefined}
         addingFiles={queue.status.uploading}
       />
+      <GreenGreens />
     </div>
   );
 }

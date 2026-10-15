@@ -30,12 +30,30 @@ export function useFirstCelebration(kind: FirstKind, active: boolean) {
   return { show, dismiss: () => setShow(false) };
 }
 
-/** One cheer line for a first-time moment; clears after 8 s or on dismiss. */
-export function FirstCelebration({ kind, onDone }: { kind: FirstKind; onDone: () => void }) {
+/**
+ * One cheer line for a first-time moment; clears after 8 s or on dismiss. `onShow` runs once
+ * when the cheer mounts, so the area can make its Kirby dance.
+ */
+export function FirstCelebration({
+  kind,
+  onDone,
+  onShow,
+}: {
+  kind: FirstKind;
+  onDone: () => void;
+  onShow?: () => void;
+}) {
   const onDoneRef = useRef(onDone);
   useEffect(() => {
     onDoneRef.current = onDone;
   }, [onDone]);
+
+  const onShowRef = useRef(onShow);
+  useEffect(() => {
+    const show = onShowRef.current;
+    onShowRef.current = undefined;
+    show?.();
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => onDoneRef.current(), CLEAR_AFTER_MS);

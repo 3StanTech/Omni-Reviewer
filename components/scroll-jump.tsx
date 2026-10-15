@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp } from "@phosphor-icons/react";
 
 import { useOptionalAsk } from "@/components/ask-provider";
+import { WarpStar } from "@/components/kirby-art";
 
 export type ScrollJumpState = { show: boolean; up: boolean; down: boolean };
 
@@ -62,8 +63,17 @@ function readState(): ScrollJumpState {
   });
 }
 
+/* Dream Land swaps the round chip for a star (drawn behind the arrow); the 44px target is unchanged. */
 const BUTTON_CLASS =
-  "inline-flex size-11 items-center justify-center rounded-full border border-border bg-card text-foreground opacity-55 shadow-[0_6px_18px_oklch(0_0_0/25%)] transition-[opacity,background-color] duration-150 outline-none hover:bg-muted hover:opacity-100 focus-visible:bg-muted focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50";
+  "relative inline-flex size-11 items-center justify-center rounded-full border border-border bg-card text-foreground opacity-55 shadow-[0_6px_18px_oklch(0_0_0/25%)] transition-[opacity,background-color] duration-150 outline-none hover:bg-muted hover:opacity-100 focus-visible:bg-muted focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 dreamland:border-transparent dreamland:bg-transparent dreamland:shadow-none dreamland:hover:bg-transparent dreamland:focus-visible:bg-transparent";
+
+function StarBack() {
+  return (
+    <span aria-hidden className="pointer-events-none absolute -inset-1 hidden drop-shadow-[0_3px_6px_oklch(0_0_0/22%)] dreamland:block">
+      <WarpStar trail={false} />
+    </span>
+  );
+}
 
 /** Floating ↑ ↓ pair stacked above the Ask pill on long pack pages. */
 export function ScrollJump() {
@@ -111,7 +121,8 @@ export function ScrollJump() {
           onMouseDown={(event) => event.preventDefault()}
           onClick={scrollToTop}
         >
-          <ArrowUp weight="bold" className="size-[1.125rem]" aria-hidden />
+          <StarBack />
+          <ArrowUp weight="bold" className="relative size-[1.125rem]" aria-hidden />
         </button>
       ) : null}
       {state.down ? (
@@ -123,7 +134,8 @@ export function ScrollJump() {
           onMouseDown={(event) => event.preventDefault()}
           onClick={scrollToStudyEnd}
         >
-          <ArrowDown weight="bold" className="size-[1.125rem]" aria-hidden />
+          <StarBack />
+          <ArrowDown weight="bold" className="relative size-[1.125rem]" aria-hidden />
         </button>
       ) : null}
     </div>

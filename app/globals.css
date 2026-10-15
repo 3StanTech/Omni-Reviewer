@@ -922,7 +922,9 @@ html[data-focus="on"] main {
 .kirby-companion .tc { transform-box: fill-box; transform-origin: 50% 50%; }
 .kirby-companion .k-outline { stroke: #e2799f; stroke-width: 1.6; }
 .kirby-companion .eyes-happy, .kirby-companion .eyes-sad, .kirby-companion .eyes-sleep, .kirby-companion .mouth-open, .kirby-companion .mouth-sad,
-.kirby-companion .k-burst, .kirby-companion .k-sweat, .kirby-companion .k-zzz, .kirby-companion .k-poyo { opacity: 0; }
+.kirby-companion .k-burst, .kirby-companion .k-sweat, .kirby-companion .k-zzz, .kirby-companion .k-poyo,
+.kirby-companion .k-wind, .kirby-companion .k-cheeks, .kirby-companion .mouth-inhale, .kirby-companion .mouth-o, .kirby-companion .mouth-full,
+.kirby-companion .mouth-yawn, .kirby-companion .k-question, .kirby-companion .k-sleepcap, .kirby-companion .k-spitstar { opacity: 0; }
 .kirby-companion .eyes-open, .kirby-companion .eyes-happy, .kirby-companion .eyes-sad, .kirby-companion .eyes-sleep, .kirby-companion .blush,
 .kirby-companion .mouth-closed, .kirby-companion .mouth-open, .kirby-companion .mouth-sad { transition: opacity .12s; }
 .kirby-companion .arm-l, .kirby-companion .arm-r { transition: transform .25s; }
@@ -967,6 +969,126 @@ html[data-focus="on"] main {
 .kirby-companion .kirby.k-sleep .k-zzz { animation: k-zzz 2.4s ease-in-out infinite; }
 .kirby-companion .kirby.k-sleep .k-bob { animation-duration: 5s; }
 @keyframes k-zzz { 0% { transform: translate(0, 4px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translate(6px, -10px); opacity: 0; } }
+/* head pieces: the copy hat or accessory; asleep, the nightcap replaces them */
+.kirby-companion .k-hat, .kirby-companion .k-acc, .kirby-companion .k-sleepcap { transition: opacity .3s; }
+.kirby-companion .kirby.k-sleep .k-sleepcap { opacity: 1; }
+.kirby-companion .kirby.k-sleep .k-hat, .kirby-companion .kirby.k-sleep .k-acc:not(.k-acc-nightcap) { opacity: 0; }
+.kirby-companion .k-flame { animation: k-flicker 1.2s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 100%; }
+.kirby-companion .k-spark { animation: k-spark 1.4s steps(2) infinite; }
+.kirby-companion .k-tail { animation: k-tail 1.6s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 0 50%; }
+@keyframes k-flicker { from { transform: scaleY(1); } to { transform: scaleY(1.07) skewX(-2deg); } }
+@keyframes k-spark { 0% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes k-tail { from { transform: rotate(-6deg); } to { transform: rotate(8deg); } }
+/* speech bubble above Kirby (flavour; the meaning is always in visible text elsewhere) */
+.kirby-companion .kirby-say {
+  position: absolute; bottom: 74%; right: -6px; z-index: 1; white-space: nowrap; pointer-events: none;
+  padding: 3px 10px; border-radius: 999px; background: #fff; border: 1.3px solid #e2799f; color: #c2185b;
+  font: 700 12px/1.35 var(--font-ui), sans-serif; box-shadow: 0 2px 6px rgb(226 121 159 / .25);
+  animation: k-say-in .35s cubic-bezier(.3,.7,.4,1.4);
+}
+/* phones: a wrapped bubble that stays over Kirby's own column (desk greeting) */
+@media (max-width: 639px) {
+  .kirby-companion.kirby-say-wrap .kirby-say { right: 0; width: 92px; white-space: normal; text-align: center; border-radius: 14px; }
+}
+@keyframes k-say-in { from { opacity: 0; transform: translateY(6px) scale(.8); } to { opacity: 1; transform: none; } }
+
+/* pose: inhale (mouth wide, cheeks puffed, air rushing in) */
+.kirby-companion[data-pose="inhale"] .k-pose { transform: scale(1.05, .97); animation: k-inhale 1.1s ease-in-out infinite; }
+.kirby-companion[data-pose="inhale"] .eyes-open, .kirby-companion[data-pose="full"] .eyes-open,
+.kirby-companion[data-pose="yawn"] .eyes-open { opacity: 0; animation: none; }
+.kirby-companion[data-pose="inhale"] .eyes-sad, .kirby-companion[data-pose="inhale"] .mouth-inhale, .kirby-companion[data-pose="inhale"] .k-wind { opacity: 1; }
+.kirby-companion[data-pose="inhale"] .mouth-closed, .kirby-companion[data-pose="inhale"] .blush { opacity: 0; }
+.kirby-companion[data-pose="inhale"] .arm-l { transform: rotate(-30deg); }
+.kirby-companion[data-pose="inhale"] .arm-r { transform: rotate(30deg); }
+.kirby-companion[data-pose="inhale"] .k-wind path { stroke-dasharray: 9 13; animation: k-suck .55s linear infinite; }
+@keyframes k-inhale { 0%, 100% { transform: scale(1.04, .97); } 50% { transform: scale(1.1, .94); } }
+@keyframes k-suck { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 22; } }
+/* pose: full tummy (round, cheeks puffed, content) */
+.kirby-companion[data-pose="full"] .k-body { transform: scale(1.1, 1.03); transform-box: fill-box; transform-origin: 50% 100%; }
+.kirby-companion[data-pose="full"] .arm-l { transform: translateX(-4px); }
+.kirby-companion[data-pose="full"] .arm-r { transform: translateX(4px); }
+.kirby-companion[data-pose="full"] .eyes-happy, .kirby-companion[data-pose="full"] .k-cheeks, .kirby-companion[data-pose="full"] .mouth-full { opacity: 1; }
+.kirby-companion[data-pose="full"] .mouth-closed, .kirby-companion[data-pose="full"] .blush { opacity: 0; }
+.kirby-companion[data-pose="full"] .k-bob { animation-duration: 4.6s; }
+/* pose: puzzled (tilt, little round mouth, question mark) */
+.kirby-companion[data-pose="puzzled"] .k-pose { transform: rotate(-9deg); }
+.kirby-companion[data-pose="puzzled"] .k-question, .kirby-companion[data-pose="puzzled"] .mouth-o { opacity: 1; }
+.kirby-companion[data-pose="puzzled"] .mouth-closed { opacity: 0; }
+.kirby-companion[data-pose="puzzled"] .arm-r { transform: rotate(-62deg); }
+.kirby-companion[data-pose="puzzled"] .k-question { animation: k-question 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+@keyframes k-question { 0%, 100% { transform: rotate(-8deg); } 50% { transform: translateY(-4px) rotate(10deg); } }
+/* pose: late-night yawn (sleepy eyes; a big yawn about every 6 s) */
+.kirby-companion[data-pose="yawn"] .eyes-sleep { opacity: 1; }
+.kirby-companion[data-pose="yawn"] .mouth-yawn { animation: k-yawn 6s ease-in-out infinite; }
+.kirby-companion[data-pose="yawn"] .mouth-closed { animation: k-yawn-shut 6s ease-in-out infinite; }
+.kirby-companion[data-pose="yawn"] .arm-l { animation: k-stretch-l 6s ease-in-out infinite; }
+.kirby-companion[data-pose="yawn"] .arm-r { animation: k-stretch-r 6s ease-in-out infinite; }
+@keyframes k-yawn { 0%, 55%, 85%, 100% { opacity: 0; } 62%, 78% { opacity: 1; } }
+@keyframes k-yawn-shut { 0%, 55%, 85%, 100% { opacity: 1; } 62%, 78% { opacity: 0; } }
+@keyframes k-stretch-l { 0%, 55%, 85%, 100% { transform: none; } 62%, 78% { transform: rotate(50deg); } }
+@keyframes k-stretch-r { 0%, 55%, 85%, 100% { transform: none; } 62%, 78% { transform: rotate(-50deg); } }
+/* pose: point down-left (toward the first-run guide) */
+.kirby-companion[data-pose="point"] .arm-l { transform: translate(-9px, 7px) rotate(34deg); animation: k-point 1.6s ease-in-out infinite; }
+.kirby-companion[data-pose="point"] .blush { opacity: .85; }
+@keyframes k-point { 0%, 100% { transform: translate(-9px, 7px) rotate(34deg); } 50% { transform: translate(-13px, 10px) rotate(34deg); } }
+
+/* reactions win over poses: clear the pose's face while one plays */
+.kirby-companion .kirby:is(.k-happy, .k-sad, .k-dance, .k-popout, .k-hello, .k-spit) :is(.mouth-inhale, .k-wind, .mouth-o, .mouth-full, .mouth-yawn, .k-question, .k-cheeks, .eyes-sleep) { opacity: 0; animation: none; }
+.kirby-companion .kirby:is(.k-happy, .k-dance, .k-popout) :is(.eyes-sad) { opacity: 0; }
+.kirby-companion .kirby:is(.k-happy, .k-sad, .k-dance, .k-popout, .k-hello, .k-spit) .k-pose { transform: none; animation: none; }
+/* dance: hop left, hop right, spin, star burst */
+.kirby-companion .kirby.k-dance .k-jump { animation: k-dance 1.6s cubic-bezier(.3,.7,.4,1); }
+.kirby-companion .kirby.k-dance .arm-l { animation: k-arm-l .4s ease-in-out 4 alternate; }
+.kirby-companion .kirby.k-dance .arm-r { animation: k-arm-r .4s ease-in-out 4 alternate; }
+.kirby-companion .kirby:is(.k-dance, .k-popout) .eyes-open { opacity: 0; animation: none; }
+.kirby-companion .kirby:is(.k-dance, .k-popout) :is(.eyes-happy, .mouth-open, .k-burst) { opacity: 1; }
+.kirby-companion .kirby:is(.k-dance, .k-popout) .mouth-closed { opacity: 0; }
+.kirby-companion .kirby:is(.k-dance, .k-popout, .k-hello) .blush { opacity: .9; }
+.kirby-companion .kirby.k-dance .k-burst path { animation: k-burst .9s ease-out .7s both; }
+.kirby-companion .kirby.k-popout .k-burst path { animation: k-burst .8s ease-out both; }
+@keyframes k-dance {
+  0% { transform: none; }
+  10% { transform: translate(-10px, -12px) rotate(-12deg); }
+  20% { transform: translate(-12px, 0) rotate(-6deg) scale(1.06, .94); }
+  30% { transform: translate(0, -14px) rotate(8deg); }
+  40% { transform: translate(12px, 0) rotate(10deg) scale(1.06, .94); }
+  50% { transform: translate(6px, -8px) rotate(0); }
+  60% { transform: scale(1.1, .88); }
+  76% { transform: translateY(-26px) rotate(360deg) scale(.95, 1.05); }
+  90% { transform: translateY(0) rotate(360deg) scale(1.06, .94); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes k-arm-l { from { transform: rotate(10deg); } to { transform: rotate(60deg); } }
+@keyframes k-arm-r { from { transform: rotate(-10deg); } to { transform: rotate(-60deg); } }
+/* pop-out: Kirby bursts back out after an inhale */
+.kirby-companion .kirby.k-popout .k-jump { animation: k-popout .9s cubic-bezier(.2,.9,.3,1.3); }
+.kirby-companion .kirby.k-popout .arm-l { transform: rotate(48deg); }
+.kirby-companion .kirby.k-popout .arm-r { transform: rotate(-48deg); }
+@keyframes k-popout { 0% { transform: translateY(12px) scale(.55); } 45% { transform: translateY(-14px) scale(1.12); } 70% { transform: translateY(0) scale(.96, 1.04); } 100% { transform: none; } }
+/* hello: a little hop and a wave */
+.kirby-companion .kirby.k-hello .k-jump { animation: k-hello .7s cubic-bezier(.3,.7,.4,1); }
+.kirby-companion .kirby.k-hello .arm-r { animation: k-wave .35s ease-in-out 4 alternate; }
+.kirby-companion .kirby.k-hello .mouth-closed { opacity: 0; }
+.kirby-companion .kirby.k-hello .mouth-open { opacity: 1; }
+@keyframes k-hello { 0% { transform: none; } 35% { transform: translateY(-10px) scale(.96, 1.04); } 70% { transform: scale(1.05, .95); } 100% { transform: none; } }
+/* spit: five quick taps, Kirby puffs up and spits a star */
+.kirby-companion .kirby.k-spit .k-jump { animation: k-spit-body 1.2s ease-out; }
+.kirby-companion .kirby.k-spit .mouth-inhale { animation: k-spit-mouth 1.2s linear; }
+.kirby-companion .kirby.k-spit .mouth-closed { animation: k-spit-shut 1.2s linear; }
+.kirby-companion .kirby.k-spit .k-spitstar { animation: k-spit-star 1.2s ease-out; }
+@keyframes k-spit-body { 0% { transform: none; } 28% { transform: scale(1.12, .92); } 38% { transform: translateX(-5px) scale(.92, 1.06); } 55% { transform: none; } }
+@keyframes k-spit-mouth { 0%, 32% { opacity: 1; } 36%, 100% { opacity: 0; } }
+@keyframes k-spit-shut { 0%, 32% { opacity: 0; } 36%, 100% { opacity: 1; } }
+@keyframes k-spit-star { 0%, 34% { opacity: 0; transform: translate(0, 0) scale(.4); } 40% { opacity: 1; transform: translate(10px, 0) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(80px, -22px) rotate(540deg); } }
+
+/* Kirby's world pieces (components/kirby-art.tsx) */
+.kirby-art { display: block; overflow: visible; }
+.kirby-art .cake-flame { animation: k-flicker .9s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 100%; }
+.kirby-art.waddle-dee .wd-page { animation: wd-hold 1.4s ease-in-out infinite; }
+@keyframes wd-hold { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+
 @media (prefers-reduced-motion: reduce) {
-  .kirby-companion * { animation: none !important; }
+  .kirby-companion *, .kirby-companion .kirby-say, .kirby-art * { animation: none !important; }
+  /* stills: no burst or flying star frozen over his face */
+  .kirby-companion .k-burst, .kirby-companion .k-spitstar { display: none; }
 }

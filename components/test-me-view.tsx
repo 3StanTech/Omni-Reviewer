@@ -20,6 +20,7 @@ import { OpenCitedSlide, TimedTestMe } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
 import { parseTestMeItems } from "@/lib/learning";
 import { MASTERY_WEAK_THRESHOLD } from "@/lib/mastery";
+import { kirbyHat, type KirbyHatId } from "@/lib/kirby-hat";
 import { formatSittingDuration, recapFocusSection, sectionBreakdown } from "@/lib/sitting-recap";
 import { isStudyKeyTarget } from "@/lib/study-keys";
 import {
@@ -60,6 +61,9 @@ type TestMeViewProps = {
  */
 const KIRBY_PRACTICE_PLACEMENT =
   "shrink-0 max-sm:absolute max-sm:right-2 max-sm:top-0.5 max-sm:w-16 sm:sticky sm:top-[120px]";
+
+/** The share of correct answers at which the recap Kirby does the victory dance. */
+const RECAP_DANCE_RATIO = 0.8;
 
 const KEY_HINT_STYLE = `.study-key-hint{display:none}@media (pointer: fine){.study-key-hint{display:block}}`;
 
@@ -436,12 +440,20 @@ function UntimedSitting({
         return entry ? [{ text: citedText(answered), correct: entry.correct }] : [];
       }),
     });
+    // The answer that finished this sitting dances from 80%; the first-sitting cheer dances too.
+    const recapReaction: KirbyReaction | null = kirby && sittingItems.length > 0 && score / sittingItems.length >= RECAP_DANCE_RATIO
+      ? { outcome: "dance", key: kirby.key }
+      : kirby;
     return (
       <div className="space-y-4 dreamland:sm:grid dreamland:sm:grid-cols-[minmax(0,1fr)_auto] dreamland:sm:items-start dreamland:sm:gap-x-[18px] dreamland:sm:gap-y-4 dreamland:sm:space-y-0">
         <div className="flex flex-wrap items-center justify-end gap-2 dreamland:sm:col-span-2">
           {firstSitting.show ? (
             <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
-              <FirstCelebration kind="sitting" onDone={firstSitting.dismiss} />
+              <FirstCelebration
+                kind="sitting"
+                onDone={firstSitting.dismiss}
+                onShow={() => setKirby({ outcome: "dance", key: Date.now() })}
+              />
             </div>
           ) : null}
           {timedRunButton}
@@ -449,7 +461,8 @@ function UntimedSitting({
         {/* The final answer completes the sitting, so its reaction plays here (Dream Land only). */}
         <KirbyCompanion
           size="md"
-          reaction={kirby}
+          reaction={recapReaction}
+          hat={kirbyHat(reviewerId)}
           className="shrink-0 max-sm:ml-auto max-sm:w-16 sm:col-start-2 sm:row-start-2"
         />
         <SittingRecap
@@ -575,6 +588,7 @@ function UntimedSitting({
         saveBusy={saveBusy}
         correct={correct}
         kirby={kirby}
+        hat={kirbyHat(reviewerId)}
         onSelect={(value) => {
           setSelected(value);
           setSaveMessage(null);
@@ -621,6 +635,7 @@ function SittingItem({
   saveBusy,
   correct,
   kirby,
+  hat,
   onSelect,
   onEnter,
 }: {
@@ -631,6 +646,7 @@ function SittingItem({
   saveBusy: boolean;
   correct: boolean | undefined;
   kirby: KirbyReaction | null;
+  hat: KirbyHatId;
   onSelect: (value: string) => void;
   onEnter: () => void;
 }) {
@@ -728,7 +744,7 @@ function SittingItem({
             </div>
           ) : null}
         </div>
-        <KirbyCompanion size="md" reaction={kirby} className={KIRBY_PRACTICE_PLACEMENT} />
+        <KirbyCompanion size="md" reaction={kirby} hat={hat} className={KIRBY_PRACTICE_PLACEMENT} />
       </div>
     </article>
   );

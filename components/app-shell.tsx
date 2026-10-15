@@ -12,6 +12,7 @@ import {
   TopicShelfToggle,
 } from "@/components/topic-shelf";
 import type { TopicListItem } from "@/components/topic-tabs";
+import type { DeskKirbyLook } from "@/lib/desk-kirby";
 import { cn } from "@/lib/utils";
 
 type AppShellProps = {
@@ -30,6 +31,8 @@ type AppShellProps = {
   wide?: boolean;
   /** The desk shows the title as Kirby's greeting (a plain title outside Dream Land). */
   companion?: boolean;
+  /** The desk Kirby's pose and accessory, computed on the server beside `subtitle`. */
+  deskKirby?: DeskKirbyLook;
 };
 
 export function AppShell({
@@ -46,6 +49,7 @@ export function AppShell({
   showTopicShelf = true,
   wide = false,
   companion = false,
+  deskKirby,
 }: AppShellProps) {
   return (
     <TopicNavProvider>
@@ -100,7 +104,7 @@ export function AppShell({
             )}
           >
             {companion && title ? (
-              <DeskGreeting title={title} subtitle={subtitle} />
+              <DeskGreeting title={title} subtitle={subtitle} look={deskKirby} />
             ) : (title || subtitle) && (
               <div className="mb-6 space-y-1">
                 {title ? (

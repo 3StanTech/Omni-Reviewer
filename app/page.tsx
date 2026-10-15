@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import type { ReviewerListItem } from "@/components/reviewer-list";
 import { StudyHome } from "@/components/study-home";
 import type { TopicListItem } from "@/components/topic-tabs";
+import { deskKirbyLook } from "@/lib/desk-kirby";
 import { deskSubtitle, parseBirthdayDates } from "@/lib/desk-subtitle";
 import { greetingFor } from "@/lib/greeting";
 import {
@@ -78,14 +79,21 @@ export default async function HomePage({ searchParams }: HomeProps) {
   }));
 
   const bar = today && !today.plan.empty ? today.plan.bar : null;
+  const birthday = parseBirthdayDates(process.env.BIRTHDAY_DATES).get(userId) ?? null;
   const subtitle = deskSubtitle({
     now,
     firstName: session?.user?.name?.trim().split(/\s+/)[0] || null,
-    birthday: parseBirthdayDates(process.env.BIRTHDAY_DATES).get(userId) ?? null,
+    birthday,
     firstRun: firstRun.generatedPacks === 0,
     reviewCards: bar?.reviewCards ?? 0,
     newCards: bar?.newCards ?? 0,
     minutes: bar?.minutes ?? 0,
+  });
+  const deskKirby = deskKirbyLook({
+    now,
+    birthday,
+    firstRun: firstRun.generatedPacks === 0,
+    dueCards: (bar?.reviewCards ?? 0) + (bar?.newCards ?? 0),
   });
 
   const dueByTopic = Object.fromEntries(dueCounts);
@@ -95,6 +103,7 @@ export default async function HomePage({ searchParams }: HomeProps) {
     <AppShell
       title={greetingFor(session?.user?.name, now) ?? "Study desk"}
       subtitle={subtitle}
+      deskKirby={deskKirby}
       topics={serializedTopics}
       selectedTopicId={selectedId}
       dueByTopic={dueByTopic}

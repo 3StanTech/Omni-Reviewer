@@ -51,7 +51,7 @@ beforeEach(() => {
 
 describe("owner-scoped mastery and Today queries", () => {
   it("returns null mastery for a pack the user does not own, without loading its evidence", async () => {
-    expect(await getMasteryForReviewer("someone-elses-pack", "user-a")).toBeNull();
+    expect(await getMasteryForReviewer("00000000-0000-4000-8000-000000000001", "user-a")).toBeNull();
     // Only the ownership lookup ran.
     expect(selectCalls.count).toBe(1);
   });

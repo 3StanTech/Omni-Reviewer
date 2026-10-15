@@ -146,7 +146,7 @@ describe("pack workspace", () => {
 
   it("shows the generation section above the study only while it has work, else a self-clearing ready line", () => {
     expect(workspace).toContain('className="print-hide space-y-3" aria-labelledby="generate-heading"');
-    expect(workspace).toContain("<PackReadyNotice label={readyLabel} onDone={generation.dismiss} />");
+    expect(workspace).toMatch(/<PackReadyNotice\s+label=\{readyLabel\}\s+onDone=\{generation\.dismiss\}/);
     expect(workspace).toContain("!hasCompleteViews || jobVisible");
     expect(workspace).toContain('["queued", "running", "failed", "partial"]');
     const withViews = workspace.slice(workspace.indexOf("{hasViews ? (\n        <>"));

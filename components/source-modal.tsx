@@ -22,6 +22,7 @@ import {
   Presentation,
 } from "@phosphor-icons/react";
 
+import { WaddleDee } from "@/components/kirby-art";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -44,6 +45,16 @@ import {
 } from "@/lib/passage-tint";
 import { readLocalStorage, removeLocalStorage, writeLocalStorage } from "@/lib/safe-storage";
 import { cn } from "@/lib/utils";
+
+/** The loading mark: a spinner, or in Dream Land Waddle Dee holding up a page. */
+function LoadingHelper() {
+  return (
+    <>
+      <CircleNotch className="size-4 animate-spin dreamland:hidden" />
+      <WaddleDee holding="page" className="hidden w-12 print-hide dreamland:block" />
+    </>
+  );
+}
 
 export const SOURCE_LIST_UNAVAILABLE =
   "Source list unavailable for this version. Redo to refresh citations.";
@@ -423,7 +434,7 @@ function SourceBody({
       ) : null}
       {resolving ? (
         <div className={cn("flex min-h-40 items-center justify-center gap-2 rounded-lg border border-border bg-muted/30 text-sm text-muted-foreground", areaClassName)} role="status">
-          <CircleNotch className="size-4 animate-spin" />
+          <LoadingHelper />
           Loading page
         </div>
       ) : pdfPage !== null ? (
@@ -517,7 +528,7 @@ function SourceText({
   if (!current) {
     return (
       <div className={cn("flex min-h-40 items-center justify-center gap-2 rounded-lg border border-border bg-muted/30 text-sm text-muted-foreground", className)} role="status">
-        <CircleNotch className="size-4 animate-spin" />
+        <LoadingHelper />
         Loading text
       </div>
     );
@@ -745,7 +756,7 @@ function PdfPage({
       ) : null}
       {!current ? (
         <div className="absolute inset-0 flex min-h-40 items-center justify-center gap-2 text-sm text-neutral-600" role="status">
-          <CircleNotch className="size-4 animate-spin" />
+          <LoadingHelper />
           Loading page
         </div>
       ) : null}

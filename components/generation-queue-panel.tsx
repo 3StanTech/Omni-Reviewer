@@ -9,6 +9,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 
+import { KirbyCompanion } from "@/components/kirby-companion";
 import { Button } from "@/components/ui/button";
 import {
   QUEUE_MIN_REQUESTS,
@@ -71,12 +72,16 @@ export function GenerationQueuePanel({
       className="space-y-3 rounded-xl border border-border/80 bg-surface/40 p-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2
-          id="generation-queue-title"
-          className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
-        >
-          Generating queue
-        </h2>
+        <div className="flex items-center gap-2">
+          <h2
+            id="generation-queue-title"
+            className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
+          >
+            Generating queue
+          </h2>
+          {/* Kirby inhales the pack being generated (Dream Land only). */}
+          {generating ? <KirbyCompanion size="xs" pose="inhale" className="shrink-0" /> : null}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {quota && quota.remaining !== null && quota.limit !== null ? (
             <p

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowsClockwise, CircleNotch, DotsThreeVertical } from "@phosphor-icons/react";
 
@@ -28,6 +28,7 @@ import { FocusToggle, useFocusMode } from "@/components/focus-mode";
 import { LOW_QUOTA_THRESHOLD, type FreeRequestQuota } from "@/components/generation-controls";
 import { LockedInView } from "@/components/locked-in-view";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
+import { ReadItAll } from "@/components/read-it-all";
 import {
   ModeToolbarProvider,
   useModeMenuItemsValue,
@@ -229,6 +230,15 @@ export function ViewTabs({
   const sectionMastery = useSectionMastery();
   const lockedInContent = views.locked_in?.content ?? "";
   const lockedInHeadings = useMemo(() => studyOutline(lockedInContent), [lockedInContent]);
+  // "You read it all!" for Locked In and Summary: once per view per page visit.
+  const studyEndRef = useRef<HTMLDivElement>(null);
+  // Keyed by pack and view, so another pack opened in this tree starts fresh.
+  const [readEnds, setReadEnds] = useState<ReadonlySet<string>>(() => new Set());
+  const readEndKey = `${reviewerId}:${tab}`;
+  const readingTab = (tab === "locked_in" || tab === "summary") && !viewsLoading && modeHasContent(tab, views);
+  const markReadEnd = useCallback(() => {
+    setReadEnds((current) => current.has(readEndKey) ? current : new Set(current).add(readEndKey));
+  }, [readEndKey]);
 
   // Focus mode only applies to the one-item-at-a-time modes.
   useEffect(() => {
@@ -415,7 +425,16 @@ export function ViewTabs({
         )}
       </TabsContent>
       {/* Scroll jump's "Jump to end" target: the end of the study content, above the sources footer. */}
-      <div data-study-end aria-hidden className="h-px" />
+      <div data-study-end aria-hidden ref={studyEndRef} className="h-px" />
+      {readingTab ? (
+        <ReadItAll
+          key={readEndKey}
+          endRef={studyEndRef}
+          reached={readEnds.has(readEndKey)}
+          onReached={markReadEnd}
+          reviewerId={reviewerId}
+        />
+      ) : null}
       </div>
       <aside aria-label="Study rail" className={cn("print-hide hidden", railActive && "@min-[64rem]/pack:block")}>
         <div className="sticky top-[7.5rem] flex max-h-[calc(100vh-8.5rem)] flex-col gap-4 overflow-y-auto pb-4">
