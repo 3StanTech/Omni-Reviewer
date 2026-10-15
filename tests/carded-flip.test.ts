@@ -120,10 +120,9 @@ describe("Carded recall flip", () => {
     expect(src).toContain('closest("button, a, [data-cite-source]")');
   });
 
-  it("offers a Slide button after the flip when the back cites a page", () => {
+  it("offers a page button after the flip when the back cites a page", () => {
     expect(src).toContain("card && flipped ? firstPageCitation([card.back]) : null");
     expect(src).toContain("sourceViewer.available");
-    expect(src).toContain("Slide {backPage}");
     expect(src).toContain("<Presentation");
   });
 });

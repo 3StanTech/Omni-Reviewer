@@ -1,8 +1,9 @@
 /**
  * No-model re-check of a saved study document's unsourced tags, the pure core
  * of `scripts/recheck-tags.ts`. It is Check again without the verifier: tagged
- * claims that now pass overlap and the term guard lose their tags, tagged
- * lexical misses keep theirs, and no untagged claim is newly tagged.
+ * claims that now pass overlap (or the second look) and the term guard lose
+ * their tags, other tagged lexical misses keep theirs, and no untagged claim
+ * is newly tagged.
  */
 
 import { UNSOURCED_TOKEN } from "@/lib/citations";
@@ -23,6 +24,10 @@ export type RecheckDocumentResult = {
   tagsAfter: number;
   /** First 100 characters of each sentence whose tag would clear. */
   cleared: string[];
+  /** The cleared sentences (first 100 characters) that the second look passed. */
+  secondLookCleared: string[];
+  /** Remaining tags that carry a recorded term-guard reason. */
+  termFlagTagsKept: number;
   /** Each recorded missing term of the tags that remain, with how many tags name it. */
   stillFlagged: Record<string, number>;
   /** Whether saving would change anything: tags or recorded reasons. */
@@ -41,16 +46,20 @@ export async function recheckDocument({
   markdown,
   sources,
   previous,
+  secondLookThreshold,
 }: {
   markdown: string;
   sources: GroundingSource[];
   previous: GroundingReport | null;
+  /** Override for dry-run tuning; the code constant otherwise. */
+  secondLookThreshold?: number;
 }): Promise<RecheckDocumentResult> {
   // No `verify` is passed and skipVerifier is set: this path can never reach a model.
   const pass = await groundDocument({
     markdown,
     sources,
     skipVerifier: true,
+    ...(secondLookThreshold === undefined ? {} : { secondLookThreshold }),
     recheck: {
       uncheckedKeys: previous?.uncheckedKeys,
       legacyUnchecked: !previous?.uncheckedKeys && (previous?.unchecked ?? 0) > 0,
@@ -63,15 +72,24 @@ export async function recheckDocument({
   const remaining = new Map<string, number>();
   const after = taggedClaims(pass.markdown);
   for (const { key } of after) remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  const secondLookKeys = new Set(pass.report.secondLookKeys ?? []);
   const cleared: string[] = [];
+  const secondLookCleared: string[] = [];
   for (const { key, sentence } of taggedClaims(markdown)) {
     const left = remaining.get(key) ?? 0;
-    if (left > 0) remaining.set(key, left - 1);
-    else cleared.push(sentence.slice(0, CLEARED_PREVIEW_CHARS));
+    if (left > 0) {
+      remaining.set(key, left - 1);
+      continue;
+    }
+    const preview = sentence.slice(0, CLEARED_PREVIEW_CHARS);
+    cleared.push(preview);
+    if (secondLookKeys.has(key)) secondLookCleared.push(preview);
   }
 
   const stillFlagged: Record<string, number> = {};
+  let termFlagTagsKept = 0;
   for (const { key } of after) {
+    if (report.termFlags?.[key]) termFlagTagsKept++;
     for (const term of report.termFlags?.[key] ?? []) stillFlagged[term] = (stillFlagged[term] ?? 0) + 1;
   }
 
@@ -81,6 +99,8 @@ export async function recheckDocument({
     tagsBefore: countTags(markdown),
     tagsAfter: countTags(pass.markdown),
     cleared,
+    secondLookCleared,
+    termFlagTagsKept,
     stillFlagged,
     changed: pass.markdown !== markdown || !sameTermFlags(previous?.termFlags, report.termFlags),
   };

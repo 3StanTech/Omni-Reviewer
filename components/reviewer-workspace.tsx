@@ -100,7 +100,7 @@ const MS_PER_DAY = 86_400_000;
 /** A full-width row in the rail's Pack panel. */
 const RAIL_PACK_ITEM_CLASS = "h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2.5 font-normal last:rounded-b-[calc(var(--radius)-1px)]";
 const READING_SLIDES_NOTE =
-  "Reading slide images first. Generate unlocks when it finishes.";
+  "Reading page images first. Generate unlocks when it finishes.";
 
 function examCountdownCopy(examDate: string): string | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(examDate);

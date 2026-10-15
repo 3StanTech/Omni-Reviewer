@@ -37,7 +37,7 @@ describe("VisionStatus", () => {
 
   it("shows only progress while reading", () => {
     const html = render({ state: "reading", done: 2, total: 8, unreadable: [2] });
-    expect(html).toContain("Reading slide images: 2 of 8");
+    expect(html).toContain("Reading page images: 2 of 8");
     expect(html).not.toContain("could not be read");
   });
 });

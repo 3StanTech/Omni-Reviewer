@@ -3,7 +3,10 @@
  *
  * Every claim sentence is scored lexically against the source pages it cites
  * (or every page when it cites nothing usable; an uncited table row borrows
- * its table's citation). Lexical misses go to one batched `verify` call with
+ * its table's citation). A miss with a page citation gets a second look: it
+ * passes without a model call when it scores at least the second-look
+ * threshold on a cited page or one beside it and names no term the sources
+ * never mention. Remaining lexical misses go to one batched `verify` call with
  * the most relevant passages of their best pages; anything still unsupported
  * gets `[[unsourced]]` inserted after it. Misses beyond the batch stay
  * untagged and count as unchecked. A claim judged supported is still tagged
@@ -27,6 +30,15 @@ import { splitPages } from "@/lib/source-markers";
 import { absentTerms, buildSourceVocabulary } from "@/lib/term-guard";
 
 export const LEXICAL_SUPPORT_THRESHOLD = 0.55;
+
+/**
+ * Second-look threshold for a lexical miss on its cited pages and their
+ * neighbours (plan Decision 8). In the survey of tagged sentences,
+ * hand-checked supported near-misses scored 0.467-0.535 and unsupported ones
+ * at most 0.411; one was supported only on the adjacent page. Starts at 0.45
+ * and is fixed by the Neon-branch dry-run tuning.
+ */
+export const SECOND_LOOK_THRESHOLD = 0.45;
 
 /** Overlap between neighbouring evidence windows, so a sentence is never cut in every window. */
 const PASSAGE_OVERLAP_CHARS = 150;
@@ -70,6 +82,10 @@ export type GroundingReport = {
   termFlags?: Record<string, string[]>;
   /** Bare page-as-source citations rewritten before grounding. */
   repairedCitations?: number;
+  /** Lexical misses passed by the second look (cited or adjacent page, no absent term); not in lexicalSupported. */
+  secondLookSupported?: number;
+  /** claimKey of each second-look pass (bounded like term flags). */
+  secondLookKeys?: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -481,6 +497,28 @@ export function unsourcedClaimKey(markdown: string, offset: number): string | nu
   return token?.claim ? claimKey(token.claim.keyText) : null;
 }
 
+/**
+ * The page cited by the claim an `[[unsourced]]` token at `offset` follows, for
+ * the tag's copy: its first citation with a page, else (an uncited table row)
+ * the first borrowed one. Null when the claim is uncited, cites only whole
+ * sources, or the token ends no claim. Pure, like unsourcedClaimKey.
+ */
+export function unsourcedTagCitation(
+  markdown: string,
+  offset: number,
+): { source: number; page: number; pageEnd: number | null } | null {
+  const before = markdown.slice(0, offset);
+  const line = before.split("\n").length - 1;
+  const column = offset - (before.lastIndexOf("\n") + 1);
+  const claim = tokensWithClaims(markdown).find((entry) => entry.line === line && entry.column === column)?.claim;
+  if (!claim) return null;
+  const citations = claim.citations.length > 0 ? claim.citations : claim.inheritedCitations;
+  const cited = citations.find((citation) => citation.pageStart !== null);
+  return cited && cited.pageStart !== null
+    ? { source: cited.source, page: cited.pageStart, pageEnd: cited.pageEnd }
+    : null;
+}
+
 /** The claims that carry an `[[unsourced]]` token, in token order: key and verifier sentence. */
 export function taggedClaims(markdown: string): Array<{ key: string; sentence: string }> {
   return tokensWithClaims(markdown).flatMap(({ claim }) =>
@@ -522,6 +560,26 @@ function evidencePagesFor(claim: Claim, bySource: Map<number, EvidencePage[]>, a
       pageStart === null ? pages : pages.filter((page) => page.page >= pageStart && page.page <= (pageEnd ?? pageStart));
     if (matched.length === 0) return allPages;
     for (const page of matched) chosen.set(page.key, page);
+  }
+  return [...chosen.values()];
+}
+
+/**
+ * Pages a lexical miss gets a second look at: each page citation's range
+ * (own citations, else a table row's inherited ones) widened by one page on
+ * each side, in the same source. Whole-source citations and uncited claims
+ * get none.
+ */
+function secondLookPages(claim: Claim, bySource: Map<number, EvidencePage[]>): EvidencePage[] {
+  const citations = claim.citations.length > 0 ? claim.citations : claim.inheritedCitations;
+  const chosen = new Map<string, EvidencePage>();
+  for (const { source, pageStart, pageEnd } of citations) {
+    if (pageStart === null) continue;
+    const low = pageStart - 1;
+    const high = (pageEnd ?? pageStart) + 1;
+    for (const page of bySource.get(source) ?? []) {
+      if (page.page >= low && page.page <= high) chosen.set(page.key, page);
+    }
   }
   return [...chosen.values()];
 }
@@ -636,6 +694,7 @@ export async function groundDocument({
   passageChars = GROUNDING_PASSAGE_CHARS,
   recheck,
   skipVerifier = false,
+  secondLookThreshold = SECOND_LOOK_THRESHOLD,
 }: {
   markdown: string;
   sources: GroundingSource[];
@@ -655,6 +714,8 @@ export async function groundDocument({
    * guard change. `verifierFailed` stays false.
    */
   skipVerifier?: boolean;
+  /** Second-look threshold for a lexical miss on its cited and adjacent pages. */
+  secondLookThreshold?: number;
 }): Promise<{ markdown: string; report: GroundingReport }> {
   const stripped = recheck ? stripTokens(markdown.split("\n")) : null;
   const lines = stripped?.lines ?? markdown.split("\n");
@@ -697,6 +758,8 @@ export async function groundDocument({
 
   let lexicalSupported = 0;
   let verifiedSupported = 0;
+  let secondLookSupported = 0;
+  const secondLookKeys: string[] = [];
   let termFlagged = 0;
   let truncated = false;
   let verifierFailed = false;
@@ -721,6 +784,14 @@ export async function groundDocument({
         lexicalSupported++;
         outcomes.set(claim, "pass");
       }
+    } else if (
+      Math.max(0, ...secondLookPages(claim, bySource).map((page) => scoreForms(terms, page.index))) >= secondLookThreshold &&
+      absentTerms(claim.keyText, vocabulary).length === 0
+    ) {
+      // Second look, before the verifier so no-model passes clear it too.
+      secondLookSupported++;
+      if (secondLookKeys.length < MAX_TERM_FLAG_KEYS) secondLookKeys.push(claimKey(claim.keyText));
+      outcomes.set(claim, "pass");
     } else {
       const best = scored.slice(0, 2).filter((entry, rank) => rank === 0 || entry.score > 0);
       misses.push({ claim, terms, best: best.map((entry) => entry.page) });
@@ -803,6 +874,10 @@ export async function groundDocument({
     report.uncheckedKeys = uncheckedKeys;
   }
   if (termFlagged > 0) report.termFlagged = termFlagged;
+  if (secondLookSupported > 0) {
+    report.secondLookSupported = secondLookSupported;
+    report.secondLookKeys = secondLookKeys;
+  }
   // A re-check keeps the earlier reason of a tagged claim it could not decide
   // (unchecked, or a tag on a line that is no claim); a claim decided now has
   // only this pass's reason, and an untagged claim has none.
@@ -824,7 +899,8 @@ export async function groundDocument({
 
 /**
  * The whole-document report after a re-check pass: this pass's counts, with
- * the supported totals added to the previous ones. Unchecked keys, term-guard
+ * the supported totals (second look included, its keys unioned within the
+ * cap) added to the previous ones. Unchecked keys, term-guard
  * counts and reasons come only from the pass (which already kept the reasons
  * of tags it could not decide). A no-model pass says nothing about the
  * verifier, so the previous truncated and verifierFailed flags are kept.
@@ -840,6 +916,11 @@ export function mergeRecheckReport(
   // Term guard tags are re-evaluated with every tagged claim, like unsourced.
   delete carried.termFlagged;
   delete carried.termFlags;
+  const secondLookSupported = (previous?.secondLookSupported ?? 0) + (pass.secondLookSupported ?? 0);
+  const secondLookKeys = [...new Set([...(previous?.secondLookKeys ?? []), ...(pass.secondLookKeys ?? [])])].slice(
+    0,
+    MAX_TERM_FLAG_KEYS,
+  );
   return {
     ...carried,
     total: pass.total,
@@ -849,6 +930,8 @@ export function mergeRecheckReport(
     verifierFailed: noModel ? Boolean(previous?.verifierFailed) : pass.verifierFailed,
     lexicalSupported: (previous?.lexicalSupported ?? 0) + pass.lexicalSupported,
     verifiedSupported: (previous?.verifiedSupported ?? 0) + pass.verifiedSupported,
+    ...(secondLookSupported > 0 ? { secondLookSupported } : {}),
+    ...(secondLookKeys.length > 0 ? { secondLookKeys } : {}),
     ...(pass.termFlagged ? { termFlagged: pass.termFlagged } : {}),
     ...(pass.termFlags ? { termFlags: pass.termFlags } : {}),
     ...(pass.unchecked ? { unchecked: pass.unchecked } : {}),

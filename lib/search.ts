@@ -161,7 +161,7 @@ export function searchResultHref(row: SearchLinkRow): string {
 export function searchKindLabel(row: Pick<SearchLinkRow, "kind" | "page">): string {
   switch (row.kind) {
     case "source_page":
-      return row.page != null && row.page > 0 ? `Slide ${row.page}` : "Source";
+      return row.page != null && row.page > 0 ? `Page ${row.page}` : "Source";
     case "locked_in":
       return "Locked In";
     case "summary":

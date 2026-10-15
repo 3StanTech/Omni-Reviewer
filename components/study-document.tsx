@@ -609,7 +609,7 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   }
   menuItems.push({
     id: "open-slides",
-    label: "Open slides",
+    label: "Open source",
     hint: slidesUnavailable ?? undefined,
     disabled: Boolean(slidesUnavailable),
     onSelect: () => {

@@ -164,7 +164,7 @@ describe("searchResultHref and searchKindLabel", () => {
   });
 
   it("labels each kind", () => {
-    expect(searchKindLabel({ kind: "source_page", page: 7 })).toBe("Slide 7");
+    expect(searchKindLabel({ kind: "source_page", page: 7 })).toBe("Page 7");
     expect(searchKindLabel({ kind: "source_page", page: null })).toBe("Source");
     expect(searchKindLabel({ kind: "locked_in" })).toBe("Locked In");
     expect(searchKindLabel({ kind: "summary" })).toBe("Summary");

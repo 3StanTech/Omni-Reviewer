@@ -101,7 +101,7 @@ export function SearchDialog({ open, onOpenChange, query, onQueryChange, loading
         <div className="grid gap-1.5 pr-8">
           <DialogTitle className="sr-only">Search packs</DialogTitle>
           <DialogDescription className="sr-only">
-            Search your slides, Locked In notes, summaries and cards across every pack. Use the arrow keys to move and Enter to open.
+            Search your pages, Locked In notes, summaries and cards across every pack. Use the arrow keys to move and Enter to open.
           </DialogDescription>
           <div className="relative">
             <MagnifyingGlass weight="bold" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
@@ -117,7 +117,7 @@ export function SearchDialog({ open, onOpenChange, query, onQueryChange, loading
               autoComplete="off"
               spellCheck={false}
               maxLength={MAX_QUERY_CHARS}
-              placeholder="Search slides, notes and cards"
+              placeholder="Search pages, notes and cards"
               value={query}
               className="h-11 w-full rounded-lg border border-input bg-surface/50 pr-10 pl-9 text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/35 md:text-sm"
               onChange={(event) => {

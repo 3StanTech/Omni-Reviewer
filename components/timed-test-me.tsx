@@ -499,7 +499,7 @@ export function firstPageCitation(texts: ReadonlyArray<string | null | undefined
 }
 
 /**
- * "Open slide N" after a wrong answer, for the first page cited by the
+ * "Open page N" after a wrong answer, for the first page cited by the
  * explanation or answer. Renders nothing when no viewer or page is available.
  */
 export function OpenCitedSlide({ texts }: { texts: ReadonlyArray<string | null | undefined> }) {
@@ -516,7 +516,7 @@ export function OpenCitedSlide({ texts }: { texts: ReadonlyArray<string | null |
       onClick={() => openSource({ source: citation.source, page, pageEnd: citation.pageEnd, claim })}
     >
       <Presentation weight="bold" />
-      Open slide {page}
+      Open page {page}
     </Button>
   );
 }

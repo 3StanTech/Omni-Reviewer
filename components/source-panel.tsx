@@ -130,7 +130,7 @@ export function VisionStatus({
           weight="bold"
         />
         <span aria-live="polite">
-          Reading slide images: {progress.done} of {progress.total}
+          Reading page images: {progress.done} of {progress.total}
         </span>
       </p>
     );
@@ -353,7 +353,7 @@ export function SourcePanel({
             Sources
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            PDFs, slides, documents and photos of slides. Pages that are mostly
+            PDFs, PowerPoints, documents and photos of pages. Pages that are mostly
             images are read automatically.
           </p>
         </div>
@@ -453,7 +453,7 @@ export function SourcePanel({
         <EmptyState
           icon={<UploadSimple weight="duotone" className="size-5" />}
           title="No sources yet"
-          description="Upload notes, slides, a PDF, or paste text. When at least one source is Ready, you can generate the four study modes."
+          description="Upload notes, a PDF or PowerPoint, or paste text. When at least one source is Ready, you can generate the four study modes."
           action={
             <Button
               type="button"

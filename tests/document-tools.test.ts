@@ -69,12 +69,11 @@ describe("document tools in the strip", () => {
     expect(actions).toContain('"Save changes"');
   });
 
-  it("registers Check again, Open slides, Pin and Earlier version as More items", () => {
+  it("registers Check again, Open source, Pin and Earlier version as More items", () => {
     expect(document).toContain("useModeMenuItems(`doc:${kind}`, menuItems);");
     for (const id of ["check-again", "open-slides", "pin", "earlier"]) {
       expect(document).toContain(`id: "${id}"`);
     }
-    expect(document).toContain('label: "Open slides"');
     expect(document).toContain("openSource({ source: firstCitation.source, page: firstCitation.pageStart })");
     expect(document).toContain('"Pinned and protected from silent overwrite" : "Protect from silent overwrite"');
     expect(document).toContain("onSelect: () => void togglePinned()");

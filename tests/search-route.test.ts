@@ -72,7 +72,7 @@ describe("GET /api/search", () => {
     expect(new Set(results.map((result: { key: string }) => result.key)).size).toBe(3);
     expect(results[0]).toMatchObject({
       packName: "Pharm",
-      kindLabel: "Slide 7",
+      kindLabel: "Page 7",
       href: searchResultHref({ kind: "source_page", topicId: "t1", reviewerId: "r1", sourceId: "s1", sourceIndex: 2, page: 7 }),
       snippet: [{ text: "Propranolol", mark: true }, { text: " blocks beta…", mark: false }],
     });

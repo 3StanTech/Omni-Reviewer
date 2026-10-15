@@ -543,6 +543,10 @@ export type StudyDocumentMeta = {
     termFlagged?: number;
     /** claimKey of each term-flagged claim and the terms its sources never mention. */
     termFlags?: Record<string, string[]>;
+    /** Lexical misses passed by the second look (cited or adjacent page, no absent term). */
+    secondLookSupported?: number;
+    /** claimKey of each second-look pass, at most 200. */
+    secondLookKeys?: string[];
   };
 };
 
@@ -570,9 +574,9 @@ function isTermFlags(value: unknown): value is Record<string, string[]> {
       && terms.every((term) => typeof term === "string" && term.length > 0 && term.length <= MAX_TERM_FLAG_TERM_CHARS));
 }
 
-function isUncheckedKeyList(value: unknown): value is string[] {
+function isUncheckedKeyList(value: unknown, max = MAX_UNCHECKED_KEYS): value is string[] {
   return Array.isArray(value)
-    && value.length <= MAX_UNCHECKED_KEYS
+    && value.length <= max
     && value.every((key) => typeof key === "string" && key.length <= MAX_UNCHECKED_KEY_CHARS);
 }
 
@@ -591,11 +595,15 @@ export function readStudyDocumentMeta(contentJson: unknown): StudyDocumentMeta |
   );
   const raw = (contentJson as { grounding?: unknown }).grounding;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { citationSources };
-  // A malformed key list, term-guard count or reason map is dropped; the rest of the report is kept.
-  const { uncheckedKeys, termFlagged, termFlags, ...rest } = raw as NonNullable<StudyDocumentMeta["grounding"]>;
+  // A malformed key list, term-guard or second-look count, or reason map is dropped; the rest of the report is kept.
+  const { uncheckedKeys, termFlagged, termFlags, secondLookSupported, secondLookKeys, ...rest } = raw as NonNullable<StudyDocumentMeta["grounding"]>;
   const grounding: NonNullable<StudyDocumentMeta["grounding"]> = isUncheckedKeyList(uncheckedKeys) ? { ...rest, uncheckedKeys } : rest;
   if (Number.isSafeInteger(termFlagged) && (termFlagged as number) >= 0) grounding.termFlagged = termFlagged;
   if (isTermFlags(termFlags)) grounding.termFlags = termFlags;
+  if (Number.isSafeInteger(secondLookSupported) && (secondLookSupported as number) >= 0) {
+    grounding.secondLookSupported = secondLookSupported;
+  }
+  if (isUncheckedKeyList(secondLookKeys, MAX_TERM_FLAG_KEYS)) grounding.secondLookKeys = secondLookKeys;
   return { citationSources, grounding };
 }
 

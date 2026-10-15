@@ -7,15 +7,17 @@ import {
   useEffect,
   useId,
   useRef,
+  useMemo,
   useState,
   type CSSProperties,
 } from "react";
-import { ChatCircleDots, WarningCircle } from "@phosphor-icons/react";
+import { BookOpen, ChatCircleDots, WarningCircle } from "@phosphor-icons/react";
 
+import { useSourceViewer } from "@/components/source-modal";
 import { Button } from "@/components/ui/button";
 import { MAX_ASK_QUESTION_CHARS } from "@/lib/ask-types";
 import { stripCitations, unsourcedTokenOffsets, type UnsourcedResolution } from "@/lib/citations";
-import { unsourcedClaimKey } from "@/lib/grounding";
+import { unsourcedClaimKey, unsourcedTagCitation } from "@/lib/grounding";
 import { cn } from "@/lib/utils";
 
 export const UNSOURCED_TAG_LABEL = "Not from your uploaded sources";
@@ -24,7 +26,7 @@ export const UNSOURCED_EXPLANATION_BODY =
   "The model added it. The checker searched every page of your uploads and found nothing that supports it. It may be correct general knowledge, or it may be wrong, and your professor may not test it.";
 /** Used when the grounding check was truncated or its verifier failed. */
 export const UNSOURCED_INCOMPLETE_CHECK_TEXT =
-  "This sentence did not match your uploaded sources, and the full check could not run this time. It may still be supported. Check the cited slide before you rely on it.";
+  "This sentence did not match your uploaded sources, and the full check could not run this time. It may still be supported. Check the cited page before you rely on it.";
 
 /** Why a tag without recorded missing terms was placed: the verifier rejected it (or it predates reasons). */
 export const UNSOURCED_VERIFIER_REASON = "The checker could not match this sentence to its cited page.";
@@ -32,6 +34,35 @@ export const UNSOURCED_VERIFIER_REASON = "The checker could not match this sente
 /** The tag's reason line: the terms the sources never mention, else the verifier's rejection. */
 export function unsourcedReasonText(terms: readonly string[] | null | undefined): string {
   return terms && terms.length > 0 ? `Not found in your sources: ${terms.join(", ")}` : UNSOURCED_VERIFIER_REASON;
+}
+
+/** Copy for a tag whose claim cites a page: the checker compared it with that page. */
+export function citedTagLabel(page: number): string {
+  return `Not confirmed on p.${page}`;
+}
+
+export function citedTagTitle(page: number): string {
+  return `The checker couldn't confirm this on p.${page}.`;
+}
+
+export function citedTagBody(page: number): string {
+  return `It may still be right. Open p.${page} to check, then Keep or Delete.`;
+}
+
+/** The cited tag's reason line: the terms the page never mentions, else the wording mismatch. */
+export function citedReasonText(page: number, terms: readonly string[] | null | undefined): string {
+  return terms && terms.length > 0
+    ? `p.${page} doesn't mention: ${terms.join(", ")}`
+    : `The wording is too different from p.${page} to match automatically.`;
+}
+
+/** The cited page of the nth rendered tag of `content`, or null for an uncited or whole-source claim. */
+export function unsourcedTagPage(
+  content: string,
+  occurrence: number,
+): { source: number; page: number; pageEnd: number | null } | null {
+  const offset = unsourcedTokenOffsets(content)[occurrence];
+  return offset === undefined ? null : unsourcedTagCitation(content, offset);
 }
 
 /** The recorded missing terms of the nth rendered tag of `content`, or null when none were recorded. */
@@ -97,6 +128,13 @@ const VIEWPORT_GUTTER = 16;
 export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number | null; inert?: boolean }) {
   const actions = useContext(UnsourcedActionsContext);
   const askWhy = useContext(AskWhyContext);
+  const { openSource, available: sourcesAvailable } = useSourceViewer();
+  const content = actions?.content;
+  const cited = useMemo(
+    () => (content !== undefined && occurrence !== null ? unsourcedTagPage(content, occurrence) : null),
+    [content, occurrence],
+  );
+  const label = cited ? citedTagLabel(cited.page) : UNSOURCED_TAG_LABEL;
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverId = useId();
@@ -152,10 +190,15 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
       return;
     }
     setSentence(askWhy ? claimSentence(rootRef.current) : "");
+    const terms = actions?.termFlags && actions.content !== undefined && occurrence !== null
+      ? unsourcedTagTerms(actions.content, occurrence, actions.termFlags)
+      : null;
     setReason(
-      actions?.termFlags && actions.content !== undefined && occurrence !== null
-        ? unsourcedReasonText(unsourcedTagTerms(actions.content, occurrence, actions.termFlags))
-        : null,
+      cited
+        ? citedReasonText(cited.page, terms)
+        : actions?.termFlags && actions.content !== undefined && occurrence !== null
+          ? unsourcedReasonText(terms)
+          : null,
     );
     const rect = rootRef.current?.getBoundingClientRect();
     const width = Math.min(POPOVER_MAX_WIDTH, window.innerWidth - VIEWPORT_GUTTER * 2);
@@ -194,6 +237,7 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
 
   const canAct = Boolean(actions) && occurrence !== null;
   const canAskWhy = Boolean(askWhy) && sentence.length > 0;
+  const canOpen = Boolean(cited) && sourcesAvailable;
   const actionsDisabled = !actions || actions.disabled || pending;
 
   return (
@@ -221,12 +265,12 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
         }}
       >
         <WarningCircle weight="bold" className="size-3" aria-hidden />
-        {UNSOURCED_TAG_LABEL}
+        {label}
       </button>
       <span
         id={popoverId}
         role="dialog"
-        aria-label={UNSOURCED_TAG_LABEL}
+        aria-label={label}
         hidden={!open}
         style={popoverStyle}
         className="absolute top-full z-30 mt-2 block rounded-xl border border-border bg-popover p-3 text-left font-sans text-sm leading-relaxed font-normal whitespace-normal text-popover-foreground not-italic shadow-[0_10px_30px_oklch(0_0_0/40%)]"
@@ -236,6 +280,12 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
             <span className="block">{UNSOURCED_INCOMPLETE_CHECK_TEXT}</span>
             {reason ? <span className="mt-1 block text-muted-foreground">{reason}</span> : null}
           </>
+        ) : cited ? (
+          <>
+            <strong className="block font-semibold">{citedTagTitle(cited.page)}</strong>
+            {reason ? <span className="mt-1 block text-muted-foreground">{reason}</span> : null}
+            <span className="mt-1 block text-muted-foreground">{citedTagBody(cited.page)}</span>
+          </>
         ) : (
           <>
             <strong className="block font-semibold">{UNSOURCED_EXPLANATION_TITLE}</strong>
@@ -243,8 +293,25 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
             <span className="mt-1 block text-muted-foreground">{UNSOURCED_EXPLANATION_BODY}</span>
           </>
         )}
-        {canAct || canAskWhy ? (
+        {canOpen || canAct || canAskWhy ? (
           <span className="mt-3 flex flex-wrap gap-2">
+            {canOpen && cited ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-h-11 sm:min-h-8"
+                onClick={() => {
+                  const claim = claimSentence(rootRef.current);
+                  // Focus the tag first so closing the source returns to it.
+                  close(true);
+                  openSource({ source: cited.source, page: cited.page, pageEnd: cited.pageEnd, claim: claim || null });
+                }}
+              >
+                <BookOpen weight="bold" aria-hidden />
+                Open p.{cited.page}
+              </Button>
+            ) : null}
             {canAct ? (
               <>
                 <Button

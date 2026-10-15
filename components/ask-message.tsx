@@ -14,7 +14,7 @@ import { isValidCardFront } from "@/lib/learning";
 import { MAX_CARD_BACK_CHARS, MAX_CARD_FRONT_CHARS } from "@/lib/learning-limits";
 import { cn } from "@/lib/utils";
 
-export const ASK_REFUSED_LABEL = "Not in your slides";
+export const ASK_REFUSED_LABEL = "Not in your sources";
 export const ASK_REFUSED_COPY =
   "Your lecture does not cover this. I will not answer from outside knowledge here. Check your reference or ask your professor.";
 

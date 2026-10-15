@@ -6,8 +6,10 @@ import { boundTermFlagTerms, readStudyDocumentMeta } from "@/lib/citations";
 import { claimKey, type GroundingReport, type GroundingSource } from "@/lib/grounding";
 import { recheckDocument } from "@/lib/recheck-tags";
 import {
+  citedReasonText,
   UNSOURCED_VERIFIER_REASON,
   unsourcedReasonText,
+  unsourcedTagPage,
   unsourcedTagTerms,
 } from "@/components/unsourced-tag";
 
@@ -62,6 +64,32 @@ describe("recheckDocument", () => {
     expect(result.report.verifierFailed).toBe(true);
   });
 
+  it("clears a tagged near-miss by the second look and lists it", async () => {
+    // Synthetic: rewords page 3 below the lexical threshold, cited on the adjacent page.
+    const nearMiss = "Vancomycin attaches to peptidoglycan precursors, halting construction of the wall in staphylococcal bacteria gradually. [S1 p.2]";
+    const sources: GroundingSource[] = [{
+      index: 1,
+      text: [
+        SOURCES[0].text,
+        "<<<page 3>>>",
+        "Vancomycin binds the terminal alanine residues of peptidoglycan precursors, which blocks cell wall growth in staphylococcal organisms and explains its slow bactericidal effect.",
+      ].join("\n"),
+    }];
+    const markdown = [tag(nearMiss), "", tag(TIGECYCLINE)].join("\n");
+    const preview = nearMiss.replace(" [S1 p.2]", "").slice(0, 100);
+
+    const result = await recheckDocument({ markdown, sources, previous: PREVIOUS });
+    expect(result.markdown).toBe([nearMiss, "", tag(TIGECYCLINE)].join("\n"));
+    expect(result.cleared).toEqual([preview]);
+    expect(result.secondLookCleared).toEqual([preview]);
+    expect(result.termFlagTagsKept).toBe(1);
+    expect(result.report).toMatchObject({ secondLookSupported: 1, secondLookKeys: [claimKey(nearMiss)] });
+
+    const strict = await recheckDocument({ markdown, sources, previous: PREVIOUS, secondLookThreshold: 0.5 });
+    expect(strict.secondLookCleared).toEqual([]);
+    expect(strict.tagsAfter).toBe(2);
+  });
+
   it("never reaches a model: no ai import and no verify function", () => {
     const core = readFileSync(join(process.cwd(), "lib/recheck-tags.ts"), "utf8");
     const script = readFileSync(join(process.cwd(), "scripts/recheck-tags.ts"), "utf8");
@@ -95,6 +123,26 @@ describe("stored term reasons", () => {
     expect(grounding?.unsourced).toBe(2);
   });
 
+  it("keeps valid second-look fields and drops malformed ones", () => {
+    const read = (fields: Record<string, unknown>) =>
+      readStudyDocumentMeta({ citationSources: [], grounding: { ...PREVIOUS, ...fields } })?.grounding;
+    expect(read({ secondLookSupported: 2, secondLookKeys: ["abcd1234", "abcd1235"] })).toMatchObject({
+      secondLookSupported: 2,
+      secondLookKeys: ["abcd1234", "abcd1235"],
+    });
+    for (const fields of [
+      { secondLookSupported: -1, secondLookKeys: "abcd1234" },
+      { secondLookSupported: 1.5, secondLookKeys: [42] },
+      { secondLookSupported: "3", secondLookKeys: ["k".repeat(17)] },
+      { secondLookSupported: Number.MAX_VALUE, secondLookKeys: Array.from({ length: 201 }, (_, i) => `k${i}`) },
+    ]) {
+      const grounding = read(fields);
+      expect(grounding?.secondLookSupported).toBeUndefined();
+      expect(grounding?.secondLookKeys).toBeUndefined();
+      expect(grounding?.unsourced).toBe(2);
+    }
+  });
+
   it("bounds terms before they are stored", () => {
     expect(boundTermFlagTerms(["a", "b", "c", "d", "e", "f"])).toEqual(["a", "b", "c", "d", "e"]);
     expect(boundTermFlagTerms(["y".repeat(50)])).toEqual(["y".repeat(40)]);
@@ -121,5 +169,34 @@ describe("tag reason line", () => {
     expect(document).toContain("termFlags: grounding ? grounding.termFlags ?? {} : undefined");
     const tagSource = readFileSync(join(process.cwd(), "components/unsourced-tag.tsx"), "utf8");
     expect(tagSource).toMatch(/text-muted-foreground">\{reason\}/);
+  });
+});
+
+describe("cited tag page and reason", () => {
+  it("names the claim's own first page citation", () => {
+    const doc = "Intro line.\n\n- Tigecycline covers resistant organisms in severe hospital infections. [[unsourced]] [S1 pp.4-5]";
+    expect(unsourcedTagPage(doc, 0)).toEqual({ source: 1, page: 4, pageEnd: 5 });
+  });
+
+  it("uses a table row's borrowed caption page", () => {
+    const doc = [
+      "Table: Prototype antibiotics [S1 p.11]",
+      "",
+      "| Drug | Action |",
+      "| --- | --- |",
+      "| Penicillin G | Inhibits cell wall synthesis in growing bacteria [[unsourced]] |",
+    ].join("\n");
+    expect(unsourcedTagPage(doc, 0)).toEqual({ source: 1, page: 11, pageEnd: 11 });
+  });
+
+  it("returns null for whole-source and uncited claims", () => {
+    expect(unsourcedTagPage("Tigecycline covers resistant organisms in severe hospital infections. [[unsourced]] [S1]", 0)).toBeNull();
+    expect(unsourcedTagPage("Tigecycline covers resistant organisms in severe hospital infections. [[unsourced]]", 0)).toBeNull();
+    expect(unsourcedTagPage("No tag here at all.", 0)).toBeNull();
+  });
+
+  it("says which terms the page lacks, else that the wording differs", () => {
+    expect(citedReasonText(4, ["BCG"])).toBe("p.4 doesn't mention: BCG");
+    expect(citedReasonText(4, null)).toBe("The wording is too different from p.4 to match automatically.");
   });
 });

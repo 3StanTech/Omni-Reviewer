@@ -3,15 +3,18 @@
  * the documents whose tags or reasons change.
  *
  * Usage:
- *   npx tsx --env-file=.env.local --conditions=react-server scripts/recheck-tags.ts [--reviewer <id>] [--apply]
+ *   npx tsx --env-file=.env.local --conditions=react-server scripts/recheck-tags.ts [--reviewer <id>] [--apply | --threshold <T>]
  *
  * Reads the Locked In and Summary of every pack not being deleted whose text
  * carries a tag (or of one pack with --reviewer), loads that pack's grounding
  * sources as Check again does, and re-checks with the verifier skipped: tagged
- * claims that now pass overlap and the term guard lose their tags, tagged
- * lexical misses keep theirs, and no other claim is tagged. Prints, per
- * document, tags before and after, the sentences that would clear (first 100
- * characters) and the terms still flagged.
+ * claims that now pass overlap (or the second look on a cited or adjacent
+ * page) and the term guard lose their tags, other tagged lexical misses keep
+ * theirs, and no other claim is tagged. Prints, per document, tags before and
+ * after, the sentences that would clear (first 100 characters; second-look
+ * clears also as "second look:") and the terms still flagged, then totals.
+ * --threshold <T> (0.30-0.55) tries another second-look threshold on a dry
+ * run; it is refused with --apply, which always uses the code constant.
  * Dry run by default: no writes. --apply saves each changed document through
  * updateStudyView with its read revision and skips one that changed since.
  * No model calls; no other writes.
@@ -28,20 +31,36 @@ import { reviewers, topics, views } from "@/lib/schema";
 type Kind = "locked_in" | "summary";
 
 function usage(): never {
-  console.error("Usage: npx tsx --env-file=.env.local --conditions=react-server scripts/recheck-tags.ts [--reviewer <id>] [--apply]");
+  console.error(
+    "Usage: npx tsx --env-file=.env.local --conditions=react-server scripts/recheck-tags.ts [--reviewer <id>] [--apply | --threshold <T>]",
+  );
   process.exit(1);
 }
 
-function parseArgs(argv: string[]): { reviewerId: string | null; apply: boolean } {
+const MIN_THRESHOLD = 0.3;
+const MAX_THRESHOLD = 0.55;
+
+function parseArgs(argv: string[]): { reviewerId: string | null; apply: boolean; threshold: number | undefined } {
   let reviewerId: string | null = null;
   let apply = false;
+  let threshold: number | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--apply") apply = true;
     else if (arg === "--reviewer" && argv[i + 1] && !argv[i + 1].startsWith("--")) reviewerId = argv[++i];
-    else usage();
+    else if (arg === "--threshold" && argv[i + 1] && /^\d*\.?\d+$/.test(argv[i + 1])) {
+      threshold = Number(argv[++i]);
+      if (!(threshold >= MIN_THRESHOLD && threshold <= MAX_THRESHOLD)) {
+        console.error(`--threshold must be between ${MIN_THRESHOLD} and ${MAX_THRESHOLD}`);
+        process.exit(1);
+      }
+    } else usage();
   }
-  return { reviewerId, apply };
+  if (apply && threshold !== undefined) {
+    console.error("--threshold is for dry runs only; --apply always uses the code's second-look threshold");
+    process.exit(1);
+  }
+  return { reviewerId, apply, threshold };
 }
 
 /** Tagged Locked In and Summary documents with their owners, packs being deleted left out. */
@@ -63,7 +82,7 @@ async function taggedDocuments(reviewerId: string | null) {
 }
 
 async function main() {
-  const { reviewerId, apply } = parseArgs(process.argv.slice(2));
+  const { reviewerId, apply, threshold } = parseArgs(process.argv.slice(2));
   if (!process.env.DATABASE_URL) {
     console.error("DATABASE_URL is not set");
     process.exit(1);
@@ -74,6 +93,9 @@ async function main() {
   const termTotals: Record<string, number> = {};
   let applied = 0;
   let skipped = 0;
+  let secondLookClears = 0;
+  let overlapClears = 0;
+  let termFlagTagsKept = 0;
 
   for (const document of documents) {
     const kind = document.kind as Kind;
@@ -87,9 +109,18 @@ async function main() {
       continue;
     }
 
-    const result = await recheckDocument({ markdown: view.content, sources, previous: meta?.grounding ?? null });
+    const result = await recheckDocument({
+      markdown: view.content,
+      sources,
+      previous: meta?.grounding ?? null,
+      secondLookThreshold: threshold,
+    });
     console.log(`\n${label}: tags ${result.tagsBefore} -> ${result.tagsAfter}`);
     for (const sentence of result.cleared) console.log(`  cleared: ${sentence}`);
+    for (const sentence of result.secondLookCleared) console.log(`  second look: ${sentence}`);
+    secondLookClears += result.secondLookCleared.length;
+    overlapClears += result.cleared.length - result.secondLookCleared.length;
+    termFlagTagsKept += result.termFlagTagsKept;
     const terms = Object.entries(result.stillFlagged).sort((a, b) => b[1] - a[1]);
     if (terms.length > 0) console.log(`  still flagged: ${terms.map(([term, count]) => `${term} (${count})`).join(", ")}`);
     for (const [term, count] of terms) termTotals[term] = (termTotals[term] ?? 0) + count;
@@ -127,6 +158,10 @@ async function main() {
   else console.log("No tagged documents found.");
   const totals = Object.entries(termTotals).sort((a, b) => b[1] - a[1]);
   if (totals.length > 0) console.log(`Still flagged terms: ${totals.map(([term, count]) => `${term} (${count})`).join(", ")}`);
+  if (threshold !== undefined) console.log(`Second-look threshold: ${threshold}`);
+  console.log(
+    `second-look clears: ${secondLookClears}, overlap clears: ${overlapClears}, term-flag tags kept: ${termFlagTagsKept}`,
+  );
   if (apply) console.log(`applied ${applied} documents, skipped ${skipped} (changed)`);
   else console.log("Dry run: nothing saved. Re-run with --apply to save.");
 }

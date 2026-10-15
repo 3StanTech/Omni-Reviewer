@@ -8,6 +8,7 @@ import {
   lexicalSupport,
   mergeRecheckReport,
   normalizeForMatch,
+  SECOND_LOOK_THRESHOLD,
   taggedClaims,
   unsourcedClaimKey,
   type GroundingReport,
@@ -958,5 +959,113 @@ describe("term-guard reasons and the no-model re-check", () => {
       total: 2, cited: 2, lexicalSupported: 2, verifiedSupported: 0, unsourced: 0, truncated: true, verifierFailed: true,
     });
     expect(mergeRecheckReport(previous, pass)).toMatchObject({ truncated: false, verifierFailed: false });
+  });
+});
+
+describe("second look", () => {
+  // Synthetic: the near-miss rewords page 5 and scores between the second-look and lexical thresholds there.
+  const NEAR_MISS = "Vancomycin attaches to peptidoglycan precursors, halting construction of the wall in staphylococcal bacteria gradually.";
+  const WITH_ABSENT_TERM = "Vancomycin attaches to peptidoglycan precursors, halting construction of the wall in Klebsiella cells.";
+  const VANCOMYCIN_PAGE = "Vancomycin binds the terminal alanine residues of peptidoglycan precursors, which blocks cell wall growth in staphylococcal organisms and explains its slow bactericidal effect.";
+  const sources: GroundingSource[] = [{
+    index: 1,
+    text: [
+      "<<<page 3>>>",
+      "Rifampin turns urine and tears orange and induces hepatic enzymes.",
+      "<<<page 4>>>",
+      "Nitrofurantoin concentrates in urine and treats uncomplicated cystitis.",
+      "<<<page 5>>>",
+      VANCOMYCIN_PAGE,
+      "<<<page 6>>>",
+      "Metronidazole covers anaerobes and causes a disulfiram-like reaction.",
+      "<<<page 7>>>",
+      "Clindamycin is linked to Clostridioides difficile colitis.",
+    ].join("\n"),
+  }];
+  const cite = (sentence: string, citation: string) => `${sentence} ${citation}`;
+  const tag = (sentence: string, citation: string) => `${sentence} [[unsourced]] ${citation}`;
+
+  it("scores the synthetic near-miss between the two thresholds on its page", () => {
+    const score = lexicalSupport(NEAR_MISS, VANCOMYCIN_PAGE);
+    expect(score).toBeGreaterThanOrEqual(SECOND_LOOK_THRESHOLD);
+    expect(score).toBeLessThan(LEXICAL_SUPPORT_THRESHOLD);
+  });
+
+  it.each(["[S1 p.5]", "[S1 p.4]", "[S1 p.6]", "[S1 pp.3-4]"])(
+    "passes a near-miss cited as %s without a model call",
+    async (citation) => {
+      const markdown = cite(NEAR_MISS, citation);
+      const verify = neverCalled();
+      const result = await groundDocument({ markdown, sources, verify });
+      expect(verify).not.toHaveBeenCalled();
+      expect(result.markdown).toBe(markdown);
+      expect(result.report).toMatchObject({
+        lexicalSupported: 0,
+        verifiedSupported: 0,
+        unsourced: 0,
+        secondLookSupported: 1,
+        secondLookKeys: [claimKey(NEAR_MISS)],
+      });
+    },
+  );
+
+  it.each([
+    ["two pages away", cite(NEAR_MISS, "[S1 p.3]")],
+    ["with a term the sources never mention", cite(WITH_ABSENT_TERM, "[S1 p.5]")],
+    ["when uncited", NEAR_MISS],
+    ["when citing the whole source", cite(NEAR_MISS, "[S1]")],
+  ])("sends the near-miss to the verifier %s", async (_, markdown) => {
+    const verify = rejectAll();
+    const result = await groundDocument({ markdown, sources, verify });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.markdown).toContain("[[unsourced]]");
+    expect(result.report.secondLookSupported).toBeUndefined();
+    expect(result.report.secondLookKeys).toBeUndefined();
+  });
+
+  it("uses the threshold it is given", async () => {
+    const verify = rejectAll();
+    const result = await groundDocument({ markdown: cite(NEAR_MISS, "[S1 p.5]"), sources, verify, secondLookThreshold: 0.5 });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.report.unsourced).toBe(1);
+  });
+
+  it("looks beside the page an uncited table row inherits from its caption", async () => {
+    const markdown = ["Antibiotic notes [S1 p.6]", "", "| Drug | Note |", "|---|---|", `| Vancomycin | ${NEAR_MISS} |`].join("\n");
+    const result = await groundDocument({ markdown, sources, verify: neverCalled() });
+    expect(result.report.secondLookSupported).toBe(1);
+  });
+
+  it("clears a tagged near-miss in a no-model re-check and records it", async () => {
+    const markdown = [tag(NEAR_MISS, "[S1 p.4]"), "", tag(WITH_ABSENT_TERM, "[S1 p.5]")].join("\n");
+    const result = await groundDocument({ markdown, sources, recheck: {}, skipVerifier: true });
+    expect(result.markdown).toBe([cite(NEAR_MISS, "[S1 p.4]"), "", tag(WITH_ABSENT_TERM, "[S1 p.5]")].join("\n"));
+    expect(result.report).toMatchObject({ unsourced: 1, secondLookSupported: 1, secondLookKeys: [claimKey(NEAR_MISS)] });
+  });
+
+  it("clears a recorded unchecked near-miss in a no-model re-check", async () => {
+    const markdown = cite(NEAR_MISS, "[S1 p.5]");
+    const result = await groundDocument({
+      markdown,
+      sources,
+      recheck: { uncheckedKeys: [claimKey(NEAR_MISS)] },
+      skipVerifier: true,
+    });
+    expect(result.report.uncheckedKeys).toBeUndefined();
+    expect(result.report.secondLookSupported).toBe(1);
+  });
+
+  it("a merge adds second-look counts and unions keys within the cap", () => {
+    const base: GroundingReport = {
+      total: 2, cited: 2, lexicalSupported: 0, verifiedSupported: 0, unsourced: 1, truncated: false, verifierFailed: false,
+    };
+    const many = Array.from({ length: 199 }, (_, i) => i.toString(16).padStart(8, "0"));
+    const previous = { ...base, secondLookSupported: 199, secondLookKeys: many };
+    const pass = { ...base, secondLookSupported: 2, secondLookKeys: [many[0], "ffffff01", "ffffff02"] };
+    const merged = mergeRecheckReport(previous, pass, { noModel: true });
+    expect(merged.secondLookSupported).toBe(201);
+    expect(merged.secondLookKeys).toEqual([...many, "ffffff01"]);
+    expect(mergeRecheckReport(base, base).secondLookSupported).toBeUndefined();
+    expect(mergeRecheckReport(null, pass).secondLookKeys).toEqual(pass.secondLookKeys);
   });
 });

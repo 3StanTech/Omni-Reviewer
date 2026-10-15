@@ -232,7 +232,7 @@ export function AskPanel({
         {empty && !loading && !pending ? (
           <div className="grid gap-3">
             <p className="text-sm text-muted-foreground">
-              Ask anything about this lecture. Answers come only from this pack&apos;s sources and cite the slide.
+              Ask anything about this lecture. Answers come only from this pack&apos;s sources and cite the page.
             </p>
             <div className="flex flex-wrap gap-2" role="group" aria-label="Suggested questions">
               {starterChips.map((chip) => (
@@ -270,7 +270,7 @@ export function AskPanel({
           <div role="status" className="flex justify-start">
             <p className="inline-flex items-center gap-2 rounded-2xl rounded-bl-md border border-border bg-card px-3.5 py-2 text-sm text-muted-foreground">
               <CircleNotch weight="bold" className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-              Reading your slides
+              Reading your sources
             </p>
           </div>
         ) : null}

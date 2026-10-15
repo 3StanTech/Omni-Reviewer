@@ -605,7 +605,7 @@ export function CardedView({
             })}
           >
             <Presentation weight="bold" />
-            Slide {backPage}
+            Page {backPage}
           </Button>
         ) : null}
       </div>

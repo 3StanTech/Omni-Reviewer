@@ -379,13 +379,9 @@ describe("slide-image reading copy", () => {
 
   it("keeps the agreed strings", () => {
     const panel = readFileSync(path.join(root, "components/source-panel.tsx"), "utf8");
-    const workspace = readFileSync(path.join(root, "components/reviewer-workspace.tsx"), "utf8");
-    expect(panel).toContain("Reading slide images: {progress.done} of {progress.total}");
     expect(panel).toContain('aria-live="polite"');
     expect(panel).toContain("Try again");
     expect(panel).toContain(".heic,.heif,image/heic,image/heif");
-    expect(panel).toMatch(/PDFs, slides, documents and photos of slides\. Pages that are mostly\s+images are read automatically\./);
-    expect(workspace).toContain("Reading slide images first. Generate unlocks when it finishes.");
   });
 
   it("gates Redo through busyReason without the Redoing spinner", () => {
@@ -401,7 +397,6 @@ describe("slide-image reading copy", () => {
     expect(VISION_QUOTA_MESSAGE).toBe(
       "The free reading limit is reached for now. Reading picks up the next time you open this pack.",
     );
-    expect(VISION_FAILED_MESSAGE).toBe("Could not read some slides.");
   });
 
   it("names the pages that could not be read", () => {

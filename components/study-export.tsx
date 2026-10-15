@@ -189,7 +189,7 @@ export function StudyExport({ reviewerId, kind, reviewerName, modeLabel, markdow
             <span className="flex size-4 shrink-0 items-center justify-center rounded border border-border">
               {keepCitations ? <Check weight="bold" className="size-3" /> : null}
             </span>
-            Include slide citations
+            Include page citations
           </button>
         </div>
       </div>

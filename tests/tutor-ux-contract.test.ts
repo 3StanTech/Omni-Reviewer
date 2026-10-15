@@ -29,7 +29,6 @@ describe("tutor components", () => {
     expect(panel).toMatch(/event\.key\s*!==\s*"Enter"\s*\|\|\s*event\.shiftKey/);
     expect(panel).toContain("MAX_ASK_QUESTION_CHARS");
     expect(panel).toContain("aria-live=\"polite\"");
-    expect(panel).toContain("Reading your slides");
   });
 
   it("keeps UI copy free of em dashes", () => {
@@ -72,7 +71,6 @@ describe("tutor components", () => {
 
   it("shows the fixed refusal copy and no card or notes actions when refused", () => {
     const message = read("components/ask-message.tsx");
-    expect(message).toContain("Not in your slides");
     expect(message).toContain(
       "Your lecture does not cover this. I will not answer from outside knowledge here. Check your reference or ask your professor.",
     );

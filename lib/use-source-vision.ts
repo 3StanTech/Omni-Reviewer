@@ -20,7 +20,7 @@ export const VISION_BATCH_BYTES = 4 * 1024 * 1024;
 
 export const VISION_QUOTA_MESSAGE =
   "The free reading limit is reached for now. Reading picks up the next time you open this pack.";
-export const VISION_FAILED_MESSAGE = "Could not read some slides.";
+export const VISION_FAILED_MESSAGE = "Could not read some pages.";
 /** The pages route's 409 body when the text changed under a merge. */
 export const VISION_SOURCE_CHANGED = "This source changed while reading. Try again.";
 
