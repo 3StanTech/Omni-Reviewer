@@ -633,8 +633,13 @@ export function ReviewerWorkspace({
     generationState.job?.intent === "redo" && generationState.job.targetKinds.length === 1
       ? generationState.job.targetKinds[0]
       : null;
-  // The first-pack cheer: any finished job except a single-mode redo.
-  const firstPack = useFirstCelebration("pack", finishedJob && finishedRedoKind === null);
+  // The first-pack cheer fires only on a run this visit watched finish (never on a
+  // restored job), and not for a single-mode redo.
+  const [sawRun, setSawRun] = useState(false);
+  if (!sawRun && (generationState.busy || generationState.status === "queued" || generationState.status === "running")) {
+    setSawRun(true);
+  }
+  const firstPack = useFirstCelebration("pack", sawRun && finishedJob && finishedRedoKind === null);
   const readyLabel = finishedRedoKind
     ? `${MODE_KIT_ITEMS.find((item) => item.kind === finishedRedoKind)?.label ?? "Pack"} ready`
     : "Pack ready";
