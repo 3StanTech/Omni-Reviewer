@@ -19,6 +19,7 @@ import { GenerationControls, type FreeRequestQuota } from "@/components/generati
 import { GenerationStatus } from "@/components/generation-status";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { RAIL_HEADER_CLASS, type ModeMenuItem } from "@/components/mode-toolbar";
+import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { PackReadyNotice } from "@/components/pack-ready-notice";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelHeader } from "@/components/ui/panel";
@@ -632,6 +633,8 @@ export function ReviewerWorkspace({
     generationState.job?.intent === "redo" && generationState.job.targetKinds.length === 1
       ? generationState.job.targetKinds[0]
       : null;
+  // The first-pack cheer: any finished job except a single-mode redo.
+  const firstPack = useFirstCelebration("pack", finishedJob && finishedRedoKind === null);
   const readyLabel = finishedRedoKind
     ? `${MODE_KIT_ITEMS.find((item) => item.kind === finishedRedoKind)?.label ?? "Pack"} ready`
     : "Pack ready";
@@ -745,6 +748,8 @@ export function ReviewerWorkspace({
       {hasViews ? (
         <>
           {generationNotice}
+          {/* Outlives Pack ready's 6 s on its own 8 s timer. */}
+          {firstPack.show ? <FirstCelebration kind="pack" onDone={firstPack.dismiss} /> : null}
           {studySection}
           {sourcesDialog}
         </>

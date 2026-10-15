@@ -111,6 +111,7 @@ Names only. Set values in `.env.local` (local) or your host (production):
 | `AUTH_URL` | Canonical app URL (set after first production deploy) |
 | `RESEND_API_KEY` | Resend API key for password-reset email (server only) |
 | `EMAIL_FROM` | Optional From header. Defaults to the Resend onboarding sender |
+| `BIRTHDAY_DATES` | Optional. `<userId>=MM-DD` pairs, comma-separated, for the desk's birthday greeting. Set only in the deployment's environment |
 
 See `.env.example` for the full list.
 

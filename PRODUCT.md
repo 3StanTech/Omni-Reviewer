@@ -111,6 +111,14 @@ A one-line bar on the desk sums up the day: cards due, weak sections, the neares
 - **Exam pacing.** New cards per day for each topic with an exam.
 - **Just browse.** Close the plan and pick any pack.
 
+### First week
+
+- **Guide.** Until the first pack is generated, the desk shows three steps (topic, pack with a ready handout, Generate) with the current one highlighted.
+- **Greeting.** The desk subtitle follows one order in Manila time: birthday (from `BIRTHDAY_DATES`), first run, late night (23:00-03:59), cards waiting with minutes, then all caught up.
+- **Study day.** A Manila calendar date with at least one Test Me answer or saved card rating. Carded practice saves no ratings, so it does not count.
+- **Week row and streak.** The Today card shows Mon-Sun dots for the current week. The streak counts consecutive study days ending today when today has study, else ending yesterday.
+- **Firsts.** The first generated pack, first finished sitting and first day with nothing left due each cheer once. `GET /api/firsts` returns the signed-in user's counts; a pack or sitting cheers only when its count is 1. The all-due day has no stored history, so a per-device flag (`omni-first-*`) keeps it to once per device. No schema change and no model calls.
+
 ## Generation
 
 - First-time **Generate** writes all four study modes. When all four exist, the control stays visible, reads **All generated**, and does not call a model. **Generate missing** fills only modes that are not stored yet.
@@ -219,6 +227,7 @@ The header button opens a dialog that searches every pack the signed-in user own
 | `AI_MODEL_JSON` | Test Me / Carded model id (`:free`) |
 | `AI_MODEL_VISION` | Vision model id for slide images and photos (`:free`) |
 | `AI_MODEL_FALLBACKS` | Comma-separated `:free` fallbacks |
+| `BIRTHDAY_DATES` | Optional `<userId>=MM-DD` pairs, comma-separated, for the birthday greeting (server only; never in Git) |
 
 ## Operator notes
 

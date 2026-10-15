@@ -12,6 +12,7 @@ import {
 
 import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
 import { EmptyState } from "@/components/empty-state";
+import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { KirbyCompanion, type KirbyReaction } from "@/components/kirby-companion";
 import { SittingRecap } from "@/components/sitting-recap";
 import { MarkdownBody } from "@/components/study-markdown";
@@ -212,6 +213,8 @@ function UntimedSitting({
   // Null when the sitting was already complete on load: its study time is unknown.
   const [openedAt, setOpenedAt] = useState<number | null>(() => (initialView.finished ? null : Date.now()));
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
+  // Set only when this visit's own answer finished the sitting, never on a resumed one.
+  const firstSitting = useFirstCelebration("sitting", finishedAt !== null);
   const inFlight = useRef(false);
   const [kirby, setKirby] = useState<KirbyReaction | null>(null);
 
@@ -435,7 +438,14 @@ function UntimedSitting({
     });
     return (
       <div className="space-y-4 dreamland:sm:grid dreamland:sm:grid-cols-[minmax(0,1fr)_auto] dreamland:sm:items-start dreamland:sm:gap-x-[18px] dreamland:sm:gap-y-4 dreamland:sm:space-y-0">
-        <div className="flex justify-end dreamland:sm:col-span-2">{timedRunButton}</div>
+        <div className="flex flex-wrap items-center justify-end gap-2 dreamland:sm:col-span-2">
+          {firstSitting.show ? (
+            <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
+              <FirstCelebration kind="sitting" onDone={firstSitting.dismiss} />
+            </div>
+          ) : null}
+          {timedRunButton}
+        </div>
         {/* The final answer completes the sitting, so its reaction plays here (Dream Land only). */}
         <KirbyCompanion
           size="md"

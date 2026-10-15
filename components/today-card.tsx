@@ -8,6 +8,7 @@ import type { TodayHrefs } from "@/components/today-modal";
 import { StudyHelp } from "@/components/study-help";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelHeader } from "@/components/ui/panel";
+import { WeekRow } from "@/components/week-row";
 import {
   todayBarParts,
   WEAK_SECTION_DEFINITION,
@@ -15,6 +16,7 @@ import {
   type TodayBarData,
   type TodayPlan,
 } from "@/lib/today-plan";
+import type { StudyWeek } from "@/lib/study-week";
 
 /** Where Start studying goes: the first Do-first item's mode in its pack. */
 export function startHref(item: DoFirstItem, hrefs: TodayHrefs): string {
@@ -56,10 +58,13 @@ export function TodayCard({
   plan,
   hrefs,
   onOpenPlan,
+  week,
 }: {
   plan: TodayPlan;
   hrefs: TodayHrefs;
   onOpenPlan: () => void;
+  /** The Manila study week; the row is left out without it. */
+  week?: StudyWeek;
 }) {
   const weakDefinitionId = useId();
   const parts = plan.empty ? [] : todayBarParts(plan.bar);
@@ -133,6 +138,11 @@ export function TodayCard({
           <StudyHelp />
         </div>
       </div>
+      {week ? (
+        <div className="print-hide border-t border-divider px-4 py-3">
+          <WeekRow week={week} />
+        </div>
+      ) : null}
     </Panel>
   );
 }

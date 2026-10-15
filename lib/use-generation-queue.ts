@@ -111,6 +111,8 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
   const [uploading, setUploading] = useState(false);
   const [skipped, setSkipped] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /** Packs this desk visit finished generating; feeds the first-pack cheer. */
+  const [packsReady, setPacksReady] = useState(0);
 
   const controllerRef = useRef<AbortController | null>(null);
   const loopRef = useRef(false);
@@ -174,6 +176,7 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
         setRunning({ id: pack.id, step: data.step ?? data.job?.step ?? null });
         const status = data.status ?? data.job?.status;
         if (status === "succeeded") {
+          setPacksReady((count) => count + 1);
           await putQueued(pack.id, false, signal);
           return true;
         }
@@ -407,6 +410,7 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
     remove,
     retry,
     checkAgain,
+    packsReady,
     status: { uploading, running: running !== null, waiting, quota, skipped, error },
   };
 }

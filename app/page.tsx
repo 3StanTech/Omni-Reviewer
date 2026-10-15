@@ -5,8 +5,11 @@ import { AppShell } from "@/components/app-shell";
 import type { ReviewerListItem } from "@/components/reviewer-list";
 import { StudyHome } from "@/components/study-home";
 import type { TopicListItem } from "@/components/topic-tabs";
+import { deskSubtitle, parseBirthdayDates } from "@/lib/desk-subtitle";
 import { greetingFor } from "@/lib/greeting";
 import {
+  getFirstRunState,
+  getStudyDays,
   getTodayPlan,
   listActiveUntimedReviewerIds,
   listDueByTopic,
@@ -14,6 +17,7 @@ import {
   listTopics,
   packMasterySummary,
 } from "@/lib/queries";
+import { studyWeek } from "@/lib/study-week";
 
 export const dynamic = "force-dynamic";
 
@@ -46,11 +50,14 @@ export default async function HomePage({ searchParams }: HomeProps) {
   const selectedTopic =
     topics.find((t) => t.id === selectedId) ?? null;
 
-  const [reviewers, activeUntimed, today, dueCounts] = await Promise.all([
+  const now = new Date();
+  const [reviewers, activeUntimed, today, dueCounts, firstRun, studyDays] = await Promise.all([
     selectedId ? listReviewersByTopic(selectedId, userId) : [],
     selectedId ? listActiveUntimedReviewerIds(userId) : [],
     getTodayPlan(userId),
     listDueByTopic(userId),
+    getFirstRunState(userId),
+    getStudyDays(userId, now),
   ]);
   const activeUntimedIds = new Set(activeUntimed);
 
@@ -70,13 +77,24 @@ export default async function HomePage({ searchParams }: HomeProps) {
     mastery: packMasterySummary(today?.mastery.get(r.id)),
   }));
 
+  const bar = today && !today.plan.empty ? today.plan.bar : null;
+  const subtitle = deskSubtitle({
+    now,
+    firstName: session?.user?.name?.trim().split(/\s+/)[0] || null,
+    birthday: parseBirthdayDates(process.env.BIRTHDAY_DATES).get(userId) ?? null,
+    firstRun: firstRun.generatedPacks === 0,
+    reviewCards: bar?.reviewCards ?? 0,
+    newCards: bar?.newCards ?? 0,
+    minutes: bar?.minutes ?? 0,
+  });
+
   const dueByTopic = Object.fromEntries(dueCounts);
   const dueTodayTotal = [...dueCounts.values()].reduce((sum, count) => sum + count, 0);
 
   return (
     <AppShell
-      title={greetingFor(session?.user?.name, new Date()) ?? "Study desk"}
-      subtitle="Pick a topic, open a study pack, attach sources, then generate when you are ready."
+      title={greetingFor(session?.user?.name, now) ?? "Study desk"}
+      subtitle={subtitle}
       topics={serializedTopics}
       selectedTopicId={selectedId}
       dueByTopic={dueByTopic}
@@ -89,6 +107,8 @@ export default async function HomePage({ searchParams }: HomeProps) {
         topicName={selectedTopic?.name ?? null}
         reviewers={serializedReviewers}
         today={today ? { plan: today.plan, packTopicIds: today.packTopicIds } : null}
+        firstRun={firstRun.generatedPacks === 0 ? firstRun : null}
+        week={studyWeek(studyDays, now)}
         userId={userId}
       />
     </AppShell>

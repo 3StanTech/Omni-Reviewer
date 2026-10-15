@@ -13,6 +13,7 @@ import {
 import { ExplainThisButton } from "@/components/ask-provider";
 import { CardExport } from "@/components/card-export";
 import { EmptyState } from "@/components/empty-state";
+import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { KirbyCompanion, type KirbyReaction } from "@/components/kirby-companion";
 import { useSourceViewer } from "@/components/source-modal";
 import { SittingRecap } from "@/components/sitting-recap";
@@ -217,6 +218,8 @@ export function CardedView({
     [durableCards, queue, ratedSet],
   );
 
+  // A due session that rated at least one card; the server then says whether anything is still due today.
+  const firstAllDue = useFirstCelebration("all-due", mode === "due" && dueSession.finished && dueSession.completed > 0);
   const browsing = mode === "browse";
   const practicing = mode === "practice";
   const cardById = useMemo(() => new Map(durableCards.map((item) => [item.id, item])), [durableCards]);
@@ -551,6 +554,9 @@ export function CardedView({
           title="No cards due"
           description="Nothing is due in this session. Browse all to inspect cards without scheduling, or start again later."
         />
+      ) : null}
+      {mode === "due" && dueSession.finished && firstAllDue.show ? (
+        <FirstCelebration kind="all-due" onDone={firstAllDue.dismiss} />
       ) : null}
       {mode === "due" && dueSession.finished ? (
         <WithKirby reaction={kirby}>

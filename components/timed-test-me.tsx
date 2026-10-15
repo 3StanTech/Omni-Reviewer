@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { EXPLAIN_CHOSEN_MAX_CHARS, ExplainThisButton } from "@/components/ask-provider";
+import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { KirbyCompanion } from "@/components/kirby-companion";
 import { SittingRecap } from "@/components/sitting-recap";
 import { useSourceViewer } from "@/components/source-modal";
@@ -95,6 +96,8 @@ export function TimedTestMe({
   const [complete, setComplete] = useState(false);
   const [loadingSession, setLoadingSession] = useState(true);
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
+  // Set only when this run's last accepted answer finishes it, never mid-run or on a resumed recap.
+  const firstSitting = useFirstCelebration("sitting", finishedAt !== null);
   const inFlight = useRef(false);
   const itemsRef = useRef(items);
   useEffect(() => {
@@ -371,7 +374,8 @@ export function TimedTestMe({
           reaction={{ outcome, key: 1 }}
           className="shrink-0 max-sm:w-16 max-sm:self-end"
         />
-        <div className="min-w-0 dreamland:sm:flex-1">
+        <div className="min-w-0 space-y-3 dreamland:sm:flex-1">
+          {firstSitting.show ? <FirstCelebration kind="sitting" onDone={firstSitting.dismiss} /> : null}
           <SittingRecap
             title="Timed run complete"
             lines={[

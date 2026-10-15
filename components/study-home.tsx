@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
+import { FirstRunGuide, type FirstRunGuideState } from "@/components/first-run-guide";
 import { GenerationQueuePanel } from "@/components/generation-queue-panel";
 import {
   ReviewerList,
@@ -11,6 +13,7 @@ import { TodayCard } from "@/components/today-card";
 import { TodayModal, type TodayHrefs } from "@/components/today-modal";
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
 import { useTopicNav } from "@/components/topic-shelf";
+import type { StudyWeek } from "@/lib/study-week";
 import { outlineHeadingHref } from "@/lib/study-outline";
 import type { TodayPlan } from "@/lib/today-plan";
 import { useGenerationQueue } from "@/lib/use-generation-queue";
@@ -43,6 +46,10 @@ type StudyHomeProps = {
   today: StudyHomeToday | null;
   /** Session user, for the batch upload's Blob paths. Absent hides the batch button. */
   userId?: string | null;
+  /** First-run counts while no pack is generated yet; null hides the guide. */
+  firstRun?: FirstRunGuideState | null;
+  /** The Manila study week for the Today card's row. */
+  week?: StudyWeek;
 };
 
 export function StudyHome({
@@ -52,9 +59,12 @@ export function StudyHome({
   reviewers,
   today,
   userId = null,
+  firstRun = null,
+  week,
 }: StudyHomeProps) {
   const topicNav = useTopicNav();
   const queue = useGenerationQueue({ userId });
+  const firstPack = useFirstCelebration("pack", queue.packsReady > 0);
   const [todayOpen, setTodayOpen] = useState(false);
   const packTopicIds = today?.packTopicIds;
   const hrefs = useMemo(() => todayHrefs(packTopicIds ?? {}), [packTopicIds]);
@@ -77,9 +87,11 @@ export function StudyHome({
 
   return (
     <div className="flex flex-col gap-5">
+      {firstRun ? <FirstRunGuide state={firstRun} /> : null}
+      {firstPack.show ? <FirstCelebration kind="pack" onDone={firstPack.dismiss} /> : null}
       {today ? (
         <>
-          <TodayCard plan={today.plan} hrefs={hrefs} onOpenPlan={() => setTodayOpen(true)} />
+          <TodayCard plan={today.plan} hrefs={hrefs} onOpenPlan={() => setTodayOpen(true)} week={week} />
           <TodayModal
             plan={today.plan}
             open={todayOpen}

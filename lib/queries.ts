@@ -621,6 +621,65 @@ export async function listActiveUntimedReviewerIds(userId: string): Promise<stri
   return rows.map((row) => row.reviewerId);
 }
 
+export type FirstRunState = {
+  topics: number;
+  packs: number;
+  packsWithReadySource: number;
+  generatedPacks: number;
+};
+
+/** Counts behind the first-run guide, over this owner's live topics and packs. */
+export async function getFirstRunState(userId: string): Promise<FirstRunState> {
+  const [[topicRow], [packRow]] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(topics)
+      .where(and(eq(topics.userId, userId), isNull(topics.deletingAt))),
+    db
+      .select({
+        packs: sql<number>`count(*)::int`,
+        generated: sql<number>`count(*) filter (where ${reviewers.lastGeneratedAt} is not null)::int`,
+        withReadySource: sql<number>`count(*) filter (where exists (
+          select 1 from ${sources}
+          where ${sources.reviewerId} = ${reviewers.id}
+            and ${sources.ingestStatus} = 'ready'
+            and ${sources.deletingAt} is null
+        ))::int`,
+      })
+      .from(reviewers)
+      .innerJoin(topics, eq(reviewers.topicId, topics.id))
+      .where(and(eq(topics.userId, userId), isNull(topics.deletingAt), isNull(reviewers.deletingAt))),
+  ]);
+  return {
+    topics: topicRow?.count ?? 0,
+    packs: packRow?.packs ?? 0,
+    packsWithReadySource: packRow?.withReadySource ?? 0,
+    generatedPacks: packRow?.generated ?? 0,
+  };
+}
+
+/**
+ * Manila dates (`YYYY-MM-DD`) in the last 60 days on which this owner answered
+ * a Test Me question or rated a card. Carded practice saves no reviews, so it
+ * never counts.
+ */
+export async function getStudyDays(userId: string, now = new Date()): Promise<string[]> {
+  const since = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+  const attemptDay = sql<string>`to_char(${testAttempts.attemptedAt} at time zone 'Asia/Manila', 'YYYY-MM-DD')`;
+  const reviewDay = sql<string>`to_char(${cardReviews.reviewedAt} at time zone 'Asia/Manila', 'YYYY-MM-DD')`;
+  const [attemptRows, reviewRows] = await Promise.all([
+    db
+      .selectDistinct({ day: attemptDay })
+      .from(testAttempts)
+      .where(and(eq(testAttempts.userId, userId), gt(testAttempts.attemptedAt, since))),
+    db
+      .selectDistinct({ day: reviewDay })
+      .from(cardReviews)
+      .where(and(eq(cardReviews.userId, userId), gt(cardReviews.reviewedAt, since))),
+  ]);
+  return [...new Set([...attemptRows, ...reviewRows].map((row) => row.day))].sort();
+}
+
 export async function getReviewer(
   id: string,
   userId: string,
