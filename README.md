@@ -125,7 +125,7 @@ Schema commands (`db:baseline`, `db:migrate`, `db:backfill-fsrs`, and `db:push` 
 
 ## Ask this pack and search
 
-- **Ask, Explain this, Ask why.** One thread per pack. Answers use only the pack's Ready sources, end with slide citations, and refuse ("Not in your slides") when the sources do not cover the question. The full contract is in `PRODUCT.md`.
+- **Ask, Explain this, Ask why.** One thread per pack. Answers use only the pack's Ready sources, end with page citations, and refuse ("Not in your sources") when the sources do not cover the question. The full contract is in `PRODUCT.md`.
 - **Save to Notes and Make a card.** A saved answer shows under "From Ask" in Notes. Make a card adds a user-authored card to Carded.
 - **Search packs.** A header dialog that searches slide text, Locked In, Summary and cards across the signed-in user's packs. It makes no model calls.
 

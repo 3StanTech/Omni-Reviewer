@@ -119,6 +119,8 @@ export function SourceViewerProvider({
   children?: ReactNode;
 }) {
   const [target, setTarget] = useState<ViewerTarget | null>(null);
+  // Open is separate from the target so the closing animation keeps showing the page.
+  const [open, setOpen] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
   const openerRef = useRef<HTMLElement | null>(null);
   const [documents] = useState(() => new Map<string, Promise<PdfDocument>>());
@@ -128,6 +130,7 @@ export function SourceViewerProvider({
     const active = document.activeElement;
     openerRef.current = active instanceof HTMLElement ? active : null;
     setFullScreen(readFullScreen());
+    setOpen(true);
     setTarget({
       source: args.source,
       sourceId: null,
@@ -143,6 +146,7 @@ export function SourceViewerProvider({
       const active = document.activeElement;
       openerRef.current = active instanceof HTMLElement ? active : null;
       setFullScreen(readFullScreen());
+      setOpen(true);
       setTarget({
         source: null,
         sourceId: args.sourceId,
@@ -178,16 +182,19 @@ export function SourceViewerProvider({
     <SourceViewerContext.Provider value={value}>
       {children}
       <Dialog
-        open={target !== null}
-        onOpenChange={(open, details) => {
-          if (open) return;
+        open={open}
+        onOpenChange={(next, details) => {
+          if (next) return;
           // Esc leaves full screen first; a second Esc closes.
           if (details.reason === "escape-key" && fullScreen) {
             details.cancel();
             toggleFullScreen(false);
             return;
           }
-          setTarget(null);
+          setOpen(false);
+        }}
+        onOpenChangeComplete={(next) => {
+          if (!next) setTarget(null);
         }}
       >
         <DialogContent
