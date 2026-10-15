@@ -28,14 +28,33 @@ export function ReadItAll({
   useEffect(() => {
     const marker = endRef.current;
     if (reached || !marker || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting) || window.scrollY <= 0) return;
+    // Arrival needs both: the marker in view and a scroll during this view (a restored
+    // scroll position or a page that opens at its end does not count).
+    let visible = false;
+    let scrolled = false;
+    let done = false;
+    function check() {
+      if (done || !visible || !scrolled) return;
+      done = true;
       observer.disconnect();
+      window.removeEventListener("scroll", onScroll);
       setArrivedAt(Date.now());
       onReached();
+    }
+    function onScroll() {
+      scrolled = true;
+      check();
+    }
+    const observer = new IntersectionObserver((entries) => {
+      visible = entries.some((entry) => entry.isIntersecting);
+      check();
     });
     observer.observe(marker);
-    return () => observer.disconnect();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("scroll", onScroll);
+    };
   }, [endRef, onReached, reached]);
 
   // The status region stays mounted so the line is announced when it appears.

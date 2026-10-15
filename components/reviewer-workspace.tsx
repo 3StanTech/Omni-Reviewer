@@ -600,6 +600,7 @@ export function ReviewerWorkspace({
         sourcesAreMediaOnly={sourcesAreMediaOnly}
         busyReason={busyReason}
         quota={quota}
+        fullKirby={generationPose === null}
         onGenerate={() => void generation.start({ intent: "generate_missing" })}
         onResume={() => void generation.resume()}
       />
@@ -618,6 +619,7 @@ export function ReviewerWorkspace({
       </h2>
       {viewsError ? (
         <div className="print-hide flex flex-wrap items-center gap-2">
+          <KirbyCompanion size="xs" pose="puzzled" className="shrink-0" />
           <p role="alert" className="text-sm text-destructive">
             {viewsError}
           </p>

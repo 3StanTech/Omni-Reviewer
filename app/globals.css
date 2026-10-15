@@ -1082,7 +1082,10 @@ html[data-focus="on"] main {
 @keyframes k-spit-star { 0%, 34% { opacity: 0; transform: translate(0, 0) scale(.4); } 40% { opacity: 1; transform: translate(10px, 0) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(80px, -22px) rotate(540deg); } }
 
 /* Kirby's world pieces (components/kirby-art.tsx) */
-.kirby-art { display: block; overflow: visible; }
+/* Base layer, so a piece's own `hidden dreamland:block` utilities still win in Day and Night. */
+@layer base {
+  .kirby-art { display: block; overflow: visible; }
+}
 .kirby-art .cake-flame { animation: k-flicker .9s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 100%; }
 .kirby-art.waddle-dee .wd-page { animation: wd-hold 1.4s ease-in-out infinite; }
 @keyframes wd-hold { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }

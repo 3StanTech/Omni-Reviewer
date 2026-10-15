@@ -20,6 +20,7 @@ export function GenerationControls({
   sourcesAreMediaOnly,
   busyReason = null,
   quota,
+  fullKirby = true,
   onGenerate,
   onResume,
 }: {
@@ -31,6 +32,8 @@ export function GenerationControls({
   /** Set while something must finish first; Generate and Resume wait for it. */
   busyReason?: string | null;
   quota?: FreeRequestQuota | null;
+  /** False while the section already shows a Kirby (inhale or puzzled): one per area. */
+  fullKirby?: boolean;
   onGenerate: () => void;
   onResume: () => void;
 }) {
@@ -74,7 +77,7 @@ export function GenerationControls({
             {quota.remaining === 0 ? ". More at 8:00 AM." : null}
           </p>
           {/* Full tummy: nothing left to inhale today (Dream Land only). */}
-          {quota.remaining === 0 ? <KirbyCompanion size="xs" pose="full" className="shrink-0" /> : null}
+          {quota.remaining === 0 && fullKirby ? <KirbyCompanion size="xs" pose="full" className="shrink-0" /> : null}
         </div>
       ) : null}
       {busyReason ? (
