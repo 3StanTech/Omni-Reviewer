@@ -141,7 +141,7 @@ Routes (all require a session; cross-user ids return 404):
 | `POST /api/reviewers/[id]/ask/[messageId]/card` | Make a card from an answer. Idempotent per answer |
 | `GET /api/search?q=` | Full-text search. A query outside 2 to 200 characters returns no results |
 
-**Free-request quota.** Each Ask, Explain or Ask why that is not reused costs one request from the shared daily free-model cap (50 a day on this key, the same cap Generate and slide reading use). There is no separate app-side limit, so heavy asking can delay a Generate the same day. When the provider reports the limit is used up, Ask shows "The free model limit is used up for now. Try again later today." and keeps the draft. Search, Save to Notes, Make a card, Clear chat and a reused Explain or Ask why make no model calls. Ask does not run the grounding verifier, so a question is exactly one request.
+**Free-request quota.** Each Ask, Explain or Ask why that is not reused is one model request, counted toward the shared daily free-model cap only when its model is gated (see Privacy and generation contracts). When the provider reports the per-day limit, Ask shows "Today's free requests are used up. More at 8:00 AM." and keeps the draft; a per-minute limit shows "The free model limit is used up for now. Try again later today." Search, Save to Notes, Make a card, Clear chat and a reused Explain or Ask why make no model calls. Ask does not run the grounding verifier, so a question is exactly one request.
 
 Search reads generated `tsvector` columns, so no write path changed. It indexes the first 150,000 characters of each source and of each Locked In and Summary document, plus card fronts and backs. Text past that prefix is not searchable.
 
@@ -156,6 +156,7 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
 3. Then production, with the owner's go, after a Neon snapshot. Run the same two commands against production's direct URL.
 4. `npm run db:backfill-fsrs` is a one-time run after `0001`. It sets FSRS state on cards that have none by replaying their reviews, and it is idempotent, so a second run changes nothing.
 5. `0002_tutor` only adds objects, so it needs no backfill and rerunning `npm run db:migrate` is a no-op. Adding the `search_tsv` columns computes the vector for existing rows, which is quick at this scale.
+6. `0004_free_request_ledger` only adds the `free_request_days` table, so it needs no backfill.
 
 `npm run db:push` is for local scratch databases only. Never run it against production.
 
@@ -164,6 +165,13 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
 - Source bytes and extracted text are private application data. Storage paths,
   metadata, and retrieval must remain scoped to the signed-in owner and reviewer;
   clients must not rely on public blob URLs.
+- Every model request goes to the first model in its chain (`AI_MODEL_<purpose>`,
+  then `AI_MODEL_FALLBACKS`) whose measured input ceiling in `lib/openrouter.ts`
+  fits the prompt. Today: dots up to 30,000 tokens, then Gemma 4 31B. Re-probe
+  before changing the catalogue; dots' listing expires 2026-12-31.
+- Packs left today come from the app's own count of requests on gated models
+  (`free_request_days`, one row per UTC day, reset 8:00 AM Manila). A per-day 429
+  marks the day used up and wins over the count. Reading it calls no model.
 - A generation run is represented by a persisted job before model work begins.
   The client treats the job id and server status as the source of truth, polls
   for progress, and can resume after a refresh from the last completed step.
@@ -177,7 +185,7 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
 
 - Sign in at `/login` with email + password.
 - Five failed sign-ins in 15 minutes lock that email for 15 minutes.
-- Forgot password sends a one-hour, single-use link when `RESEND_API_KEY` is set. The form does not say whether the email has an invite.
+- Forgot password sends a one-hour, single-use link when `RESEND_API_KEY` is set and `EMAIL_FROM` is a verified sender. The form does not say whether the email has an invite. While `EMAIL_FROM` is unset (Resend's test sender, which reaches no one else), the page tells the user to message Tristan instead; reset with `npm run user:reset-password`.
 - Create invites (no public register):
 
 ```bash
