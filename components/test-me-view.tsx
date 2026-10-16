@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/empty-state";
 import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { KirbyCompanion, type KirbyReaction } from "@/components/kirby-companion";
 import { SittingRecap } from "@/components/sitting-recap";
+import { useRefreshSectionMasteryOnFinish } from "@/components/study-side-panel";
 import { MarkdownBody } from "@/components/study-markdown";
 import { OpenCitedSlide, TimedTestMe } from "@/components/timed-test-me";
 import { Button } from "@/components/ui/button";
@@ -219,6 +220,7 @@ function UntimedSitting({
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   // Set only when this visit's own answer finished the sitting, never on a resumed one.
   const firstSitting = useFirstCelebration("sitting", finishedAt !== null);
+  useRefreshSectionMasteryOnFinish(finishedAt);
   const inFlight = useRef(false);
   const [kirby, setKirby] = useState<KirbyReaction | null>(null);
 
@@ -664,7 +666,7 @@ function SittingItem({
           </div>
 
           {item.choices ? (
-            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby={questionId}>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby={questionId}>
               {item.choices.map((choice, choiceIndex) => {
                 const choiceId = controlId(item.id, `choice-${choiceIndex + 1}`);
                 const active = selected === choice;
@@ -691,7 +693,7 @@ function SittingItem({
                     >
                       {choiceIndex + 1}
                     </span>
-                    <span className="min-w-0 flex-1 break-words">
+                    <span className="min-w-0 flex-1 hyphens-manual break-words">
                       <MarkdownBody source={choice} inline />
                     </span>
                   </button>

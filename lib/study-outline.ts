@@ -94,6 +94,9 @@ export function remarkStudyHeadingIds() {
   };
 }
 
+/** "Locked In:" or "Summary:" opening a mode's title; the reader shows it quietly and the outline drops it. */
+export const MODE_PREFIX = /^(Locked In|Summary)\s*:\s*/;
+
 export function studyOutline(markdown: string): StudyHeading[] {
   let tree: RootNode;
   try {
@@ -103,7 +106,14 @@ export function studyOutline(markdown: string): StudyHeading[] {
   } catch {
     return [];
   }
-  return headingEntries(tree);
+  const headings = headingEntries(tree);
+  // Ids keep the full title so anchors match the rendered heading.
+  const first = headings.findIndex((heading) => heading.level === 1);
+  if (first >= 0) {
+    const text = headings[first]!.text.replace(MODE_PREFIX, "");
+    if (text) headings[first] = { ...headings[first]!, text };
+  }
+  return headings;
 }
 
 export function headingIds(markdown: string): string[] {

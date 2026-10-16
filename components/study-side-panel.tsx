@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { ListBullets, NotePencil } from "@phosphor-icons/react";
+import { useRouter } from "next/navigation";
 
 import { useOptionalAsk } from "@/components/ask-provider";
 import { MasteryBar } from "@/components/mastery-bar";
@@ -24,6 +25,17 @@ export function SectionMasteryProvider({ sections, children }: { sections: Secti
 /** The pack's section mastery, or null outside the pack page. */
 export function useSectionMastery(): SectionMastery[] | null {
   return useContext(SectionMasteryContext);
+}
+
+/**
+ * Reloads the server-loaded section mastery once when a sitting finishes, so
+ * the rail's Sections show the new bars without a page reload.
+ */
+export function useRefreshSectionMasteryOnFinish(finishedAt: number | null) {
+  const router = useRouter();
+  useEffect(() => {
+    if (finishedAt !== null) router.refresh();
+  }, [finishedAt, router]);
 }
 
 /**

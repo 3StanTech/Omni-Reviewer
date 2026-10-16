@@ -78,7 +78,7 @@ export function PackMastery({ mastery }: { mastery: ReviewerListItem["mastery"] 
           aria-describedby={weakDefinitionId}
         >
           <WarningCircle weight="bold" aria-hidden className="mt-px size-3.5 shrink-0 text-warning" />
-          <span className="line-clamp-1 min-w-0 break-words">Weak: {mastery.weakTitle}</span>
+          <span className="line-clamp-2 min-w-0 break-words">Weak: {mastery.weakTitle}</span>
           <span id={weakDefinitionId} hidden>
             {WEAK_SECTION_DEFINITION}
           </span>

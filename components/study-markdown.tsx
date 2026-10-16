@@ -19,7 +19,7 @@ import {
   remarkStudyAnnotations,
   type AnnotationRecord,
 } from "@/lib/annotations";
-import { remarkStudyHeadingIds, STUDY_HEADING_CLOBBER_PREFIX, STUDY_HEADING_ID_PATTERN } from "@/lib/study-outline";
+import { MODE_PREFIX, remarkStudyHeadingIds, STUDY_HEADING_CLOBBER_PREFIX, STUDY_HEADING_ID_PATTERN } from "@/lib/study-outline";
 import { sanitizeMarkdownUrl } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
@@ -227,8 +227,6 @@ type HastNode = {
   properties?: Record<string, unknown>;
   children?: HastNode[];
 };
-
-const MODE_PREFIX = /^(Locked In|Summary)\s*:\s*/;
 
 function firstElement(node: HastNode, tagName: string): HastNode | null {
   for (const child of node.children ?? []) {

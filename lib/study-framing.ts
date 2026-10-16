@@ -88,6 +88,11 @@ const LEADING_PHRASE = `(?:according\\s+to|based\\s+on|from|in|as\\s+(?:describe
 const LEADING_SELF_REFERENCE = new RegExp(`^(\\s*)${LEADING_PHRASE}\\s*,\\s*`, "i");
 /** The same opening wrapped in emphasis ("**In the document,** ..."), unwrapped first. */
 const EMPHASIZED_LEADING_SELF_REFERENCE = new RegExp(`^(\\s*)([*_]{1,3})(${LEADING_PHRASE}\\s*,?)\\2\\s*`, "i");
+/** "The text explicitly states that ..." opening an explanation; never "The text of ... states". */
+const LEADING_STATEMENT = new RegExp(
+  `^(\\s*)(?:the|this)\\s+${SELF_NOUN}\\s+(?:explicitly\\s+|clearly\\s+|directly\\s+)?(?:states|says|notes|mentions|explains|describes|indicates|shows)\\s+that\\s+`,
+  "i",
+);
 /** ", as described in the document" or " in the guide" inside a sentence; never "the text of ...". */
 const INLINE_SELF_REFERENCE = new RegExp(
   `,?\\s+(?:as\\s+(?:described|stated|discussed|noted|shown|explained|mentioned)\\s+)?(?:in|from|according\\s+to|within)\\s+(?:the|this)\\s+${SELF_NOUN}(?!\\s+of\\b)(?=[\\s,.?!;:)]|$)`,
@@ -105,6 +110,7 @@ export function stripSelfReference(text: string): string {
   const stripped = text
     .replace(EMPHASIZED_LEADING_SELF_REFERENCE, (_, lead: string, _mark: string, phrase: string) => `${lead}${phrase.replace(/,?$/, ",")} `)
     .replace(LEADING_SELF_REFERENCE, (_, lead: string) => lead)
+    .replace(LEADING_STATEMENT, (_, lead: string) => lead)
     .replace(INLINE_SELF_REFERENCE, "")
     .replace(/^(\s*)(\p{Ll})/u, (_, lead: string, first: string) => lead + first.toUpperCase());
   return stripped.trim() ? stripped : text;

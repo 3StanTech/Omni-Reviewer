@@ -23,6 +23,14 @@ describe("study navigation contracts", () => {
     ]);
   });
 
+  it("drops the mode prefix from the first title only, keeping its id", () => {
+    expect(studyOutline("# Locked In: Antimicrobials\n\n## Summary: not a title\n\n# Summary: Later")).toEqual([
+      { id: "locked-in-antimicrobials", text: "Antimicrobials", level: 1 },
+      { id: "summary-not-a-title", text: "Summary: not a title", level: 2 },
+      { id: "summary-later", text: "Summary: Later", level: 1 },
+    ]);
+  });
+
   it("uses rendered heading text when legacy ink markup is present", () => {
     expect(studyOutline('# <span class="ink-fact">Legacy heading</span>')).toEqual([
       { id: "legacy-heading", text: "Legacy heading", level: 1 },

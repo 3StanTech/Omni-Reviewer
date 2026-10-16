@@ -17,6 +17,7 @@ import { KirbyCompanion, type KirbyOutcome } from "@/components/kirby-companion"
 import { ReadyGo, GO_MS, READY_MS, waitMs, type ReadyGoPhase } from "@/components/ready-go";
 import { SittingRecap } from "@/components/sitting-recap";
 import { useSourceViewer } from "@/components/source-modal";
+import { useRefreshSectionMasteryOnFinish } from "@/components/study-side-panel";
 import { MarkdownBody } from "@/components/study-markdown";
 import { Button } from "@/components/ui/button";
 import { parseCitations, stripCitations, type Citation } from "@/lib/citations";
@@ -102,6 +103,9 @@ export function TimedTestMe({
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   // Set only when this run's last accepted answer finishes it, never mid-run or on a resumed recap.
   const firstSitting = useFirstCelebration("sitting", finishedAt !== null);
+  // A run that ends on the clock also ends the sitting.
+  const [timedOutAt, setTimedOutAt] = useState<number | null>(null);
+  useRefreshSectionMasteryOnFinish(finishedAt ?? timedOutAt);
   // The first-sitting cheer makes the recap Kirby dance again (Dream Land only).
   const [cheerDance, setCheerDance] = useState<number | null>(null);
   // "Ready... Go!" runs before the session POST, so it never eats timed seconds.
@@ -154,6 +158,7 @@ export function TimedTestMe({
     setComplete(nextIndex === -1);
     // A run already complete on load has no known end time.
     setFinishedAt(null);
+    setTimedOutAt(null);
     setIndex(nextIndex === -1 ? Math.max(0, currentItems.length - 1) : nextIndex);
     setSelected("");
     setSubmitted(false);
@@ -206,6 +211,7 @@ export function TimedTestMe({
       setSecondsRemaining(next);
       if (next <= 0) {
         setMessage("Time is up. Start a new timed run to try again.");
+        setTimedOutAt(activeSession.expiresAtMs);
       }
     }
     tick();
@@ -327,6 +333,7 @@ export function TimedTestMe({
     setMessage(null);
     setLoadingSession(false);
     setFinishedAt(null);
+    setTimedOutAt(null);
     setCheerDance(null);
   }
 
@@ -457,7 +464,7 @@ export function TimedTestMe({
                   aria-checked={active}
                   disabled={submitted || expired || busy}
                   className={cn(
-                    "min-h-11 rounded-lg border px-3 py-2 text-left text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+                    "min-h-11 rounded-lg border px-3 py-2 text-left text-sm hyphens-manual break-words transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
                     active ? "border-primary/50 bg-primary/10 text-foreground" : "border-border/80 bg-background/40 text-muted-foreground hover:border-border hover:text-foreground",
                   )}
                   onClick={() => { setSelected(choice); setMessage(null); }}

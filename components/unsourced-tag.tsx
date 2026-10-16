@@ -278,18 +278,18 @@ export function UnsourcedTag({ occurrence, inert = false }: { occurrence: number
         {actions?.checkIncomplete ? (
           <>
             <span className="block">{UNSOURCED_INCOMPLETE_CHECK_TEXT}</span>
-            {reason ? <span className="mt-1 block text-muted-foreground">{reason}</span> : null}
+            {reason ? <span className="mt-1 block text-popover-foreground">{reason}</span> : null}
           </>
         ) : cited ? (
           <>
             <strong className="block font-semibold">{citedTagTitle(cited.page)}</strong>
-            {reason ? <span className="mt-1 block text-muted-foreground">{reason}</span> : null}
+            {reason ? <span className="mt-1 block text-popover-foreground">{reason}</span> : null}
             <span className="mt-1 block text-muted-foreground">{citedTagBody(cited.page)}</span>
           </>
         ) : (
           <>
             <strong className="block font-semibold">{UNSOURCED_EXPLANATION_TITLE}</strong>
-            {reason ? <span className="mt-1 block text-muted-foreground">{reason}</span> : null}
+            {reason ? <span className="mt-1 block text-popover-foreground">{reason}</span> : null}
             <span className="mt-1 block text-muted-foreground">{UNSOURCED_EXPLANATION_BODY}</span>
           </>
         )}

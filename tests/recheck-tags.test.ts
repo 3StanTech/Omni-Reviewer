@@ -167,8 +167,6 @@ describe("tag reason line", () => {
   it("is passed the document's reasons by the study document", () => {
     const document = readFileSync(join(process.cwd(), "components/study-document.tsx"), "utf8");
     expect(document).toContain("termFlags: grounding ? grounding.termFlags ?? {} : undefined");
-    const tagSource = readFileSync(join(process.cwd(), "components/unsourced-tag.tsx"), "utf8");
-    expect(tagSource).toMatch(/text-muted-foreground">\{reason\}/);
   });
 });
 

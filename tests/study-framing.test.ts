@@ -105,6 +105,8 @@ describe("stripSelfReference", () => {
     ["What is the first-line drug, as stated in the study guide?", "What is the first-line drug?"],
     ["The drug is first line in the notes [S1 p.2].", "The drug is first line [S1 p.2]."],
     ["**In the document,** what is the dose?", "What is the dose?"],
+    ["The text explicitly states that Alexander Fleming observed a bacteria-free circle [S1 p.1].", "Alexander Fleming observed a bacteria-free circle [S1 p.1]."],
+    ["This guide notes that penicillin inhibits cell wall synthesis.", "Penicillin inhibits cell wall synthesis."],
   ])("rewrites %s", (input, expected) => {
     expect(stripSelfReference(input)).toBe(expected);
   });
@@ -114,6 +116,7 @@ describe("stripSelfReference", () => {
     "What is stated in the text of the prescription label?",
     "Record the dose in the patient's medication document.",
     "{{TMP-SMX}} treats PJP.",
+    "The text of the guideline states that the dose is weight based.",
   ])("leaves %s unchanged", (input) => {
     expect(stripSelfReference(input)).toBe(input);
   });
