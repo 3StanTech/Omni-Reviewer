@@ -77,7 +77,7 @@ export function catalogueEntry(modelId: string): ProviderModelDescriptor | undef
   return VERIFIED_FALLBACK_CATALOGUE.find((entry) => entry.id === modelId);
 }
 
-/** Configured fallbacks limited to catalogued free models with deny collection. */
+/** Configured fallbacks limited to catalogued free models allowed under the data policy. */
 export function selectVerifiedFallbackModels(
   modelIds: readonly string[],
 ): string[] {
