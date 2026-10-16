@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
-import { readFreeRequestQuota } from "@/lib/openrouter-quota";
+import { readFreeRequestState } from "@/lib/free-request-ledger";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +15,5 @@ export async function GET(request: Request) {
   }
 
   const fresh = new URL(request.url).searchParams.get("fresh") === "1";
-  const quota = await readFreeRequestQuota({ fresh });
-  return NextResponse.json(
-    quota ? { remaining: quota.remaining, limit: quota.limit } : { remaining: null, limit: null },
-    { headers: NO_STORE },
-  );
+  return NextResponse.json(await readFreeRequestState({ fresh }), { headers: NO_STORE });
 }

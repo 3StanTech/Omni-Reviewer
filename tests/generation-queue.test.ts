@@ -113,12 +113,23 @@ describe("queuedRunOutcome", () => {
 });
 
 describe("canStartPack", () => {
-  it("needs a full pack's worth of requests and never runs blind", () => {
+  const limited = (requestsLeft: number | null) => ({
+    limited: true, limit: 50, requestsLeft, packsLeft: requestsLeft === null ? null : Math.floor(requestsLeft / 12), exhausted: false,
+  });
+
+  it("needs a full pack's worth of gated requests on a limited day", () => {
     expect(QUEUE_MIN_REQUESTS).toBe(14);
-    expect(canStartPack(14)).toBe(true);
-    expect(canStartPack(50)).toBe(true);
-    expect(canStartPack(13)).toBe(false);
-    expect(canStartPack(0)).toBe(false);
+    expect(canStartPack(limited(14))).toBe(true);
+    expect(canStartPack(limited(50))).toBe(true);
+    expect(canStartPack(limited(13))).toBe(false);
+    expect(canStartPack(limited(0))).toBe(false);
+  });
+
+  it("runs when nothing is gated or the count is unreadable, never blind or exhausted", () => {
+    expect(canStartPack({ ...limited(null), limited: false })).toBe(true);
+    expect(canStartPack(limited(null))).toBe(true);
+    expect(canStartPack({ ...limited(40), exhausted: true })).toBe(false);
+    expect(canStartPack({ ...limited(null), limited: false, exhausted: true })).toBe(false);
     expect(canStartPack(null)).toBe(false);
     expect(canStartPack(undefined)).toBe(false);
   });

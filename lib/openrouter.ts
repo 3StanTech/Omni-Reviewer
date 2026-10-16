@@ -2,16 +2,10 @@ import "server-only";
 
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 
-import { eligibleFreeModels, type GenerationBudget, type ProviderModelDescriptor } from "@/lib/ai-budgets";
+import { type ProviderModelDescriptor } from "@/lib/ai-budgets";
 import { getEnv } from "@/lib/env";
-import {
-  GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
-  MAX_GENERATION_JSON_OUTPUT_TOKENS,
-  MAX_GENERATION_PROMPT_TOKENS,
-  MAX_GENERATION_ATTEMPTS,
-  GENERATION_STEP_DEADLINE_MS,
-  CONSERVATIVE_GENERATION_CONTEXT_TOKENS,
-} from "@/lib/learning-limits";
+import { GenerationError } from "@/lib/generation-errors";
+import { CONSERVATIVE_GENERATION_CONTEXT_TOKENS } from "@/lib/learning-limits";
 
 const OPENROUTER_FREE_MODEL = /^[^/\s]+\/[^/\s]+:free$/;
 
@@ -22,73 +16,96 @@ const OPENROUTER_FREE_MODEL = /^[^/\s]+\/[^/\s]+:free$/;
 const STUDY_REASONING = { enabled: false } as const;
 
 /**
- * Static, conservative catalogue snapshot. Limits come from the OpenRouter
- * model listing and each entry answered a live request with data_collection
- * deny on 2026-09-27. Unknown or stale entries are deliberately excluded; the
- * configured primary remains untouched and can fail with its own budget.
+ * Static catalogue of the free models the chain may use. Input ceilings
+ * (`maxInputTokens`) are measured by live probes with data_collection deny,
+ * never taken from the listing; `countsTowardFreeLimit` is whether a request
+ * moved `/api/v1/key` free_model_daily_requests. Probed on 2026-10-16.
  */
 export const VERIFIED_FALLBACK_CATALOGUE: readonly ProviderModelDescriptor[] = [
   {
     id: "dots-studio/dots-3-note-preview:free",
     contextLength: 512_000,
     maxOutputTokens: 460_800,
+    // Answered cleanly at 30K real tokens; at 47K it answered but mis-tagged
+    // the answer, and on the night of Oct 15 it returned 400 above about 15K.
+    maxInputTokens: 30_000,
+    countsTowardFreeLimit: false,
     pricing: { prompt: 0, completion: 0 },
     privacyCompatible: true,
   },
   {
-    id: "qwen/qwen3.8-27b:free",
+    id: "google/gemma-4-31b-it:free",
     contextLength: 262_144,
-    maxOutputTokens: 235_929,
-    pricing: { prompt: 0, completion: 0 },
-    privacyCompatible: true,
-  },
-  {
-    id: "cohere/north-mini-code:free",
-    contextLength: 256_000,
-    maxOutputTokens: 64_000,
+    maxOutputTokens: 32_768,
+    // Listing value less the output cap: the shared Google pool answered 429
+    // to every probe on 2026-10-16, so the ceiling and gating are unmeasured.
+    maxInputTokens: 200_000,
+    countsTowardFreeLimit: false,
     pricing: { prompt: 0, completion: 0 },
     privacyCompatible: true,
   },
 ];
 
-const CONSERVATIVE_FALLBACK_BUDGET: GenerationBudget = {
-  purpose: "json",
-  sourceTokens: MAX_GENERATION_PROMPT_TOKENS,
-  band: "long",
-  maxOutputTokens: MAX_GENERATION_JSON_OUTPUT_TOKENS,
-  attempts: MAX_GENERATION_ATTEMPTS,
-  deadlineMs: GENERATION_STEP_DEADLINE_MS,
-  contextWindowTokens: 262_144,
-  safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
+/** Head room over the chars/4 estimate; real tokens ran about 6% higher. */
+export const TOKENIZER_HEADROOM = 1.1;
+
+export type ModelChain = {
+  model: string;
+  fallbacks: string[];
+  /** Smallest context window among the chosen models. */
+  contextWindowTokens: number;
 };
 
+export function catalogueEntry(modelId: string): ProviderModelDescriptor | undefined {
+  return VERIFIED_FALLBACK_CATALOGUE.find((entry) => entry.id === modelId);
+}
+
+/** Configured fallbacks limited to catalogued free models with deny collection. */
 export function selectVerifiedFallbackModels(
   modelIds: readonly string[],
 ): string[] {
-  const descriptors = eligibleFreeModels(
-    VERIFIED_FALLBACK_CATALOGUE,
-    CONSERVATIVE_FALLBACK_BUDGET,
-  );
-  const verified = new Set(descriptors.map((descriptor) => descriptor.id));
-  return modelIds.filter((modelId) => verified.has(modelId));
+  return modelIds.filter((modelId) => {
+    const entry = catalogueEntry(modelId);
+    return entry !== undefined && entry.id.endsWith(":free") && entry.privacyCompatible === true;
+  });
+}
+
+/** The primary, then the verified fallbacks, deduplicated in order. */
+export function orderedChain(
+  primary: string,
+  fallbacks: readonly string[] = parseFallbackModels(),
+): string[] {
+  return [...new Set([assertPrimaryModelId(primary), ...selectVerifiedFallbackModels(fallbacks)])];
 }
 
 /**
- * Context window for one request: the smallest verified window among the
- * primary and the fallbacks OpenRouter may route it to. A model outside the
- * verified catalogue keeps the conservative default.
+ * The models that can take this prompt: every chain entry whose measured
+ * input ceiling fits the estimate plus head room and whose output cap fits the
+ * request. A model outside the catalogue gets the conservative window.
  */
-export function contextWindowForRequest(
+export function chainForPrompt(
   primary: string,
-  fallbacks: readonly string[] = selectVerifiedFallbackModels(parseFallbackModels()),
-): number {
-  const windowFor = (modelId: string) =>
-    VERIFIED_FALLBACK_CATALOGUE.find((entry) => entry.id === modelId)?.contextLength
-    ?? CONSERVATIVE_GENERATION_CONTEXT_TOKENS;
-  return Math.min(
-    windowFor(primary),
-    ...fallbacks.filter((id) => id !== primary).map(windowFor),
-  );
+  promptTokens: number,
+  options: { outputTokens?: number; fallbacks?: readonly string[] } = {},
+): ModelChain {
+  const needed = Math.ceil(promptTokens * TOKENIZER_HEADROOM);
+  const outputTokens = options.outputTokens ?? 0;
+  const fits = orderedChain(primary, options.fallbacks).filter((modelId) => {
+    const entry = catalogueEntry(modelId);
+    const maxInput = entry?.maxInputTokens ?? CONSERVATIVE_GENERATION_CONTEXT_TOKENS;
+    const maxOutput = entry?.maxOutputTokens ?? Number.POSITIVE_INFINITY;
+    return maxInput >= needed && maxOutput >= outputTokens;
+  });
+  if (fits.length === 0) {
+    throw new GenerationError("token_limit", "This source is too long for today's free models.", false);
+  }
+  return {
+    model: fits[0]!,
+    fallbacks: fits.slice(1),
+    contextWindowTokens: Math.min(
+      ...fits.map((modelId) => catalogueEntry(modelId)?.contextLength ?? CONSERVATIVE_GENERATION_CONTEXT_TOKENS),
+    ),
+  };
 }
 
 export function isPinnedFreeModelId(modelId: string): boolean {
@@ -162,7 +179,7 @@ export function getOpenRouter() {
 export type OpenRouterModelOptions = {
   /** Enable response-healing for JSON / generateObject calls. */
   healJson?: boolean;
-  /** Override fallback list; defaults to AI_MODEL_FALLBACKS. */
+  /** Fallbacks for this request, normally a chainForPrompt result; defaults to AI_MODEL_FALLBACKS. */
   fallbacks?: string[];
 };
 
@@ -173,9 +190,10 @@ export function getOpenRouterModel(
 ) {
   const primary = assertPrimaryModelId(modelId);
   const openrouter = getOpenRouter();
-  const configuredFallbacks = assertFallbackModelIds(
-    options.fallbacks ?? parseFallbackModels(),
-  );
+  // A chosen chain may legitimately have no fallbacks left.
+  const configuredFallbacks = options.fallbacks === undefined
+    ? parseFallbackModels()
+    : options.fallbacks.length === 0 ? [] : assertFallbackModelIds(options.fallbacks);
   const fallbacks = selectVerifiedFallbackModels(configuredFallbacks)
     .filter((id) => id !== primary);
 

@@ -12,7 +12,7 @@ import {
 import { KirbyCompanion } from "@/components/kirby-companion";
 import { Button } from "@/components/ui/button";
 import {
-  QUEUE_MIN_REQUESTS,
+  packsLeftCopy,
   queueRowLabel,
   resetCopy,
   type QueueRowState,
@@ -64,6 +64,7 @@ export function GenerationQueuePanel({
 }: GenerationQueuePanelProps) {
   if (rows.length === 0 && status.skipped.length === 0 && !status.error) return null;
   const { quota } = status;
+  const quotaLine = quota ? packsLeftCopy(quota) : null;
   const generating = rows.find((row) => row.state.kind === "generating") ?? null;
 
   return (
@@ -83,14 +84,9 @@ export function GenerationQueuePanel({
           {generating ? <KirbyCompanion size="xs" pose="inhale" className="shrink-0" /> : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {quota && quota.remaining !== null && quota.limit !== null ? (
-            <p
-              className={cn(
-                "text-xs",
-                quota.remaining < QUEUE_MIN_REQUESTS ? "text-warning" : "text-muted-foreground",
-              )}
-            >
-              {quota.remaining} of {quota.limit} free requests left today
+          {quotaLine ? (
+            <p className={cn("text-xs", quotaLine.low ? "text-warning" : "text-muted-foreground")}>
+              {quotaLine.text}
             </p>
           ) : null}
           {status.waiting ? (

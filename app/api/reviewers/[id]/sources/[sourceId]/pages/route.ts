@@ -169,7 +169,7 @@ async function writeReadings(
  * timeouts and our own errors are not, so they never settle a page.
  */
 function isContentRejection(error: unknown, code: string): boolean {
-  if (code === "rate_limited" || code === "payment_required") return false;
+  if (code === "rate_limited" || code === "daily_limit" || code === "payment_required") return false;
   if (code === "token_limit") return true;
   const status = parseProviderError(error).status;
   return status !== undefined && status >= 400 && status < 500 && status !== 402 && status !== 429;
@@ -264,7 +264,7 @@ export async function POST(request: Request, context: RouteContext) {
     });
     const message = publicGenerationErrorMessage(classified.code, classified.message)
       ?? "Could not read the slide images. Try again.";
-    const quota = classified.code === "rate_limited" || classified.code === "payment_required";
+    const quota = classified.code === "rate_limited" || classified.code === "daily_limit" || classified.code === "payment_required";
     if (!(batch.last && !timedOut && !request.signal.aborted && isContentRejection(error, classified.code))) {
       return NextResponse.json(
         { error: message, code: classified.code },

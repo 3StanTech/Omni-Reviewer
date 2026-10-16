@@ -135,6 +135,20 @@ export const loginThrottles = pgTable("login_throttles", {
     .defaultNow(),
 });
 
+/**
+ * The app's own count of free requests on models OpenRouter gates, one row
+ * per UTC day for the whole app (both accounts share one key). No user data.
+ */
+export const freeRequestDays = pgTable("free_request_days", {
+  day: date("day", { mode: "string" }).primaryKey(),
+  requests: integer("requests").notNull().default(0),
+  /** Set when OpenRouter answered with its per-day free limit. */
+  exhaustedAt: timestamp("exhausted_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const passwordResetTokens = pgTable(
   "password_reset_tokens",
   {
@@ -739,5 +753,6 @@ export type TestSession = typeof testSessions.$inferSelect;
 export type NewTestSession = typeof testSessions.$inferInsert;
 export type CardReview = typeof cardReviews.$inferSelect;
 export type NewCardReview = typeof cardReviews.$inferInsert;
+export type FreeRequestDay = typeof freeRequestDays.$inferSelect;
 export type PackChatMessage = typeof packChatMessages.$inferSelect;
 export type NewPackChatMessage = typeof packChatMessages.$inferInsert;

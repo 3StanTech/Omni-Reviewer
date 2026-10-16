@@ -316,13 +316,20 @@ describe("POST /api/reviewers/[id]/ask", () => {
     expect(mock(insertExchange)).not.toHaveBeenCalled();
   });
 
-  it("maps a provider 429 to the free limit wording", async () => {
+  it("maps the per-day 429 to the used-up wording and a per-minute 429 to the limit wording", async () => {
     mock(answerFromPack).mockRejectedValueOnce(
       Object.assign(new Error("Rate limit exceeded: free-models-per-day"), { statusCode: 429 }),
     );
-    const response = await POST(jsonRequest("POST", { kind: "ask", question: "Why?" }), context);
-    expect(response.status).toBe(429);
-    expect(await response.json()).toEqual({
+    const daily = await POST(jsonRequest("POST", { kind: "ask", question: "Why?" }), context);
+    expect(daily.status).toBe(429);
+    expect(await daily.json()).toEqual({ error: "Today's free requests are used up. More at 8:00 AM." });
+
+    mock(answerFromPack).mockRejectedValueOnce(
+      Object.assign(new Error("Rate limit exceeded: free-models-per-min"), { statusCode: 429 }),
+    );
+    const minute = await POST(jsonRequest("POST", { kind: "ask", question: "Why?" }), context);
+    expect(minute.status).toBe(429);
+    expect(await minute.json()).toEqual({
       error: "The free model limit is used up for now. Try again later today.",
     });
     expect(mock(insertExchange)).not.toHaveBeenCalled();

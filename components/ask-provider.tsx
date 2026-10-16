@@ -104,6 +104,8 @@ type AskProviderProps = {
   initialSavedCount?: number;
   /** Called after "Make a card" creates a card, so Carded can refresh. */
   onCardCreated?: () => void;
+  /** Called when a question settles, answered or not, so packs left can refresh. */
+  onAskSettled?: () => void;
   children: ReactNode;
 };
 
@@ -112,7 +114,7 @@ export function AskProvider(props: AskProviderProps) {
   return <AskProviderInner key={props.reviewerId} {...props} />;
 }
 
-function AskProviderInner({ reviewerId, sections = null, initialSavedCount = 0, onCardCreated, children }: AskProviderProps) {
+function AskProviderInner({ reviewerId, sections = null, initialSavedCount = 0, onCardCreated, onAskSettled, children }: AskProviderProps) {
   const askUrl = `/api/reviewers/${encodeURIComponent(reviewerId)}/ask`;
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessageDto[]>([]);
@@ -223,9 +225,10 @@ function AskProviderInner({ reviewerId, sections = null, initialSavedCount = 0, 
         pendingRef.current = false;
         setPending(false);
         setPendingQuestion(null);
+        onAskSettled?.();
       }
     },
-    [askUrl, load],
+    [askUrl, load, onAskSettled],
   );
 
   // The composer clears on send and gets its text back if the send fails.

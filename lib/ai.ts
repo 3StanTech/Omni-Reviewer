@@ -9,6 +9,7 @@ import {
   estimateTokensFromText,
   generationBudget,
   studyItemTarget,
+  type GenerationBudget,
 } from "@/lib/ai-budgets";
 import {
   buildAskPrompt,
@@ -40,7 +41,8 @@ import {
   type VerifyItem,
 } from "@/lib/grounding";
 import { getEnv } from "@/lib/env";
-import { contextWindowForRequest, getOpenRouterModel } from "@/lib/openrouter";
+import { markDailyLimitReached, recordModelRequest } from "@/lib/free-request-ledger";
+import { catalogueEntry, chainForPrompt, getOpenRouterModel, TOKENIZER_HEADROOM, type ModelChain } from "@/lib/openrouter";
 import { isValidCardFront, normalizeLearningIds } from "@/lib/learning";
 import {
   MAX_CARD_BACK_CHARS,
@@ -48,6 +50,7 @@ import {
   MAX_CARDED_ITEMS,
   MAX_GENERATED_JSON_CHARS,
   MAX_GENERATED_MARKDOWN_CHARS,
+  CONSERVATIVE_GENERATION_CONTEXT_TOKENS,
   GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
   GENERATION_STEP_DEADLINE_MS,
   MAX_GENERATION_ATTEMPTS,
@@ -90,6 +93,14 @@ export type GenerationPurpose = "locked_in" | "summary" | "json" | "vision" | "a
 export type StudyPackStep = "locked_in" | "summary" | "test_me" | "carded";
 
 /** Thrown when structured JSON from the model cannot be parsed after fallbacks. */
+/**
+ * A provider or size failure that a JSON step must surface as itself (a
+ * per-day cap is a 429, not a parse failure), rather than as json_parse.
+ */
+function isProviderGenerationError(err: unknown): err is GenerationError {
+  return err instanceof GenerationError && err.code !== "json_parse" && err.code !== "unknown";
+}
+
 export class StudyPackJsonError extends Error {
   readonly kind: "test_me" | "carded";
   readonly raw: string;
@@ -199,6 +210,24 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * The models one request may use: the purpose's chain cut to the models whose
+ * measured input ceiling and output cap fit this prompt, and the budget sized
+ * to the smallest chosen context window.
+ */
+function sizedRequest(
+  purpose: GenerationPurpose,
+  prompt: string,
+  budget: GenerationBudget,
+): { chain: ModelChain; budget: GenerationBudget } {
+  const chain = chainForPrompt(modelIdForPurpose(purpose), estimateTokensFromText(prompt), {
+    outputTokens: budget.maxOutputTokens,
+  });
+  const sized = { ...budget, contextWindowTokens: chain.contextWindowTokens };
+  assertGenerationBudget(prompt, sized);
+  return { chain, budget: sized };
+}
+
 function jitterDelay(attempt: number): number {
   const base = 400 * 2 ** (attempt - 1);
   const jitter = Math.floor(Math.random() * 250);
@@ -211,6 +240,10 @@ async function withRetry<T>(
     signal?: AbortSignal;
     attempts: number;
     deadlineMs: number;
+    /** Counts each attempt in the free-request ledger. */
+    chain: ModelChain;
+    /** The model that served a successful attempt; defaults to the chain's first. */
+    servedBy?: (result: T) => string;
   },
 ): Promise<T> {
   const controller = new AbortController();
@@ -228,21 +261,29 @@ async function withRetry<T>(
           ? controller.signal.reason
           : new Error("aborted");
       }
+      let result: T;
+      // The UTC day an attempt counts toward is the day it was sent.
+      const sentAt = new Date();
       try {
-        return await fn(controller.signal);
+        result = await fn(controller.signal);
       } catch (err) {
+        const classified = toGenerationError(err);
+        await recordModelRequest(options.chain.model, sentAt);
+        if (classified.code === "daily_limit") await markDailyLimitReached(sentAt);
         if (controller.signal.aborted) {
           throw controller.signal.reason instanceof Error
             ? controller.signal.reason
             : err;
         }
         lastError = err;
-        const classified = toGenerationError(err);
         if (!classified.retryable || attempt === options.attempts) {
           throw classified;
         }
         await sleep(jitterDelay(attempt), controller.signal);
+        continue;
       }
+      await recordModelRequest(options.servedBy?.(result) ?? options.chain.model, sentAt);
+      return result;
     }
   } finally {
     clearTimeout(timeout);
@@ -284,23 +325,20 @@ export async function generateTextFromPrompt(
   } = { purpose: "locked_in" },
 ): Promise<{ text: string; modelUsed: string; finishReason: FinishReason }> {
   assertPromptWithinLimit(prompt);
-  const modelId = modelIdForPurpose(options.purpose);
   const healJson = options.purpose === "json";
-  const budget = generationBudget(
+  const { chain, budget } = sizedRequest(options.purpose, prompt, generationBudget(
     options.purpose,
     options.sourceTokens ?? estimateTokensFromText(prompt),
     {
-      contextWindowTokens: contextWindowForRequest(modelId),
       attempts: MAX_GENERATION_ATTEMPTS,
       deadlineMs: options.deadlineMs ?? GENERATION_STEP_DEADLINE_MS,
       safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
     },
-  );
-  assertGenerationBudget(prompt, budget);
+  ));
 
   return withRetry(async (signal) => {
     const { text, response, providerMetadata, finishReason } = await generateText({
-      model: getOpenRouterModel(modelId, { healJson }),
+      model: getOpenRouterModel(chain.model, { healJson, fallbacks: chain.fallbacks }),
       prompt,
       maxRetries: 0,
       maxOutputTokens: budget.maxOutputTokens,
@@ -325,7 +363,7 @@ export async function generateTextFromPrompt(
     }
     return {
       text: normalizedText,
-      modelUsed: extractModelUsed({ response, providerMetadata }, modelId),
+      modelUsed: extractModelUsed({ response, providerMetadata }, chain.model),
       // "length" means the output cap cut the text off.
       finishReason,
     };
@@ -333,8 +371,13 @@ export async function generateTextFromPrompt(
     signal: options.signal,
     attempts: budget.attempts,
     deadlineMs: budget.deadlineMs,
+    chain,
+    servedBy: (result) => result.modelUsed,
   });
 }
+
+/** Prompt tokens counted per picture when sizing a vision request. */
+const VISION_TOKENS_PER_IMAGE = 1_500;
 
 type VisionContentPart =
   | { type: "text"; text: string }
@@ -348,16 +391,24 @@ async function runVision(
   content: VisionContentPart[],
   signal: AbortSignal | undefined,
 ): Promise<string> {
-  const modelId = modelIdForPurpose("vision");
+  const promptTokens = content.reduce(
+    (total, part) => total + (part.type === "text" ? estimateTokensFromText(part.text) : VISION_TOKENS_PER_IMAGE),
+    0,
+  );
+  const chain = chainForPrompt(modelIdForPurpose("vision"), promptTokens, {
+    outputTokens: MAX_VISION_OUTPUT_TOKENS,
+  });
 
+  let servedBy = chain.model;
   return withRetry(async (attemptSignal) => {
-    const { text } = await generateText({
-      model: getOpenRouterModel(modelId),
+    const { text, response, providerMetadata } = await generateText({
+      model: getOpenRouterModel(chain.model, { fallbacks: chain.fallbacks }),
       maxRetries: 0,
       abortSignal: attemptSignal,
       maxOutputTokens: MAX_VISION_OUTPUT_TOKENS,
       messages: [{ role: "user", content }],
     });
+    servedBy = extractModelUsed({ response, providerMetadata }, chain.model);
     const normalizedText = text.trim();
     if (normalizedText.length > MAX_VISION_TEXT_CHARS) {
       throw new GenerationError(
@@ -371,6 +422,8 @@ async function runVision(
     signal,
     attempts: MAX_GENERATION_ATTEMPTS,
     deadlineMs: GENERATION_STEP_DEADLINE_MS,
+    chain,
+    servedBy: () => servedBy,
   });
 }
 
@@ -594,20 +647,17 @@ async function generateJsonArray<T extends { id: string }>(args: {
   deadlineMs?: number;
 }): Promise<{ items: T[]; modelUsed: string; raw: string }> {
   assertPromptWithinLimit(args.prompt);
-  const modelId = modelIdForPurpose("json");
   const hardMaxItems = args.kind === "test_me" ? MAX_TEST_ME_ITEMS : MAX_CARDED_ITEMS;
-  const budget = generationBudget(
+  const { chain, budget } = sizedRequest("json", args.prompt, generationBudget(
     args.kind,
     estimateTokensFromText(args.prompt),
     {
-      contextWindowTokens: contextWindowForRequest(modelId),
       attempts: MAX_GENERATION_ATTEMPTS,
       deadlineMs: args.deadlineMs ?? GENERATION_STEP_DEADLINE_MS,
       safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
       ...(args.maxItems === undefined ? {} : { maxItems: args.maxItems }),
     },
-  );
-  assertGenerationBudget(args.prompt, budget);
+  ));
   const maxItems = Math.min(budget.maxItems ?? hardMaxItems, hardMaxItems);
   let lastRaw = "";
 
@@ -615,7 +665,7 @@ async function generateJsonArray<T extends { id: string }>(args: {
     return await withRetry(async (signal) => {
       try {
         const result = await generateObject({
-          model: getOpenRouterModel(modelId, { healJson: true }),
+          model: getOpenRouterModel(chain.model, { healJson: true, fallbacks: chain.fallbacks }),
           output: "array",
           schema: args.elementSchema,
           prompt: args.prompt,
@@ -632,7 +682,7 @@ async function generateJsonArray<T extends { id: string }>(args: {
         );
         return {
           ...normalized,
-          modelUsed: extractModelUsed(result, modelId),
+          modelUsed: extractModelUsed(result, chain.model),
         };
       } catch (err) {
         // Last resort local parse (no extra model call) when healing still fails.
@@ -647,7 +697,7 @@ async function generateJsonArray<T extends { id: string }>(args: {
               ...normalized,
               modelUsed: extractModelUsed(
                 { response: err.response },
-                modelId,
+                chain.model,
               ),
             };
           }
@@ -657,12 +707,15 @@ async function generateJsonArray<T extends { id: string }>(args: {
     }, {
       attempts: budget.attempts,
       deadlineMs: budget.deadlineMs,
+      chain,
+      servedBy: (result) => result.modelUsed,
     });
   } catch (objectError) {
+    if (isProviderGenerationError(objectError)) throw objectError;
     const parsed = tryParseJsonArrayLocally(args.elementSchema, lastRaw, maxItems);
     if (parsed) {
       const normalized = normalizeGeneratedItems(args.kind, parsed, maxItems);
-      return { ...normalized, modelUsed: modelId };
+      return { ...normalized, modelUsed: chain.model };
     }
     const detail =
       objectError instanceof Error ? objectError.message : "unknown parse error";
@@ -707,24 +760,23 @@ async function verifyGroundingItems(
   deadlineMs: number,
 ): Promise<Array<{ id: number; supported: boolean }>> {
   const prompt = groundingVerifyPrompt(items);
-  const modelId = modelIdForPurpose("json");
-  const budget = generationBudget("verify", estimateTokensFromText(prompt), {
-    contextWindowTokens: contextWindowForRequest(modelId),
+  const { chain, budget } = sizedRequest("json", prompt, generationBudget("verify", estimateTokensFromText(prompt), {
     attempts: 1,
     deadlineMs,
     safetyMarginTokens: GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS,
-  });
-  assertGenerationBudget(prompt, budget);
+  }));
+  let servedBy = chain.model;
   return withRetry(async (signal) => {
-    const { text } = await generateText({
-      model: getOpenRouterModel(modelId, { healJson: true }),
+    const { text, response, providerMetadata } = await generateText({
+      model: getOpenRouterModel(chain.model, { healJson: true, fallbacks: chain.fallbacks }),
       prompt,
       maxRetries: 0,
       maxOutputTokens: budget.maxOutputTokens,
       abortSignal: signal,
     });
+    servedBy = extractModelUsed({ response, providerMetadata }, chain.model);
     return verifyResultSchema.parse(parseJsonArray(text));
-  }, { attempts: budget.attempts, deadlineMs: budget.deadlineMs });
+  }, { attempts: budget.attempts, deadlineMs: budget.deadlineMs, chain, servedBy: () => servedBy });
 }
 
 /**
@@ -1210,7 +1262,7 @@ async function runTestMe(lockedIn: string): Promise<{ items: TestMeItem[]; model
     // References to "the document" are removed in code, as with Locked In framing.
     return { ...result, items: result.items.map((item) => withoutSelfReference(repairQuizAnswer(item) as TestMeItem)) };
   } catch (err) {
-    if (err instanceof PromptInputLimitError) throw err;
+    if (err instanceof PromptInputLimitError || isProviderGenerationError(err)) throw err;
     throw toGenerationError(
       err instanceof StudyPackJsonError
         ? err
@@ -1255,7 +1307,7 @@ async function runCarded(summary: string): Promise<{ items: CardedItem[]; modelU
       items: result.items.map((item) => ({ ...item, front: stripSelfReference(item.front), back: stripSelfReference(item.back) })),
     };
   } catch (err) {
-    if (err instanceof PromptInputLimitError) throw err;
+    if (err instanceof PromptInputLimitError || isProviderGenerationError(err)) throw err;
     throw toGenerationError(
       err instanceof StudyPackJsonError
         ? err
@@ -1378,17 +1430,19 @@ const ASK_PROMPT_SLACK_CHARS = 2_000;
 const ASK_PER_SOURCE_SLACK_CHARS = 200;
 
 /**
- * Characters of source text Ask may send: the model's context window minus
- * the answer, the safety margin and the rest of the prompt (instructions,
- * history, question), capped by the combined source limit.
+ * Characters of source text Ask may send: the first Ask model's measured
+ * input ceiling minus the answer, the safety margin and the rest of the prompt
+ * (instructions, history, question), capped by the combined source limit.
+ * Pages are ranked into this, so Ask stays on its first model.
  */
 export function askSourceCharBudget(args: {
   sources: readonly AskSourceInput[];
   history: readonly AskHistoryMessage[];
   question: string;
 }): number {
-  const windowTokens = contextWindowForRequest(modelIdForPurpose("ask"));
-  const promptTokens = Math.min(windowTokens, PROMPT_LIMITS.maxPromptTokens) -
+  const inputTokens = catalogueEntry(modelIdForPurpose("ask"))?.maxInputTokens
+    ?? CONSERVATIVE_GENERATION_CONTEXT_TOKENS;
+  const promptTokens = Math.min(inputTokens, PROMPT_LIMITS.maxPromptTokens) -
     ASK_OUTPUT_TOKENS - GENERATION_CONTEXT_SAFETY_MARGIN_TOKENS;
   const frame = buildAskPrompt({
     sources: args.sources.map((source) => ({ ...source, text: "" })),
@@ -1396,7 +1450,8 @@ export function askSourceCharBudget(args: {
     question: args.question,
   });
   const overhead = frame.length + ASK_PROMPT_SLACK_CHARS + args.sources.length * ASK_PER_SOURCE_SLACK_CHARS;
-  return Math.max(0, Math.min(PROMPT_LIMITS.maxCombinedSourceChars, promptTokens * 4 - overhead));
+  const promptChars = Math.floor((promptTokens * 4) / TOKENIZER_HEADROOM);
+  return Math.max(0, Math.min(PROMPT_LIMITS.maxCombinedSourceChars, promptChars - overhead));
 }
 
 export type AskAnswer = {
@@ -1455,6 +1510,8 @@ export function publicAskError(error: unknown): { message: string; status: numbe
   switch (classified.code) {
     case "rate_limited":
       return { message: ASK_FREE_LIMIT_MESSAGE, status: 429 };
+    case "daily_limit":
+      return { message: classified.message, status: 429 };
     case "timeout":
       return { message: "The answer took too long. Try again in a moment.", status: 504 };
     case "token_limit":

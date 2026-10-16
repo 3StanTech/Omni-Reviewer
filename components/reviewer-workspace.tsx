@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CalendarBlank, CaretRight, Files } from "@phosphor-icons/react";
@@ -15,7 +15,8 @@ import { FocusModeProvider } from "@/components/focus-mode";
 import { ScrollJump } from "@/components/scroll-jump";
 import { useSectionMastery } from "@/components/study-side-panel";
 import { ViewTabs } from "@/components/view-tabs";
-import { GenerationControls, type FreeRequestQuota } from "@/components/generation-controls";
+import { GenerationControls } from "@/components/generation-controls";
+import type { FreeRequestState } from "@/lib/generation-queue";
 import { GenerationStatus } from "@/components/generation-status";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { RAIL_HEADER_CLASS, type ModeMenuItem } from "@/components/mode-toolbar";
@@ -208,8 +209,6 @@ export function ReviewerWorkspace({
   const documentDraftControllerRef = useRef<LockedInDraftController | null>(null);
   const router = useRouter();
   const isClient = useIsClient();
-  // No time text in the server render: it does not know the viewer's zone.
-  const generatedStamp = generatedAt && isClient ? formatStamp(generatedAt) : null;
 
   const hasReadySource = useMemo(
     () => sources.some((s) => s.ingestStatus === "ready"),
@@ -306,15 +305,27 @@ export function ReviewerWorkspace({
     onCardsRefresh: refreshCards,
   });
 
-  // Free requests left today on the shared key. Read on mount, after each
-  // finished step, and when a job ends; never on a timer.
-  const [quota, setQuota] = useState<FreeRequestQuota | null>(null);
+  // A run saves each mode as it goes; the header keeps the stamp it had when
+  // the run started (or says Generating) until the run ends.
+  const generationBusy = generation.state.busy;
+  const [stampHold, setStampHold] = useState({ busy: generationBusy, stamp: generatedAt });
+  if (stampHold.busy !== generationBusy) setStampHold({ busy: generationBusy, stamp: generatedAt });
+  const headerStamp = generationBusy ? stampHold.stamp : generatedAt;
+  // No time text in the server render: it does not know the viewer's zone.
+  const generatedStamp = headerStamp && isClient ? formatStamp(headerStamp) : null;
+
+  // Packs left today from the app's own count. Read on mount, after each
+  // finished step, when a job ends, when slide reading stops and after each
+  // Ask (either can meet the per-day limit); never on a timer.
+  const [quota, setQuota] = useState<FreeRequestState | null>(null);
+  const [asksSettled, setAsksSettled] = useState(0);
+  const onAskSettled = useCallback(() => setAsksSettled((count) => count + 1), []);
   const generationStatus = generation.state.status;
   const quotaRefreshKey = `${generation.state.job?.completedKinds.length ?? 0}:${
     generationStatus === "succeeded" || generationStatus === "failed" || generationStatus === "partial"
       ? generationStatus
       : ""
-  }`;
+  }:${readingSlides ? "reading" : ""}:${asksSettled}`;
   // The mount read may use the server's short cache; reads after progress
   // skip it, since requests were just spent.
   const initialQuotaKeyRef = useRef(quotaRefreshKey);
@@ -322,10 +333,10 @@ export function ReviewerWorkspace({
     let cancelled = false;
     const url = quotaRefreshKey === initialQuotaKeyRef.current ? "/api/quota" : "/api/quota?fresh=1";
     void fetch(url, { cache: "no-store" })
-      .then(async (response) => (response.ok ? (await response.json()) as { remaining: number | null; limit: number | null } : null))
+      .then(async (response) => (response.ok ? (await response.json()) as FreeRequestState : null))
       .then((data) => {
         if (cancelled || !data) return;
-        setQuota(data.remaining !== null && data.limit !== null ? { remaining: data.remaining, limit: data.limit } : null);
+        setQuota(data);
       })
       .catch(() => undefined);
     return () => {
@@ -538,7 +549,9 @@ export function ReviewerWorkspace({
   // Client only: the countdown and the stamp depend on the viewer's clock and zone.
   const headerMeta = [
     isClient ? examCountdown : null,
-    !generatedAt ? "Not generated yet" : generatedStamp ? `Generated ${generatedStamp}` : null,
+    !headerStamp
+      ? generationBusy ? "Generating" : "Not generated yet"
+      : generatedStamp ? `Generated ${generatedStamp}` : null,
   ].filter((item): item is string => Boolean(item));
   // Exam headband from three days out through the exam day, from the same countdown
   // as the meta line (client only, like it). The bubble's words repeat "Exam today".
@@ -778,7 +791,7 @@ export function ReviewerWorkspace({
   );
 
   return (
-    <AskProvider reviewerId={reviewerId} sections={sectionMastery} initialSavedCount={savedAnswerCount} onCardCreated={refreshCards}>
+    <AskProvider reviewerId={reviewerId} sections={sectionMastery} initialSavedCount={savedAnswerCount} onCardCreated={refreshCards} onAskSettled={onAskSettled}>
     <FocusModeProvider>
     <div data-draft-guarded className={hasViews ? "flex flex-col gap-4" : "flex flex-col gap-8"}>
       <Panel as="div" data-focus-hide className="flex min-w-0 items-start gap-3 p-4 print:border-0 print:p-0 print:shadow-none">

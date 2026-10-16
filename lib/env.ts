@@ -5,13 +5,14 @@ import { z } from "zod";
 import { AUTH_SECRET_ERROR, isUsableAuthSecret } from "@/lib/auth-secret";
 import { logRedactedError } from "@/lib/public-errors";
 
-// Probed 2026-09-27 with data_collection deny and zero price: these answered.
-// Nemotron and Laguna reject the deny policy; GLM 5.2 and MiniMax M3 are no
-// longer free. Re-probe before changing these.
+// Probed 2026-10-16 with data_collection deny and zero price. Every request
+// goes to the first chain model whose measured input ceiling fits (see
+// lib/openrouter.ts). Nemotron and Laguna reject the deny policy, Inkling is
+// limited to agent apps, and Qwen 3.8 is gone. Re-probe before changing these.
 export const DEFAULT_MODEL = "dots-studio/dots-3-note-preview:free";
 export const DEFAULT_VISION = "dots-studio/dots-3-note-preview:free";
 export const DEFAULT_FALLBACKS =
-  "qwen/qwen3.8-27b:free,cohere/north-mini-code:free,dots-studio/dots-3-note-preview:free";
+  "dots-studio/dots-3-note-preview:free,google/gemma-4-31b-it:free";
 
 const nonEmpty = z.string().trim().min(1);
 const authSecret = z.preprocess(

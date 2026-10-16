@@ -120,6 +120,7 @@ const SAFE_LOG_CONTEXTS = new Set([
   "Could not save source",
   "Password reset email failed",
   "PDF export failed",
+  "Free request ledger failed",
 ]);
 
 const SAFE_LOG_DETAIL_KEYS = new Set([
@@ -162,6 +163,7 @@ const SAFE_PROVIDER_CODES = new Map(
   [
     "payment_required",
     "rate_limited",
+    "daily_limit",
     "unavailable",
     "token_limit",
     "json_parse",

@@ -3,6 +3,36 @@ import type { GenerateKind } from "@/lib/generation-plan";
 /** A full pack costs about 10-14 free requests; never start one below this. */
 export const QUEUE_MIN_REQUESTS = 14;
 
+/**
+ * Today's free requests as /api/quota returns them: the app's own count of
+ * requests on gated models (lib/free-request-ledger.ts). A real per-day 429
+ * sets `exhausted`, which wins over the count.
+ */
+export type FreeRequestState = {
+  limited: boolean;
+  limit: number;
+  requestsLeft: number | null;
+  packsLeft: number | null;
+  exhausted: boolean;
+};
+
+export const USED_UP_COPY = "Today's free requests are used up. More at 8:00 AM.";
+
+/** The packs-left line, or null when the count is unknown. `low` tints it. */
+export function packsLeftCopy(state: FreeRequestState): { text: string; low: boolean } | null {
+  if (state.exhausted) return { text: USED_UP_COPY, low: true };
+  if (!state.limited) return { text: "No daily limit on today's free models", low: false };
+  if (state.packsLeft === null) return null;
+  if (state.packsLeft < 1) return { text: `Less than a pack left today · ${resetCopy()}`, low: true };
+  const packs = state.packsLeft === 1 ? "pack" : "packs";
+  return { text: `About ${state.packsLeft} ${packs} left today · ${resetCopy()}`, low: false };
+}
+
+/** Nothing left to inhale today: shows the full-tummy Kirby. */
+export function freeRequestsUsedUp(state: FreeRequestState | null | undefined): boolean {
+  return Boolean(state && (state.exhausted || state.requestsLeft === 0));
+}
+
 const MAX_PACK_NAME_CHARS = 200;
 const BATCH_EXTENSIONS = ["pdf", "docx", "pptx", "txt", "md"] as const;
 
@@ -103,9 +133,14 @@ export function nextRunnable<
     ?? null;
 }
 
-/** True when the day's free requests cover one more pack. Unknown never runs. */
-export function canStartPack(remaining: number | null | undefined): boolean {
-  return typeof remaining === "number" && remaining >= QUEUE_MIN_REQUESTS;
+/**
+ * True when today's free requests cover one more pack. An unreadable state
+ * never runs; an unreadable count on a limited day does, since a real 429
+ * still stops the run.
+ */
+export function canStartPack(state: FreeRequestState | null | undefined): boolean {
+  if (!state || state.exhausted) return false;
+  return !state.limited || state.requestsLeft === null || state.requestsLeft >= QUEUE_MIN_REQUESTS;
 }
 
 /** Display state of one queued pack under the current runner. */

@@ -7,6 +7,7 @@ import { uploadSourceFile } from "@/lib/batch-upload";
 import type { GenerateKind } from "@/lib/generation-plan";
 import {
   canStartPack,
+  type FreeRequestState,
   isBatchFile,
   nextRunnable,
   packNameFromFilename,
@@ -30,7 +31,7 @@ export type QueueRow = {
   message: string | null;
 };
 
-export type QueueQuota = { remaining: number | null; limit: number | null };
+export type QueueQuota = FreeRequestState;
 
 type UploadRow = {
   key: string;
@@ -216,18 +217,22 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
         try {
           const list = await loadQueue(signal);
           const next = nextRunnable(list, failedRef.current);
+          // Read even with nothing left to run, so a pack that just hit the
+          // per-day limit shows the used-up line.
+          const quotaResponse = list.length > 0
+            ? await fetch("/api/quota?fresh=1", { cache: "no-store", signal })
+            : null;
+          const nextQuota = quotaResponse?.ok
+            ? await readJson<QueueQuota>(quotaResponse)
+            : null;
+          if (quotaResponse) setQuota(nextQuota);
           if (!next) {
             if (dirtyRef.current) continue;
             break;
           }
           // A hidden tab never starts the next pack; visibilitychange kicks again.
           if (document.visibilityState !== "visible") break;
-          const quotaResponse = await fetch("/api/quota?fresh=1", { cache: "no-store", signal });
-          const nextQuota = quotaResponse.ok
-            ? await readJson<QueueQuota>(quotaResponse)
-            : null;
-          setQuota(nextQuota);
-          if (!canStartPack(nextQuota?.remaining)) {
+          if (!canStartPack(nextQuota)) {
             waitingRef.current = true;
             setWaiting(true);
             break;

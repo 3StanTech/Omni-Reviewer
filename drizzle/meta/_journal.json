@@ -29,6 +29,13 @@
       "when": 1791275681225,
       "tag": "0003_generation_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792127389359,
+      "tag": "0004_free_request_ledger",
+      "breakpoints": true
     }
   ]
 }

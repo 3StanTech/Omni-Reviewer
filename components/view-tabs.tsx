@@ -25,7 +25,7 @@ import { Panel } from "@/components/ui/panel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CardedView } from "@/components/carded-view";
 import { FocusToggle, useFocusMode } from "@/components/focus-mode";
-import { LOW_QUOTA_THRESHOLD, type FreeRequestQuota } from "@/components/generation-controls";
+import { packsLeftCopy, type FreeRequestState } from "@/lib/generation-queue";
 import { LockedInView } from "@/components/locked-in-view";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { ReadItAll } from "@/components/read-it-all";
@@ -62,7 +62,7 @@ type ViewTabsProps = {
   /** Set while something must finish first; Redo shows it and waits. */
   busyReason?: string | null;
   /** Free requests left today on the shared key; shown beside Redo. */
-  quota?: FreeRequestQuota | null;
+  quota?: FreeRequestState | null;
   onRedo: (kind: ViewKind, forceOverwrite?: boolean) => void;
   reviewerId: string;
   reviewerName?: string;
@@ -340,7 +340,7 @@ export function ViewTabs({
                     busy,
                     disabled: redoDisabled,
                     hint: blockReason ?? copy.description,
-                    remaining: blockReason ? null : quota?.remaining ?? null,
+                    quotaLine: blockReason || !quota ? null : packsLeftCopy(quota),
                     onSelect: requestRedo,
                   }
                 : null
@@ -503,7 +503,7 @@ type RedoMenuEntry = {
   disabled: boolean;
   /** The block reason when blocked, else the mode's one-line description. */
   hint: string;
-  remaining: number | null;
+  quotaLine: { text: string; low: boolean } | null;
   onSelect: () => void;
 };
 
@@ -548,11 +548,11 @@ function MoreMenu({ packItems, redo }: { packItems: ModeMenuItem[]; redo: RedoMe
           hint={
             <>
               {redo.hint}
-              {redo.remaining !== null ? (
+              {redo.quotaLine ? (
                 <>
                   {" "}
-                  <span className={redo.remaining < LOW_QUOTA_THRESHOLD ? "text-warning" : undefined}>
-                    {redo.remaining} left today.
+                  <span className={redo.quotaLine.low ? "text-warning" : undefined}>
+                    {redo.quotaLine.text}
                   </span>
                 </>
               ) : null}

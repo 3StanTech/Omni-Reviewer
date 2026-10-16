@@ -504,7 +504,7 @@ export async function POST(
 
 function responseStatus(code: string): number {
   if (code === "payment_required") return 402;
-  if (code === "rate_limited") return 429;
+  if (code === "rate_limited" || code === "daily_limit") return 429;
   if (code === "token_limit") return 400;
   return 502;
 }

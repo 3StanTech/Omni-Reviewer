@@ -92,11 +92,9 @@ describe("study strip", () => {
     expect(tabs).not.toContain('variant="outline"\n              disabled={redoDisabled}');
   });
 
-  it("keeps Redo's label, description, requests left and confirm flow", () => {
+  it("keeps Redo's label, description and confirm flow", () => {
     expect(tabs).toContain("`Redo ${copy.label}`");
     expect(tabs).toContain("hint: blockReason ?? copy.description");
-    expect(tabs).toContain("left today.");
-    expect(tabs).toContain("LOW_QUOTA_THRESHOLD");
     expect(tabs).toContain("onSelect: requestRedo");
     expect(tabs).toContain("showRedo");
     expect(tabs).toContain("setConfirmOpen(true)");
@@ -179,10 +177,15 @@ describe("generation controls", () => {
 
   it("labels Generate, Generate missing and keeps the quota line", () => {
     const first = renderToStaticMarkup(
-      createElement(GenerationControls, { ...base, hasViews: false, hasCompleteViews: false, quota: { remaining: 40, limit: 50 } }),
+      createElement(GenerationControls, {
+        ...base,
+        hasViews: false,
+        hasCompleteViews: false,
+        quota: { limited: true, limit: 50, requestsLeft: 40, packsLeft: 3, exhausted: false },
+      }),
     );
     expect(first).toContain("Generate");
-    expect(first).toContain("40 of 50 free requests left today");
+    expect(first).toContain("About 3 packs left today · resets 8:00 AM");
     const missing = renderToStaticMarkup(createElement(GenerationControls, { ...base, hasViews: true, hasCompleteViews: false }));
     expect(missing).toContain("Generate missing");
   });

@@ -4,6 +4,7 @@ import { GenerationBudgetError } from "@/lib/ai-budgets";
 export type GenerationErrorCode =
   | "payment_required"
   | "rate_limited"
+  | "daily_limit"
   | "unavailable"
   | "token_limit"
   | "json_parse"
@@ -30,6 +31,7 @@ const PUBLIC_GENERATION_MESSAGES: Record<string, string> = {
   payment_required:
     "Generation credits are exhausted. Try again later or check your OpenRouter balance.",
   rate_limited: "The model is rate limited right now. Wait a moment and try again.",
+  daily_limit: "Today's free requests are used up. More at 8:00 AM.",
   unavailable: "The model provider is temporarily unavailable. Try again shortly.",
   token_limit:
     "The source material is too long for this model. Split sources or shorten Locked In content.",
@@ -330,6 +332,19 @@ export function classifyGenerationError(err: unknown): ClassifiedGenerationError
     return {
       code: "payment_required",
       message: PUBLIC_GENERATION_MESSAGES.payment_required,
+      retryable: false,
+    };
+  }
+
+  // OpenRouter's per-day free cap, unlike the per-minute one, lasts until
+  // 00:00 UTC, so retrying only spends the deadline.
+  if (
+    status === 429 &&
+    (body.includes("per-day") || body.includes("per day") || body.includes("free-models-per-day"))
+  ) {
+    return {
+      code: "daily_limit",
+      message: PUBLIC_GENERATION_MESSAGES.daily_limit,
       retryable: false,
     };
   }

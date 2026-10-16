@@ -42,6 +42,9 @@ vi.mock("ai", () => ({
   },
 }));
 
+const ledger = vi.hoisted(() => ({ recordModelRequest: vi.fn(), markDailyLimitReached: vi.fn() }));
+vi.mock("@/lib/free-request-ledger", () => ledger);
+
 vi.mock("@openrouter/ai-sdk-provider", () => ({
   createOpenRouter: () => {
     return (modelId: string) => ({ modelId });
@@ -715,6 +718,16 @@ describe("generate", () => {
     const cause = Object.assign(new Error("cannot cast type generation_job_step to view_kind"), { name: "NeonDbError" });
     const queryError = new Error("Failed query: WITH input AS (SELECT * FROM jsonb_to_recordset($1::jsonb))", { cause });
     expect(classifyGenerationError(queryError)).toMatchObject({ code: "unknown", retryable: false });
+  });
+
+  it("surfaces a per-day 429 in Test Me as the daily limit, not a parse failure", async () => {
+    generateObject.mockRejectedValue(
+      Object.assign(new Error("Rate limit exceeded: free-models-per-day"), { statusCode: 429 }),
+    );
+    await expect(generateTestMe("# Topic\n\nPenicillin inhibits cell wall synthesis [S1 p.1]."))
+      .rejects.toMatchObject({ code: "daily_limit", retryable: false });
+    expect(generateObject).toHaveBeenCalledTimes(1);
+    expect(ledger.markDailyLimitReached).toHaveBeenCalledTimes(1);
   });
 
   it("maps retryable generation errors", () => {

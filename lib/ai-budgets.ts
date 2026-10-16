@@ -34,6 +34,10 @@ export type ProviderModelDescriptor = {
     completion?: number | string | null;
   } | null;
   privacyCompatible?: boolean;
+  /** Largest prompt the model answered in live probes; listing values are not trusted. */
+  maxInputTokens?: number;
+  /** Whether a request moves OpenRouter's free_model_daily_requests count. */
+  countsTowardFreeLimit?: boolean;
 };
 
 export type GenerationBudgetLimits = {
