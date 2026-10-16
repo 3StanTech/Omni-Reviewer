@@ -86,6 +86,9 @@ export function DeskGreeting({
           pose={look?.pose ?? "idle"}
           accessory={look?.accessory ?? null}
           say={say}
+          // The desk Kirby never idles to sleep; late at night he yawns now and then.
+          sleepAfterMs={null}
+          yawnEveryMs={look?.yawnEveryMs ?? null}
         />
         {look?.cake ? (
           <div className="print-hide pointer-events-none absolute -right-1 bottom-0 hidden w-8 dreamland:block sm:w-11">

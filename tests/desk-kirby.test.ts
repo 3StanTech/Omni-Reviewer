@@ -22,7 +22,7 @@ describe("deskKirbyLook priority", () => {
       belated: false,
     });
     expect(deskKirbyLook({ ...lateEmpty, firstRun: true })).toEqual({ pose: "point", accessory: null, cake: false, belated: false });
-    expect(deskKirbyLook(lateEmpty)).toEqual({ pose: "yawn", accessory: null, cake: false, belated: false });
+    expect(deskKirbyLook(lateEmpty)).toEqual({ pose: "idle", accessory: null, cake: false, belated: false, yawnEveryMs: 180_000 });
     expect(deskKirbyLook({ ...lateEmpty, now: base.now })).toEqual({ pose: "idle", accessory: "nightcap", cake: false, belated: false });
     expect(deskKirbyLook(base)).toEqual({ pose: "idle", accessory: null, cake: false, belated: false });
   });
@@ -35,11 +35,17 @@ describe("deskKirbyLook priority", () => {
 });
 
 describe("deskKirbyLook late night", () => {
-  it("yawns from 23:00 to 03:59 Manila", () => {
-    expect(deskKirbyLook(at("2026-10-15T14:59:00Z")).pose).toBe("idle"); // 22:59
-    expect(deskKirbyLook(at("2026-10-15T15:00:00Z")).pose).toBe("yawn"); // 23:00
-    expect(deskKirbyLook(at("2026-10-15T19:59:00Z")).pose).toBe("yawn"); // 03:59
-    expect(deskKirbyLook(at("2026-10-15T20:00:00Z")).pose).toBe("idle"); // 04:00
+  it("yawns every 3 minutes from 23:00 to 03:59 Manila, idle pose between yawns", () => {
+    expect(deskKirbyLook(at("2026-10-15T14:59:00Z")).yawnEveryMs).toBeUndefined(); // 22:59
+    expect(deskKirbyLook(at("2026-10-15T15:00:00Z"))).toMatchObject({ pose: "idle", yawnEveryMs: 180_000 }); // 23:00
+    expect(deskKirbyLook(at("2026-10-15T19:59:00Z"))).toMatchObject({ pose: "idle", yawnEveryMs: 180_000 }); // 03:59
+    expect(deskKirbyLook(at("2026-10-15T20:00:00Z")).yawnEveryMs).toBeUndefined(); // 04:00
+  });
+
+  it("does not yawn on a first run or birthday late at night", () => {
+    const late = at("2026-09-25T15:30:00Z"); // Manila Sept 25 23:30
+    expect(deskKirbyLook({ ...late, firstRun: true }).yawnEveryMs).toBeUndefined();
+    expect(deskKirbyLook({ ...late, birthday: "09-25" }).yawnEveryMs).toBeUndefined();
   });
 });
 

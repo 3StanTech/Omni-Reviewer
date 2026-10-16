@@ -10,12 +10,16 @@ export type DeskKirbyInput = {
 };
 
 export type DeskKirbyLook = {
-  pose: "idle" | "point" | "yawn";
+  pose: "idle" | "point";
   accessory: "party" | "nightcap" | null;
   cake: boolean;
   /** First run within 30 days after the birthday: the desk greets with a belated birthday dance. */
   belated: boolean;
+  /** Late night (23:00-03:59): a one-shot yawn on this interval, eyes open between yawns. */
+  yawnEveryMs?: number;
 };
+
+const LATE_NIGHT_YAWN_EVERY_MS = 180_000;
 
 /**
  * The desk Kirby's pose and accessory: the first rule that applies, in the same order as
@@ -42,7 +46,9 @@ export function deskKirbyLook(input: DeskKirbyInput): DeskKirbyLook {
     return { pose: "idle", accessory: "party", cake: true, belated: true };
   }
   if (input.firstRun) return { pose: "point", accessory: null, ...plain };
-  if (hour >= 23 || hour <= 3) return { pose: "yawn", accessory: null, ...plain };
+  if (hour >= 23 || hour <= 3) {
+    return { pose: "idle", accessory: null, ...plain, yawnEveryMs: LATE_NIGHT_YAWN_EVERY_MS };
+  }
   if (input.dueCards === 0) return { pose: "idle", accessory: "nightcap", ...plain };
   return { pose: "idle", accessory: null, ...plain };
 }

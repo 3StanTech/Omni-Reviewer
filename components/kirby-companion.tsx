@@ -16,10 +16,10 @@ import { cn } from "@/lib/utils";
 
 export type KirbyOutcome = "happy" | "sad" | "dance" | "popout" | "wave";
 export type KirbyReaction = { outcome: KirbyOutcome; key: number };
-export type KirbyPose = "idle" | "inhale" | "full" | "puzzled" | "yawn" | "point";
+export type KirbyPose = "idle" | "inhale" | "full" | "puzzled" | "point";
 export type KirbyAccessory = "nightcap" | "headband" | "party";
 
-type KirbyState = KirbyOutcome | "press" | "spit";
+type KirbyState = KirbyOutcome | "press" | "spit" | "yawn";
 
 /* Class per timed state; `wave` is `k-hello` so it never collides with the hover wave keyframes. */
 const STATE_CLASS: Record<KirbyState, string> = {
@@ -30,6 +30,7 @@ const STATE_CLASS: Record<KirbyState, string> = {
   popout: "k-popout",
   wave: "k-hello",
   spit: "k-spit",
+  yawn: "k-yawning",
 };
 const STATE_MS: Record<KirbyState, number> = {
   press: 1000,
@@ -39,9 +40,14 @@ const STATE_MS: Record<KirbyState, number> = {
   popout: 900,
   wave: 1400,
   spit: 1200,
+  yawn: 6_000,
 };
 const ALL_STATE_CLASSES = Object.values(STATE_CLASS);
-const SLEEP_AFTER_MS = 20_000;
+/* Default idle time before a Kirby falls asleep; `sleepAfterMs={null}` keeps one awake. */
+const SLEEP_AFTER_MS = 120_000;
+/* The first recurring yawn waits for the desk's welcome wave or birthday dance to finish. */
+const FIRST_YAWN_MS = 2_500;
+const YAWN_RETRY_MS = 1_000;
 const TAPS_FOR_SPIT = 5;
 const TAP_WINDOW_MS = 1500;
 
@@ -80,18 +86,47 @@ let reducedMotion: MediaQueryList | undefined;
 /* Busy poses (inhaling a generation, puzzled at an error) stay awake. */
 const AWAKE_POSES = new Set(["inhale", "puzzled"]);
 
+/* Each Kirby's idle threshold from `data-sleep-after`; null when he never sleeps. */
+function sleepAfter(kirby: SVGSVGElement): number | null {
+  const value = kirby.dataset.sleepAfter;
+  return value ? Number(value) : null;
+}
+
+/* Whether this Kirby has been idle past his own threshold and may sleep now. */
+function readyToSleep(kirby: SVGSVGElement): boolean {
+  const threshold = sleepAfter(kirby);
+  return (
+    threshold !== null &&
+    Date.now() - lastActivity >= threshold &&
+    !AWAKE_POSES.has(kirby.parentElement?.dataset.pose ?? "")
+  );
+}
+
+/* Schedules the idle timer for the nearest threshold among Kirbys still awake. */
+function scheduleSleep() {
+  clearTimeout(idleTimer);
+  idleTimer = undefined;
+  const idle = Date.now() - lastActivity;
+  let next = Infinity;
+  for (const kirby of instances) {
+    const threshold = sleepAfter(kirby);
+    if (threshold === null || threshold <= idle || kirby.classList.contains("k-sleep")) continue;
+    next = Math.min(next, threshold - idle);
+  }
+  if (next !== Infinity) idleTimer = setTimeout(sleepAll, next);
+}
+
 function sleepAll() {
   for (const kirby of instances) {
-    if (reacting.has(kirby) || AWAKE_POSES.has(kirby.parentElement?.dataset.pose ?? "")) continue;
-    kirby.classList.add("k-sleep");
+    if (!reacting.has(kirby) && readyToSleep(kirby)) kirby.classList.add("k-sleep");
   }
+  scheduleSleep();
 }
 
 function wake() {
   for (const kirby of instances) kirby.classList.remove("k-sleep");
   lastActivity = Date.now();
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(sleepAll, SLEEP_AFTER_MS);
+  scheduleSleep();
 }
 
 function followPointer(event: PointerEvent) {
@@ -148,8 +183,8 @@ function unregister(kirby: SVGSVGElement) {
 
 /**
  * Plays one timed state; the reflow restarts it when the same state plays twice in a row.
- * Sleep is held off while it plays, then resumes if the idle interval has already passed
- * (otherwise the pending idle timer still covers it).
+ * Sleep is held off while it plays, then resumes if this Kirby's idle threshold has already
+ * passed (otherwise the pending idle timer still covers it).
  */
 function play(kirby: SVGSVGElement, timer: Timer, state: KirbyState) {
   kirby.classList.remove(...ALL_STATE_CLASSES, "k-sleep");
@@ -160,13 +195,7 @@ function play(kirby: SVGSVGElement, timer: Timer, state: KirbyState) {
   timer.current = setTimeout(() => {
     kirby.classList.remove(STATE_CLASS[state]);
     reacting.delete(kirby);
-    if (
-      instances.has(kirby) &&
-      Date.now() - lastActivity >= SLEEP_AFTER_MS &&
-      !AWAKE_POSES.has(kirby.parentElement?.dataset.pose ?? "")
-    ) {
-      kirby.classList.add("k-sleep");
-    }
+    if (instances.has(kirby) && readyToSleep(kirby)) kirby.classList.add("k-sleep");
   }, STATE_MS[state]);
 }
 
@@ -223,6 +252,9 @@ export function KirbyDefs() {
  * Props: `pose` persists while set; `hat` is the pack's copy hat and `accessory` wins over
  * it; `say` is a small bubble above him (flavour only, its meaning is never Kirby-only);
  * `area` lets `cueKirby` reach him. Asleep he wears the nightcap; five quick taps spit a star.
+ * `sleepAfterMs` is his idle time before sleeping (default 2 minutes, `null` never sleeps);
+ * `yawnEveryMs` plays a one-shot yawn after any welcome, then on that interval (eyes open
+ * between yawns), and never under reduced motion.
  */
 export function KirbyCompanion({
   size = "md",
@@ -232,6 +264,8 @@ export function KirbyCompanion({
   accessory,
   say,
   area,
+  sleepAfterMs = SLEEP_AFTER_MS,
+  yawnEveryMs,
   className,
 }: {
   size?: keyof typeof SIZE_CLASS;
@@ -241,6 +275,8 @@ export function KirbyCompanion({
   accessory?: KirbyAccessory | null;
   say?: string | null;
   area?: string;
+  sleepAfterMs?: number | null;
+  yawnEveryMs?: number | null;
   className?: string;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -267,6 +303,30 @@ export function KirbyCompanion({
       if (areas.get(area) === entry) areas.delete(area);
     };
   }, [area]);
+
+  useEffect(() => {
+    const kirby = svgRef.current;
+    if (!kirby || !yawnEveryMs) return;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const yawn = () => {
+      clearTimeout(retry);
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      if (kirby.classList.contains("k-sleep")) return;
+      // Never cut a reaction short: try again once it has played.
+      if (reacting.has(kirby)) {
+        retry = setTimeout(yawn, YAWN_RETRY_MS);
+        return;
+      }
+      play(kirby, stateTimer, "yawn");
+    };
+    const first = setTimeout(yawn, FIRST_YAWN_MS);
+    const every = setInterval(yawn, yawnEveryMs);
+    return () => {
+      clearTimeout(first);
+      clearTimeout(retry);
+      clearInterval(every);
+    };
+  }, [yawnEveryMs]);
 
   const reactionKey = reaction?.key;
   const reactionOutcome = reaction?.outcome;
@@ -305,6 +365,7 @@ export function KirbyCompanion({
         viewBox="-12 -26 144 152"
         role="img"
         aria-label="Kirby"
+        data-sleep-after={sleepAfterMs ?? undefined}
         onPointerEnter={() => svgRef.current?.classList.add("k-hover")}
         onPointerLeave={() => svgRef.current?.classList.remove("k-hover")}
         onClick={(event) => onTap(event.currentTarget)}

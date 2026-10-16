@@ -23,7 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { KIRBY_HATS } from "@/lib/kirby-hat";
 
-const POSES: KirbyPose[] = ["idle", "inhale", "full", "puzzled", "yawn", "point"];
+const POSES: KirbyPose[] = ["idle", "inhale", "full", "puzzled", "point"];
 const ACCESSORIES: KirbyAccessory[] = ["nightcap", "headband", "party"];
 const OUTCOMES: KirbyOutcome[] = ["happy", "sad", "dance", "popout", "wave"];
 const TREAT_STATES: CafeTreatState[] = ["full", "outline", "plate", "faint"];
@@ -136,8 +136,8 @@ export function KirbySheet() {
             <Tile label="sm puzzled">
               <KirbyCompanion size="sm" pose="puzzled" />
             </Tile>
-            <Tile label="lg desk">
-              <KirbyCompanion size="lg" pose="yawn" />
+            <Tile label="lg desk late night">
+              <KirbyCompanion size="lg" sleepAfterMs={null} yawnEveryMs={180_000} />
             </Tile>
           </div>
         </Section>
