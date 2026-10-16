@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { answerFromPack, publicAskError } from "@/lib/ai";
 import {
   ASK_HISTORY_MESSAGES,
+  askHistory,
   buildAskWhyQuestion,
   buildExplainQuestion,
   MAX_ASK_WHY_SENTENCE_CHARS,
@@ -182,11 +183,12 @@ export async function POST(request: Request, context: Context) {
     return NextResponse.json({ error: "Add a source with text first." }, { status: 409 });
   }
 
-  // Plain questions carry the recent thread; Explain and Ask why are single-turn.
+  // Plain questions carry the recent thread, minus refused exchanges; Explain
+  // and Ask why are single-turn.
   let history: AskHistoryMessage[] = [];
   if (body.kind === "ask") {
     const thread = await listThread(reviewerId, userId, { limit: ASK_HISTORY_MESSAGES });
-    history = thread.map((row) => ({ role: row.role, content: row.content }));
+    history = askHistory(thread.map(toChatMessageDto));
   }
   const previousUserTurn = [...history].reverse().find((message) => message.role === "user")?.content;
   const rankingText = previousUserTurn ? `${question.prompt}\n${previousUserTurn}` : question.prompt;

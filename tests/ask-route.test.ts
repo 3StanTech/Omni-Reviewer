@@ -194,6 +194,26 @@ describe("POST /api/reviewers/[id]/ask", () => {
     expect(mock(insertExchange)).not.toHaveBeenCalled();
   });
 
+  it("leaves refused exchanges out of the history sent to the model", async () => {
+    mock(listThread).mockResolvedValueOnce([
+      row({ id: "00000000-0000-4000-8000-0000000000a1", content: "What did Fleming observe?" }),
+      row({
+        id: "00000000-0000-4000-8000-0000000000a2",
+        role: "assistant",
+        content: "The lecture does not specify it.",
+        contentJson: { citationSources, refused: true, origin: { kind: "ask" } },
+        replyToId: "00000000-0000-4000-8000-0000000000a1",
+      }),
+      row({ id: "00000000-0000-4000-8000-0000000000a3", content: "What do beta blockers do?" }),
+      row({ id: ANSWER_ID, role: "assistant", content: "They slow the heart [S1 p.2].", replyToId: "00000000-0000-4000-8000-0000000000a3" }),
+    ]);
+    await POST(jsonRequest("POST", { kind: "ask", question: "What did Fleming observe in 1928?" }), context);
+    expect(mock(answerFromPack).mock.calls[0][0].history).toEqual([
+      { role: "user", content: "What do beta blockers do?" },
+      { role: "assistant", content: "They slow the heart [S1 p.2]." },
+    ]);
+  });
+
   it("answers a question with the recent thread and stores the exchange", async () => {
     mock(listThread).mockResolvedValueOnce([
       row({ content: "What do beta blockers do?" }),

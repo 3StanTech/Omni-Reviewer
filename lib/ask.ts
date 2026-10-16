@@ -97,6 +97,26 @@ export function selectAskSources(
 
 export type AskHistoryMessage = { role: "user" | "assistant"; content: string };
 
+/**
+ * The thread as Ask history, without refused exchanges (the refusal and the
+ * question it answered). A refusal tells the model nothing about the sources
+ * and primes it to refuse the next question too (seen 2026-10-16: dots refused
+ * a covered question 2 of 2 times after an earlier refusal, 0 of 4 without).
+ */
+export function askHistory(
+  thread: readonly { id: string; role: "user" | "assistant"; content: string; replyToId: string | null; refused: boolean }[],
+): AskHistoryMessage[] {
+  const dropped = new Set<string>();
+  for (const message of thread) {
+    if (message.role !== "assistant" || !message.refused) continue;
+    dropped.add(message.id);
+    if (message.replyToId) dropped.add(message.replyToId);
+  }
+  return thread
+    .filter((message) => !dropped.has(message.id))
+    .map((message) => ({ role: message.role, content: message.content }));
+}
+
 const PAGE_MARKER_NOTE =
   "A line of the form <<<page N>>> marks the start of page or slide N of that source." +
   " Text after a <<<slide image>>> line was read from that page's picture (figures, graphs, equations, handwriting); cite it with that page like any other text.";
