@@ -22,7 +22,7 @@ describe("deskKirbyLook priority", () => {
       belated: false,
     });
     expect(deskKirbyLook({ ...lateEmpty, firstRun: true })).toEqual({ pose: "point", accessory: null, cake: false, belated: false });
-    expect(deskKirbyLook(lateEmpty)).toEqual({ pose: "idle", accessory: null, cake: false, belated: false, yawnEveryMs: 180_000 });
+    expect(deskKirbyLook(lateEmpty)).toEqual({ pose: "idle", accessory: "nightcap", cake: false, belated: false, yawnEveryMs: 180_000 });
     expect(deskKirbyLook({ ...lateEmpty, now: base.now })).toEqual({ pose: "idle", accessory: "nightcap", cake: false, belated: false });
     expect(deskKirbyLook(base)).toEqual({ pose: "idle", accessory: null, cake: false, belated: false });
   });
@@ -30,15 +30,15 @@ describe("deskKirbyLook priority", () => {
   it("reads the birthday in Manila, not UTC", () => {
     // UTC Sept 25 16:30 is Manila Sept 26 00:30.
     expect(deskKirbyLook({ ...at("2026-09-25T16:30:00Z"), birthday: "09-26" }).accessory).toBe("party");
-    expect(deskKirbyLook({ ...at("2026-09-25T15:59:00Z"), birthday: "09-26" }).accessory).toBeNull();
+    expect(deskKirbyLook({ ...at("2026-09-25T15:59:00Z"), birthday: "09-26" }).accessory).toBe("nightcap"); // Manila Sept 25 23:59: late night, not the birthday
   });
 });
 
 describe("deskKirbyLook late night", () => {
-  it("yawns every 3 minutes from 23:00 to 03:59 Manila, idle pose between yawns", () => {
+  it("wears the nightcap and yawns every 3 minutes from 23:00 to 03:59 Manila, idle pose between yawns", () => {
     expect(deskKirbyLook(at("2026-10-15T14:59:00Z")).yawnEveryMs).toBeUndefined(); // 22:59
-    expect(deskKirbyLook(at("2026-10-15T15:00:00Z"))).toMatchObject({ pose: "idle", yawnEveryMs: 180_000 }); // 23:00
-    expect(deskKirbyLook(at("2026-10-15T19:59:00Z"))).toMatchObject({ pose: "idle", yawnEveryMs: 180_000 }); // 03:59
+    expect(deskKirbyLook(at("2026-10-15T15:00:00Z"))).toMatchObject({ pose: "idle", accessory: "nightcap", yawnEveryMs: 180_000 }); // 23:00
+    expect(deskKirbyLook(at("2026-10-15T19:59:00Z"))).toMatchObject({ pose: "idle", accessory: "nightcap", yawnEveryMs: 180_000 }); // 03:59
     expect(deskKirbyLook(at("2026-10-15T20:00:00Z")).yawnEveryMs).toBeUndefined(); // 04:00
   });
 
@@ -46,11 +46,13 @@ describe("deskKirbyLook late night", () => {
     const late = at("2026-09-25T15:30:00Z"); // Manila Sept 25 23:30
     expect(deskKirbyLook({ ...late, firstRun: true }).yawnEveryMs).toBeUndefined();
     expect(deskKirbyLook({ ...late, birthday: "09-25" }).yawnEveryMs).toBeUndefined();
+    expect(deskKirbyLook({ ...late, firstRun: true }).accessory).toBeNull();
+    expect(deskKirbyLook({ ...late, birthday: "09-25" }).accessory).toBe("party");
   });
 });
 
 describe("deskKirbyLook due cards", () => {
-  it("wears the nightcap only when nothing is due", () => {
+  it("wears the nightcap only when nothing is due or it is late night", () => {
     expect(deskKirbyLook({ ...base, dueCards: 0 }).accessory).toBe("nightcap");
     expect(deskKirbyLook({ ...base, dueCards: 1 }).accessory).toBeNull();
   });

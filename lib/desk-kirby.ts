@@ -11,11 +11,12 @@ export type DeskKirbyInput = {
 
 export type DeskKirbyLook = {
   pose: "idle" | "point";
+  /** "nightcap" is worn late at night (23:00-03:59) and when nothing is due. */
   accessory: "party" | "nightcap" | null;
   cake: boolean;
   /** First run within 30 days after the birthday: the desk greets with a belated birthday dance. */
   belated: boolean;
-  /** Late night (23:00-03:59): a one-shot yawn on this interval, eyes open between yawns. */
+  /** Late night (23:00-03:59), when he also wears the nightcap: a one-shot yawn on this interval, eyes open between yawns. */
   yawnEveryMs?: number;
 };
 
@@ -47,7 +48,7 @@ export function deskKirbyLook(input: DeskKirbyInput): DeskKirbyLook {
   }
   if (input.firstRun) return { pose: "point", accessory: null, ...plain };
   if (hour >= 23 || hour <= 3) {
-    return { pose: "idle", accessory: null, ...plain, yawnEveryMs: LATE_NIGHT_YAWN_EVERY_MS };
+    return { pose: "idle", accessory: "nightcap", ...plain, yawnEveryMs: LATE_NIGHT_YAWN_EVERY_MS };
   }
   if (input.dueCards === 0) return { pose: "idle", accessory: "nightcap", ...plain };
   return { pose: "idle", accessory: null, ...plain };

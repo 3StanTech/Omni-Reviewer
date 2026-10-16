@@ -105,12 +105,12 @@ const MS_PER_DAY = 86_400_000;
 const RAIL_PACK_ITEM_CLASS = "h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2.5 font-normal last:rounded-b-[calc(var(--radius)-1px)]";
 /** The Pack ready line's Kirby, reached by the first-pack cheer. */
 const PACK_READY_AREA = "pack-ready";
-const POP_OUT = { outcome: "popout", key: 1 } as const;
-/** Pop-out length in the Kirby engine; the cheer's dance waits for it. */
-const POP_OUT_MS = 900;
+const PACK_READY_RIDE = { outcome: "ride", key: 1 } as const;
+/** Warp Star ride length in the Kirby engine; the cheer's dance waits for it. */
+const RIDE_MS = 2400;
 
-function danceAfterPopOut() {
-  window.setTimeout(() => cueKirby(PACK_READY_AREA, "dance"), POP_OUT_MS);
+function danceAfterRide() {
+  window.setTimeout(() => cueKirby(PACK_READY_AREA, "dance"), RIDE_MS);
 }
 
 const READING_SLIDES_NOTE =
@@ -698,7 +698,7 @@ export function ReviewerWorkspace({
   const readyLabel = finishedRedoKind
     ? `${MODE_KIT_ITEMS.find((item) => item.kind === finishedRedoKind)?.label ?? "Pack"} ready`
     : "Pack ready";
-  // Kirby pops out of the inhale in the pack's copy hat, only after a run this visit watched.
+  // Kirby rides the Warp Star in the pack's copy hat, only after a run this visit watched.
   const generationNotice = finishedJob ? (
     <PackReadyNotice
       label={readyLabel}
@@ -709,7 +709,7 @@ export function ReviewerWorkspace({
             size="sm"
             area={PACK_READY_AREA}
             hat={kirbyHat(reviewerId)}
-            reaction={POP_OUT}
+            reaction={PACK_READY_RIDE}
             className="shrink-0"
           />
         ) : null
@@ -828,7 +828,7 @@ export function ReviewerWorkspace({
           {generationNotice}
           {/* Outlives Pack ready's 6 s on its own 8 s timer. */}
           {firstPack.show ? (
-            <FirstCelebration kind="pack" onDone={firstPack.dismiss} onShow={danceAfterPopOut} />
+            <FirstCelebration kind="pack" onDone={firstPack.dismiss} onShow={danceAfterRide} />
           ) : null}
           {studySection}
           {sourcesDialog}

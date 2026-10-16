@@ -917,14 +917,19 @@ html[data-focus="on"] main {
 }
 
 /* Kirby companion (Dream Land only; fan art drawn in SVG). Gradients come from <KirbyDefs/>. */
-.kirby-companion .kirby { display: block; width: 100%; height: auto; overflow: visible; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.kirby-companion .kirby { display: block; width: 100%; height: auto; overflow: visible; cursor: pointer; -webkit-tap-highlight-color: transparent; font-family: var(--font-ui, "IBM Plex Sans"), system-ui, sans-serif; }
 .kirby-companion .tb { transform-box: fill-box; transform-origin: 50% 100%; }
 .kirby-companion .tc { transform-box: fill-box; transform-origin: 50% 50%; }
 .kirby-companion .k-outline { stroke: #e2799f; stroke-width: 1.6; }
 .kirby-companion .eyes-happy, .kirby-companion .eyes-sad, .kirby-companion .eyes-sleep, .kirby-companion .mouth-open, .kirby-companion .mouth-sad,
 .kirby-companion .k-burst, .kirby-companion .k-sweat, .kirby-companion .k-zzz, .kirby-companion .k-poyo,
 .kirby-companion .k-wind, .kirby-companion .k-cheeks, .kirby-companion .mouth-inhale, .kirby-companion .mouth-o, .kirby-companion .mouth-full,
-.kirby-companion .mouth-yawn, .kirby-companion .k-question, .kirby-companion .k-sleepcap, .kirby-companion .k-spitstar { opacity: 0; }
+.kirby-companion .mouth-yawn, .kirby-companion .k-question, .kirby-companion .k-sleepcap, .kirby-companion .k-spitstar,
+.kirby-companion .mouth-doze, .kirby-companion .k-snot, .kirby-companion .eyes-squeeze, .kirby-companion .k-tear,
+.kirby-companion .k-ridestar, .kirby-companion .k-trail { opacity: 0; }
+.kirby-companion .k-snot { transition: opacity .25s; transform-box: fill-box; transform-origin: 12% 88%; }
+.kirby-companion .mouth-doze { transition: opacity .25s; }
+.kirby-companion .k-ridestar { transform-box: view-box; }
 .kirby-companion .eyes-open, .kirby-companion .eyes-happy, .kirby-companion .eyes-sad, .kirby-companion .eyes-sleep, .kirby-companion .blush,
 .kirby-companion .mouth-closed, .kirby-companion .mouth-open, .kirby-companion .mouth-sad { transition: opacity .12s; }
 .kirby-companion .arm-l, .kirby-companion .arm-r { transition: transform .25s; }
@@ -965,19 +970,29 @@ html[data-focus="on"] main {
 @keyframes k-sweat { 0% { transform: translateY(-4px); } 100% { transform: translateY(6px); } }
 /* sleepy after a while without the pointer moving */
 .kirby-companion .kirby.k-sleep .eyes-open { opacity: 0; animation: none; }
-.kirby-companion .kirby.k-sleep .eyes-sleep, .kirby-companion .kirby.k-sleep .k-zzz { opacity: 1; }
-.kirby-companion .kirby.k-sleep .k-zzz { animation: k-zzz 2.4s ease-in-out infinite; }
+.kirby-companion .kirby.k-sleep .eyes-sleep { opacity: 1; }
 .kirby-companion .kirby.k-sleep .k-bob { animation-duration: 5s; }
-@keyframes k-zzz { 0% { transform: translate(0, 4px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translate(6px, -10px); opacity: 0; } }
+/* asleep: closed eyes, a snot bubble breathing in and out, a z trio drifting up, a slow sway */
+.kirby-companion .kirby.k-sleep .mouth-closed { opacity: 0; }
+.kirby-companion .kirby.k-sleep :is(.eyes-happy, .mouth-full, .k-cheeks) { opacity: 0; }
+.kirby-companion .kirby.k-sleep .mouth-doze { opacity: 1; }
+.kirby-companion .kirby.k-sleep .k-snot { opacity: 1; animation: k-snot 3.6s ease-in-out infinite; }
+.kirby-companion .kirby.k-sleep .k-pose { animation: k-sway 6s ease-in-out infinite; }
+.kirby-companion .kirby.k-sleep .k-zzz { animation: none; opacity: 1; }
+.kirby-companion .kirby.k-sleep .k-zzz text { opacity: 0; animation: k-z 3.6s ease-out infinite; }
+.kirby-companion .kirby.k-sleep .k-zzz text:nth-child(2) { animation-delay: .6s; }
+.kirby-companion .kirby.k-sleep .k-zzz text:nth-child(3) { animation-delay: 1.2s; }
+.kirby-companion .kirby.k-sleep .blush { opacity: .45; }
+@keyframes k-sway { 0%, 100% { transform: rotate(-2.6deg); } 50% { transform: rotate(2.6deg) translateY(1px); } }
+@keyframes k-snot { 0% { transform: scale(.35); } 70% { transform: scale(1.12); } 86% { transform: scale(1.16); opacity: 1; } 92%, 100% { transform: scale(.2); opacity: 0; } }
+@keyframes k-z { 0% { opacity: 0; transform: translate(0, 4px); } 25% { opacity: 1; } 80% { opacity: .9; } 100% { opacity: 0; transform: translate(6px, -8px); } }
 /* head pieces: the copy hat or accessory; asleep, the nightcap replaces them */
 .kirby-companion .k-hat, .kirby-companion .k-acc, .kirby-companion .k-sleepcap { transition: opacity .3s; }
 .kirby-companion .kirby.k-sleep .k-sleepcap { opacity: 1; }
 .kirby-companion .kirby.k-sleep .k-hat, .kirby-companion .kirby.k-sleep .k-acc:not(.k-acc-nightcap) { opacity: 0; }
 .kirby-companion .k-flame { animation: k-flicker 1.2s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 100%; }
-.kirby-companion .k-spark { animation: k-spark 1.4s steps(2) infinite; }
 .kirby-companion .k-tail { animation: k-tail 1.6s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 0 50%; }
 @keyframes k-flicker { from { transform: scaleY(1); } to { transform: scaleY(1.07) skewX(-2deg); } }
-@keyframes k-spark { 0% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes k-tail { from { transform: rotate(-6deg); } to { transform: rotate(8deg); } }
 /* speech bubble above Kirby (flavour; the meaning is always in visible text elsewhere) */
 .kirby-companion .kirby-say {
@@ -1018,7 +1033,11 @@ html[data-focus="on"] main {
 @keyframes k-question { 0%, 100% { transform: rotate(-8deg); } 50% { transform: translateY(-4px) rotate(10deg); } }
 /* yawn: one 6 s late-night yawn (eyes close, big mouth, arms stretch), eyes open again after */
 .kirby-companion .kirby.k-yawning .eyes-open { animation: k-yawn-eyes 6s ease-in-out; }
-.kirby-companion .kirby.k-yawning .eyes-sleep { animation: k-yawn-lids 6s ease-in-out; }
+/* yawn: eyes squeeze shut with a tear (not the sleep arcs), the body stretches */
+.kirby-companion .kirby.k-yawning .eyes-sleep { animation: none; opacity: 0; }
+.kirby-companion .kirby.k-yawning .eyes-squeeze { animation: k-yawn-lids 6s ease-in-out; }
+.kirby-companion .kirby.k-yawning .k-tear { animation: k-tear 6s ease-in-out; }
+.kirby-companion .kirby.k-yawning .k-pose { animation: k-yawn-stretch 6s ease-in-out; }
 .kirby-companion .kirby.k-yawning .mouth-yawn { animation: k-yawn 6s ease-in-out; }
 .kirby-companion .kirby.k-yawning .mouth-closed { animation: k-yawn-shut 6s ease-in-out; }
 .kirby-companion .kirby.k-yawning .arm-l { animation: k-stretch-l 6s ease-in-out; }
@@ -1027,27 +1046,29 @@ html[data-focus="on"] main {
 @keyframes k-yawn-lids { 0%, 92%, 100% { opacity: 0; } 8%, 85% { opacity: 1; } }
 @keyframes k-yawn { 0%, 15%, 80%, 100% { opacity: 0; } 25%, 70% { opacity: 1; } }
 @keyframes k-yawn-shut { 0%, 15%, 80%, 100% { opacity: 1; } 25%, 70% { opacity: 0; } }
+@keyframes k-tear { 0%, 30%, 82%, 100% { opacity: 0; transform: translateY(0); } 40%, 70% { opacity: 1; } 78% { opacity: .8; transform: translateY(3px); } }
+@keyframes k-yawn-stretch { 0%, 15%, 80%, 100% { transform: none; } 25%, 70% { transform: scale(.96, 1.06); } }
 @keyframes k-stretch-l { 0%, 15%, 80%, 100% { transform: none; } 25%, 70% { transform: rotate(50deg); } }
 @keyframes k-stretch-r { 0%, 15%, 80%, 100% { transform: none; } 25%, 70% { transform: rotate(-50deg); } }
 /* pose: point down-left (toward the first-run guide) */
-.kirby-companion[data-pose="point"] .arm-l { transform: translate(-9px, 7px) rotate(34deg); animation: k-point 1.6s ease-in-out infinite; }
+.kirby-companion[data-pose="point"] .arm-l { transform: translate(-3px, 2px) rotate(-22deg); animation: k-point-m 1.6s ease-in-out infinite; }
 .kirby-companion[data-pose="point"] .blush { opacity: .85; }
-@keyframes k-point { 0%, 100% { transform: translate(-9px, 7px) rotate(34deg); } 50% { transform: translate(-13px, 10px) rotate(34deg); } }
+@keyframes k-point-m { 0%, 100% { transform: translate(-3px, 2px) rotate(-22deg); } 50% { transform: translate(-6px, 4px) rotate(-26deg); } }
 
 /* reactions win over poses: clear the pose's face while one plays */
-.kirby-companion .kirby:is(.k-happy, .k-sad, .k-dance, .k-popout, .k-hello, .k-spit) :is(.mouth-inhale, .k-wind, .mouth-o, .mouth-full, .mouth-yawn, .k-question, .k-cheeks, .eyes-sleep) { opacity: 0; animation: none; }
-.kirby-companion .kirby:is(.k-happy, .k-dance, .k-popout) :is(.eyes-sad) { opacity: 0; }
-.kirby-companion .kirby:is(.k-happy, .k-sad, .k-dance, .k-popout, .k-hello, .k-spit) .k-pose { transform: none; animation: none; }
+.kirby-companion .kirby:is(.k-happy, .k-sad, .k-dance, .k-ride, .k-hello, .k-spit) :is(.mouth-inhale, .k-wind, .mouth-o, .mouth-full, .mouth-yawn, .k-question, .k-cheeks, .eyes-sleep) { opacity: 0; animation: none; }
+.kirby-companion .kirby:is(.k-happy, .k-dance, .k-ride) :is(.eyes-sad) { opacity: 0; }
+.kirby-companion .kirby:is(.k-happy, .k-sad, .k-dance, .k-hello, .k-spit) .k-pose { transform: none; animation: none; }
+.kirby-companion .kirby:is(.k-happy, .k-sad, .k-dance, .k-ride, .k-hello, .k-spit, .k-press) :is(.k-snot, .mouth-doze) { opacity: 0; animation: none; }
 /* dance: hop left, hop right, spin, star burst */
 .kirby-companion .kirby.k-dance .k-jump { animation: k-dance 1.6s cubic-bezier(.3,.7,.4,1); }
 .kirby-companion .kirby.k-dance .arm-l { animation: k-arm-l .4s ease-in-out 4 alternate; }
 .kirby-companion .kirby.k-dance .arm-r { animation: k-arm-r .4s ease-in-out 4 alternate; }
-.kirby-companion .kirby:is(.k-dance, .k-popout) .eyes-open { opacity: 0; animation: none; }
-.kirby-companion .kirby:is(.k-dance, .k-popout) :is(.eyes-happy, .mouth-open, .k-burst) { opacity: 1; }
-.kirby-companion .kirby:is(.k-dance, .k-popout) .mouth-closed { opacity: 0; }
-.kirby-companion .kirby:is(.k-dance, .k-popout, .k-hello) .blush { opacity: .9; }
+.kirby-companion .kirby.k-dance .eyes-open { opacity: 0; animation: none; }
+.kirby-companion .kirby.k-dance :is(.eyes-happy, .mouth-open, .k-burst) { opacity: 1; }
+.kirby-companion .kirby.k-dance .mouth-closed { opacity: 0; }
+.kirby-companion .kirby:is(.k-dance, .k-hello) .blush { opacity: .9; }
 .kirby-companion .kirby.k-dance .k-burst path { animation: k-burst .9s ease-out .7s both; }
-.kirby-companion .kirby.k-popout .k-burst path { animation: k-burst .8s ease-out both; }
 @keyframes k-dance {
   0% { transform: none; }
   10% { transform: translate(-10px, -12px) rotate(-12deg); }
@@ -1062,11 +1083,21 @@ html[data-focus="on"] main {
 }
 @keyframes k-arm-l { from { transform: rotate(10deg); } to { transform: rotate(60deg); } }
 @keyframes k-arm-r { from { transform: rotate(-10deg); } to { transform: rotate(-60deg); } }
-/* pop-out: Kirby bursts back out after an inhale */
-.kirby-companion .kirby.k-popout .k-jump { animation: k-popout .9s cubic-bezier(.2,.9,.3,1.3); }
-.kirby-companion .kirby.k-popout .arm-l { transform: rotate(48deg); }
-.kirby-companion .kirby.k-popout .arm-r { transform: rotate(-48deg); }
-@keyframes k-popout { 0% { transform: translateY(12px) scale(.55); } 45% { transform: translateY(-14px) scale(1.12); } 70% { transform: translateY(0) scale(.96, 1.04); } 100% { transform: none; } }
+/* Warp Star ride (pack ready, 2.4 s): squat, hop on, a lap in his own spot, hop off */
+.kirby-companion .kirby.k-ride .k-jump { animation: k-ride-fly 2.4s cubic-bezier(.4,.1,.3,1); }
+.kirby-companion .kirby.k-ride .k-pose { animation: k-ride-sit 2.4s ease-in-out; }
+.kirby-companion .kirby.k-ride .k-ridestar { animation: k-ride-star 2.4s ease-in-out; }
+.kirby-companion .kirby.k-ride .k-trail { animation: k-ride-trail 2.4s linear; }
+.kirby-companion .kirby.k-ride .eyes-open, .kirby-companion .kirby.k-ride .mouth-closed { opacity: 0; animation: none; }
+.kirby-companion .kirby.k-ride :is(.eyes-happy, .mouth-open, .k-burst) { opacity: 1; }
+.kirby-companion .kirby.k-ride .blush { opacity: .9; }
+.kirby-companion .kirby.k-ride .arm-l { transform: rotate(48deg); }
+.kirby-companion .kirby.k-ride .arm-r { transform: rotate(-48deg); }
+.kirby-companion .kirby.k-ride .k-burst path { animation: k-burst .8s ease-out 1.75s both; }
+@keyframes k-ride-fly { 0%, 18% { transform: none; } 32% { transform: translate(8px, -14px) rotate(-6deg); } 46% { transform: translate(24px, -26px) rotate(-12deg); } 60% { transform: translate(12px, -32px) rotate(4deg); } 72% { transform: translate(-6px, -16px) rotate(8deg); } 84%, 100% { transform: none; } }
+@keyframes k-ride-sit { 0% { transform: none; } 10% { transform: scale(1.08, .9); } 18% { transform: translateY(-22px); } 24%, 78% { transform: translateY(-9px); } 88% { transform: translateY(-5px); } 100% { transform: none; } }
+@keyframes k-ride-star { 0% { opacity: 0; transform: translate(-70px, 0); } 16%, 80% { opacity: 1; transform: none; } 92%, 100% { opacity: 0; transform: translate(70px, -8px); } }
+@keyframes k-ride-trail { 0%, 24% { opacity: 0; } 30%, 72% { opacity: 1; } 78%, 100% { opacity: 0; } }
 /* hello: a little hop and a wave */
 .kirby-companion .kirby.k-hello .k-jump { animation: k-hello .7s cubic-bezier(.3,.7,.4,1); }
 .kirby-companion .kirby.k-hello .arm-r { animation: k-wave .35s ease-in-out 4 alternate; }
@@ -1096,4 +1127,7 @@ html[data-focus="on"] main {
   .kirby-companion *, .kirby-companion .kirby-say, .kirby-art * { animation: none !important; }
   /* stills: no burst or flying star frozen over his face */
   .kirby-companion .k-burst, .kirby-companion .k-spitstar { display: none; }
+  /* asleep stays still but readable: snot bubble at rest, the z trio visible */
+  .kirby-companion .kirby.k-sleep .k-snot { transform: none; }
+  .kirby-companion .kirby.k-sleep .k-zzz text { opacity: 1; }
 }

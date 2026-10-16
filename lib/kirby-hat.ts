@@ -1,5 +1,5 @@
 /** Copy hats Kirby can wear in a pack (Dream Land only). */
-export const KIRBY_HATS = ["sword", "beam", "fire", "cutter", "parasol", "spark"] as const;
+export const KIRBY_HATS = ["sword", "beam", "fire", "cook", "parasol", "mike"] as const;
 
 export type KirbyHatId = (typeof KIRBY_HATS)[number];
 

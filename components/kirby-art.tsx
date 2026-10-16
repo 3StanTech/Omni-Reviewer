@@ -62,51 +62,65 @@ function BeamHat() {
 function FireHat() {
   return (
     <g>
-      <path
-        className="k-flame"
-        d="M26 38 Q20 22 30 12 Q30 22 38 24 Q36 6 50 -6 Q48 10 58 16 Q60 -2 72 -10 Q68 8 76 16 Q84 4 92 4 Q86 18 92 24 Q100 18 102 12 Q106 28 94 38 Q60 26 26 38 Z"
-        fill="url(#kFire)"
-        stroke="#c2361c"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-      <path d="M44 30 Q48 18 56 14 Q56 24 62 26 Q66 18 72 14 Q72 24 78 30 Q60 24 44 30 Z" fill="#fff1a8" opacity=".85" />
+      <g transform="translate(0 -5)">
+        <path
+          className="k-flame"
+          d="M26 38 Q20 22 30 12 Q30 22 38 24 Q36 6 50 -6 Q48 10 58 16 Q60 -2 72 -10 Q68 8 76 16 Q84 4 92 4 Q86 18 92 24 Q100 18 102 12 Q106 28 94 38 Q60 26 26 38 Z"
+          fill="url(#kFire)"
+          stroke="#c2361c"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+        <path d="M44 30 Q48 18 56 14 Q56 24 62 26 Q66 18 72 14 Q72 24 78 30 Q60 24 44 30 Z" fill="#fff1a8" opacity=".85" />
+      </g>
+      <path d="M23 41 Q60 25 97 41" fill="none" stroke="#e0a21c" strokeWidth="7.5" strokeLinecap="round" />
+      <path d="M23 41 Q60 25 97 41" fill="none" stroke="#ffd85a" strokeWidth="3" strokeLinecap="round" />
+      <path d="M60 25.5 l5.4 6.4 l-5.4 6.4 l-5.4 -6.4 z" fill="#e8384f" stroke="#a51d33" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M58.6 29 l1.6 -1.8" stroke="#fff" strokeWidth="1.2" strokeLinecap="round" opacity=".8" />
     </g>
   );
 }
 
-function CutterHat() {
+/** A puffy chef's toque. */
+function CookHat() {
   return (
-    <g strokeLinejoin="round">
-      <path d="M26 40 Q24 12 60 10 Q96 12 94 40 Q60 28 26 40 Z" fill="#7fcf6a" stroke="#3d8c33" strokeWidth="1.6" />
-      <path d="M26 40 Q60 28 94 40" fill="none" stroke="#f3e18a" strokeWidth="4" strokeLinecap="round" />
-      <path d="M46 14 Q50 -14 82 -12 Q64 -6 62 12 Z" fill="#f2b632" stroke="#b07a10" strokeWidth="1.5" />
-      <path d="M58 6 Q62 -6 74 -9" fill="none" stroke="#fff4c2" strokeWidth="1.6" strokeLinecap="round" />
+    <g stroke="#cfc6bb" strokeWidth="1.5" strokeLinejoin="round">
+      <circle cx="41" cy="6" r="13" fill="#fff" />
+      <circle cx="79" cy="6" r="13" fill="#fff" />
+      <circle cx="60" cy="-3" r="16.5" fill="#fff" />
+      <path d="M30 37 Q60 25 90 37 L89 19 Q60 9 31 19 Z" fill="#fff" />
+      <path d="M47 33 L46 18 M60 30.5 L60 15.5 M73 33 L74 18" stroke="#e6ded4" strokeWidth="1.4" strokeLinecap="round" />
+      <ellipse cx="52" cy="-7" rx="5" ry="3" fill="#f4efe9" stroke="none" />
     </g>
   );
 }
 
+/** Held in his right hand and tilted over his head. */
 function ParasolHat() {
   return (
-    <g transform="rotate(-10 60 14)" strokeLinejoin="round">
-      <path d="M60 -16 L60 26" stroke="#7a4a2a" strokeWidth="3" strokeLinecap="round" />
-      <path d="M12 12 Q20 -18 60 -22 Q100 -18 108 12 Q96 6 84 12 Q72 6 60 12 Q48 6 36 12 Q24 6 12 12 Z" fill="#fff" stroke="#c2185b" strokeWidth="1.6" />
-      <path d="M36 12 Q40 -14 60 -22 Q48 -6 48 9 Z M84 12 Q80 -14 60 -22 Q72 -6 72 9 Z" fill="#e94b6f" />
-      <path d="M12 12 Q16 -4 34 -14 Q26 -2 24 9 Z M108 12 Q104 -4 86 -14 Q94 -2 96 9 Z" fill="#e94b6f" />
-      <circle cx="60" cy="-23" r="3" fill={STAR_FILL} stroke={STAR_EDGE} strokeWidth="1" />
+    <g strokeLinejoin="round">
+      <path d="M77 -4 L105 70 q1.4 5.2 -3.6 5.6" fill="none" stroke="#7a4a2a" strokeWidth="3" strokeLinecap="round" />
+      <g transform="translate(17 -8) rotate(16 60 0)">
+        <path d="M12 12 Q20 -18 60 -22 Q100 -18 108 12 Q96 6 84 12 Q72 6 60 12 Q48 6 36 12 Q24 6 12 12 Z" fill="#fff" stroke="#c2185b" strokeWidth="1.6" />
+        <path d="M36 12 Q40 -14 60 -22 Q48 -6 48 9 Z M84 12 Q80 -14 60 -22 Q72 -6 72 9 Z" fill="#e94b6f" />
+        <path d="M12 12 Q16 -4 34 -14 Q26 -2 24 9 Z M108 12 Q104 -4 86 -14 Q94 -2 96 9 Z" fill="#e94b6f" />
+        <circle cx="60" cy="-23" r="3" fill={STAR_FILL} stroke={STAR_EDGE} strokeWidth="1" />
+      </g>
     </g>
   );
 }
 
-function SparkHat() {
+/** A headset with a little microphone by his mouth. */
+function MikeHat() {
   return (
-    <g strokeLinejoin="round">
-      <path d="M28 38 Q60 24 92 38" fill="none" stroke="#3aa6a0" strokeWidth="6" strokeLinecap="round" />
-      <circle cx="60" cy="14" r="13" fill="#d8f56a" stroke="#86a81c" strokeWidth="1.6" />
-      <circle cx="56" cy="10" r="4" fill="#fff" opacity=".8" />
-      <path className="k-spark" d="M30 10 L38 18 L33 19 L41 28" fill="none" stroke="#f6c736" strokeWidth="2.6" strokeLinecap="round" />
-      <path className="k-spark" d="M90 10 L82 18 L87 19 L79 28" fill="none" stroke="#f6c736" strokeWidth="2.6" strokeLinecap="round" />
-      <path className="k-spark" d="M60 -12 L56 -4 L62 -4 L58 2" fill="none" stroke="#f6c736" strokeWidth="2.4" strokeLinecap="round" />
+    <g>
+      <path d="M20 58 C14 4 106 4 100 58" fill="none" stroke="#3b3550" strokeWidth="5" strokeLinecap="round" />
+      <path d="M27 30 C40 14 80 14 93 30" fill="none" stroke="#6a628a" strokeWidth="1.4" strokeLinecap="round" opacity=".7" />
+      <ellipse cx="19" cy="58" rx="6.2" ry="8.4" fill="#e8384f" stroke="#a51d33" strokeWidth="1.4" />
+      <ellipse cx="101" cy="58" rx="6.2" ry="8.4" fill="#e8384f" stroke="#a51d33" strokeWidth="1.4" />
+      <path d="M22 65 Q25 82 43 82.5" fill="none" stroke="#3b3550" strokeWidth="2.6" strokeLinecap="round" />
+      <circle cx="46.5" cy="82" r="4.4" fill="#3b3550" />
+      <circle cx="45.2" cy="80.6" r="1.4" fill="#fff" opacity=".6" />
     </g>
   );
 }
@@ -115,9 +129,9 @@ const HATS: Record<KirbyHatId, () => ReactNode> = {
   sword: SwordHat,
   beam: BeamHat,
   fire: FireHat,
-  cutter: CutterHat,
+  cook: CookHat,
   parasol: ParasolHat,
-  spark: SparkHat,
+  mike: MikeHat,
 };
 
 /** A copy hat on Kirby's head (inside his svg). */

@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
  * rules and keyframes live in app/globals.css under `.kirby-companion`.
  */
 
-export type KirbyOutcome = "happy" | "sad" | "dance" | "popout" | "wave";
+export type KirbyOutcome = "happy" | "sad" | "dance" | "ride" | "wave";
 export type KirbyReaction = { outcome: KirbyOutcome; key: number };
 export type KirbyPose = "idle" | "inhale" | "full" | "puzzled" | "point";
 export type KirbyAccessory = "nightcap" | "headband" | "party";
@@ -27,7 +27,7 @@ const STATE_CLASS: Record<KirbyState, string> = {
   happy: "k-happy",
   sad: "k-sad",
   dance: "k-dance",
-  popout: "k-popout",
+  ride: "k-ride",
   wave: "k-hello",
   spit: "k-spit",
   yawn: "k-yawning",
@@ -37,7 +37,7 @@ const STATE_MS: Record<KirbyState, number> = {
   happy: 1300,
   sad: 1500,
   dance: 1600,
-  popout: 900,
+  ride: 2400,
   wave: 1400,
   spit: 1200,
   yawn: 6_000,
@@ -225,8 +225,12 @@ export function KirbyDefs() {
           <stop offset="1" stopColor="#f28cb1" />
         </radialGradient>
         <linearGradient id="kFoot" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#f43a73" />
-          <stop offset="1" stopColor="#c0144e" />
+          <stop offset="0" stopColor="#f6405f" />
+          <stop offset="1" stopColor="#c8143f" />
+        </linearGradient>
+        <linearGradient id="kArm" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ffc6db" />
+          <stop offset="1" stopColor="#f7a1c0" />
         </linearGradient>
         <linearGradient id="kEye" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor="#140f24" />
@@ -377,46 +381,65 @@ export function KirbyCompanion({
           <path d="M74 82 Q100 94 128 100" />
         </g>
         <g className="k-jump tc">
+          {/* Warp Star for the pack-ready ride: slides in under him, carries him on a lap, slides away. */}
+          <g className="k-ridestar" aria-hidden="true">
+            <g className="k-trail" fill="none" strokeLinecap="round" strokeWidth="3.4">
+              <path d="M26 104 Q4 102 -18 94" stroke="#ff8fb4" />
+              <path d="M24 111 Q2 111 -20 106" stroke="#ffd84a" />
+              <path d="M26 118 Q4 120 -18 118" stroke="#7cc7f2" />
+            </g>
+            <path d={STAR_PATH} transform="translate(60 112) rotate(-4) scale(5.2 2.5)" fill="#f6c736" stroke="#d39a0c" strokeWidth=".45" strokeLinejoin="round" />
+            <ellipse cx="44" cy="104" rx="8" ry="2.4" fill="#fff" opacity=".7" transform="rotate(-10 44 104)" />
+          </g>
           <g className="k-pose tb">
             <g className="k-lean">
-              <ellipse className="k-outline" cx="40" cy="106" rx="19" ry="10.5" transform="rotate(-14 40 106)" fill="url(#kFoot)" />
-              <ellipse className="k-outline" cx="80" cy="106" rx="19" ry="10.5" transform="rotate(14 80 106)" fill="url(#kFoot)" />
+              {/* Red slipper feet; their own stroke, since `.k-outline` would override the attribute. */}
+              <ellipse cx="39" cy="105.5" rx="20.5" ry="11" transform="rotate(-10 39 105.5)" fill="url(#kFoot)" stroke="#d65a80" strokeWidth="1.6" />
+              <ellipse cx="81" cy="105.5" rx="20.5" ry="11" transform="rotate(10 81 105.5)" fill="url(#kFoot)" stroke="#d65a80" strokeWidth="1.6" />
               <g className="k-bob tb">
-                <g className="arm-l" style={{ transformBox: "view-box", transformOrigin: "28px 72px" }}>
-                  <ellipse className="k-outline" cx="18" cy="73" rx="13" ry="10.5" transform="rotate(-25 18 73)" fill="#ffb3cc" />
+                {/* Small nub arms set low on the sides, tucked behind the body. */}
+                <g className="arm-l" style={{ transformBox: "view-box", transformOrigin: "25px 72px" }}>
+                  <ellipse className="k-outline" cx="16" cy="75.5" rx="11.5" ry="7.4" transform="rotate(-24 16 75.5)" fill="url(#kArm)" />
                 </g>
-                <g className="arm-r" style={{ transformBox: "view-box", transformOrigin: "92px 68px" }}>
-                  <ellipse className="k-outline" cx="102" cy="66" rx="13" ry="10.5" transform="rotate(30 102 66)" fill="#ffb3cc" />
+                <g className="arm-r" style={{ transformBox: "view-box", transformOrigin: "95px 72px" }}>
+                  <ellipse className="k-outline" cx="104" cy="75.5" rx="11.5" ry="7.4" transform="rotate(24 104 75.5)" fill="url(#kArm)" />
                 </g>
                 <circle className="k-body k-outline" cx="60" cy="64" r="42" fill="url(#kBody)" />
                 <g className="k-look">
                   <g className="eyes-open tc">
-                    <ellipse cx="50" cy="54" rx="5.6" ry="12.5" fill="url(#kEye)" />
-                    <ellipse cx="70" cy="54" rx="5.6" ry="12.5" fill="url(#kEye)" />
-                    <ellipse cx="50" cy="47.2" rx="3.3" ry="5" fill="#fff" />
-                    <ellipse cx="70" cy="47.2" rx="3.3" ry="5" fill="#fff" />
+                    <ellipse cx="50" cy="53.5" rx="6.4" ry="14.2" fill="url(#kEye)" />
+                    <ellipse cx="70" cy="53.5" rx="6.4" ry="14.2" fill="url(#kEye)" />
+                    <ellipse cx="50" cy="45" rx="4" ry="6.4" fill="#fff" />
+                    <ellipse cx="70" cy="45" rx="4" ry="6.4" fill="#fff" />
                   </g>
-                  <g className="eyes-happy" fill="none" stroke="#1a1640" strokeWidth="3.2" strokeLinecap="round">
-                    <path d="M44 57 q6 -10 12 0" />
-                    <path d="M64 57 q6 -10 12 0" />
+                  <g className="eyes-happy" fill="none" stroke="#1a1640" strokeWidth="3.3" strokeLinecap="round">
+                    <path d="M43.5 57.5 q6.5 -11 13 0" />
+                    <path d="M63.5 57.5 q6.5 -11 13 0" />
                   </g>
                   <g className="eyes-sad" fill="none" stroke="#1a1640" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M45 48 l9 6 l-9 6" />
                     <path d="M75 48 l-9 6 l9 6" />
                   </g>
-                  <g className="eyes-sleep" fill="none" stroke="#1a1640" strokeWidth="3.2" strokeLinecap="round">
-                    <path d="M44 56 q6 4 12 0" />
-                    <path d="M64 56 q6 4 12 0" />
+                  <g className="eyes-sleep" fill="none" stroke="#1a1640" strokeWidth="3" strokeLinecap="round">
+                    <path d="M43.5 57 q6.5 4.6 13 0" />
+                    <path d="M63.5 57 q6.5 4.6 13 0" />
                   </g>
-                  <g className="blush" opacity=".6">
-                    <ellipse cx="36.5" cy="69" rx="7.5" ry="4" fill="#ff5c93" />
-                    <ellipse cx="83.5" cy="69" rx="7.5" ry="4" fill="#ff5c93" />
+                  {/* Yawn: eyes squeezed shut with a little tear. */}
+                  <g className="eyes-squeeze" fill="none" stroke="#1a1640" strokeWidth="3" strokeLinecap="round">
+                    <path d="M43 56.5 q7 -3.6 13 0.6" />
+                    <path d="M77 56.5 q-7 -3.6 -13 0.6" />
                   </g>
-                  <g className="k-cheeks" fill="#ffc6da" stroke="#e2799f" strokeWidth="1">
-                    <ellipse cx="38" cy="72" rx="9" ry="7" />
-                    <ellipse cx="82" cy="72" rx="9" ry="7" />
+                  <path className="k-tear" d="M41.6 58.5 q2.6 3.8 0 5.6 q-2.6 -1.8 0 -5.6z" fill="#bfe6ff" stroke="#6fb8ea" strokeWidth=".8" />
+                  <g className="blush" opacity=".62">
+                    <ellipse cx="36" cy="67.5" rx="7.4" ry="3.9" fill="#ff5c93" />
+                    <ellipse cx="84" cy="67.5" rx="7.4" ry="3.9" fill="#ff5c93" />
                   </g>
-                  <path className="mouth-closed" d="M55.5 71 Q60 77.5 64.5 71 Z" fill="#b5134a" />
+                  {/* The same blush, puffed up for the full tummy pose (one cheek system). */}
+                  <g className="k-cheeks" fill="#ff5c93">
+                    <ellipse cx="36" cy="67.5" rx="9.8" ry="5.9" />
+                    <ellipse cx="84" cy="67.5" rx="9.8" ry="5.9" />
+                  </g>
+                  <path className="mouth-closed" d="M56 71 Q60 77.6 64 71 Z" fill="#b5134a" />
                   <g className="mouth-open">
                     <ellipse cx="60" cy="75" rx="6.5" ry="7.2" fill="#9e0f40" />
                     <ellipse cx="60" cy="79.2" rx="4" ry="2.6" fill="#ff7aa5" />
@@ -432,6 +455,12 @@ export function KirbyCompanion({
                     <ellipse cx="60" cy="76" rx="8" ry="10" fill="#9e0f40" />
                     <ellipse cx="60" cy="81.5" rx="5" ry="3" fill="#ff7aa5" />
                   </g>
+                  <path className="mouth-doze" d="M56.5 73.5 q3.5 2.6 7 0" fill="none" stroke="#9e0f40" strokeWidth="2.2" strokeLinecap="round" />
+                </g>
+                {/* Asleep: a snot bubble that breathes in and out. */}
+                <g className="k-snot" aria-hidden="true">
+                  <circle className="tc" cx="70.5" cy="70" r="7" fill="#d9f0ff" fillOpacity=".75" stroke="#8cc6ef" strokeWidth="1.1" />
+                  <ellipse cx="68" cy="67" rx="2" ry="1.3" fill="#fff" transform="rotate(-30 68 67)" />
                 </g>
                 {headPiece === "hat" && hat ? (
                   <g className="k-hat">
@@ -468,9 +497,17 @@ export function KirbyCompanion({
         <text className="k-question" aria-hidden="true" x="96" y="20" fontSize="26" fontWeight="700" fill="#7b6fd0" stroke="#fff" strokeWidth="1" style={LABEL_FONT}>
           ?
         </text>
-        <text className="k-zzz" aria-hidden="true" x="98" y="16" fontSize="15" fontWeight="700" fill="#7b8fc9" style={LABEL_FONT}>
-          z
-        </text>
+        <g className="k-zzz" aria-hidden="true" fontWeight="700" fill="#7b8fc9" style={LABEL_FONT}>
+          <text x="94" y="20" fontSize="15">
+            z
+          </text>
+          <text x="104" y="6" fontSize="12">
+            z
+          </text>
+          <text x="112" y="-6" fontSize="9.5">
+            z
+          </text>
+        </g>
         <g className="k-poyo" aria-hidden="true">
           <rect x="70" y="-22" width="50" height="21" rx="10.5" fill="#fff" stroke="#e2799f" strokeWidth="1.3" />
           <text x="95" y="-7.5" textAnchor="middle" fontSize="11.5" fontWeight="700" fill="#c2185b" style={LABEL_FONT}>

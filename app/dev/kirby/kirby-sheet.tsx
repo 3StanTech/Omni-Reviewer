@@ -25,7 +25,7 @@ import { KIRBY_HATS } from "@/lib/kirby-hat";
 
 const POSES: KirbyPose[] = ["idle", "inhale", "full", "puzzled", "point"];
 const ACCESSORIES: KirbyAccessory[] = ["nightcap", "headband", "party"];
-const OUTCOMES: KirbyOutcome[] = ["happy", "sad", "dance", "popout", "wave"];
+const OUTCOMES: KirbyOutcome[] = ["happy", "sad", "dance", "ride", "wave"];
 const TREAT_STATES: CafeTreatState[] = ["full", "outline", "plate", "faint"];
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -54,6 +54,7 @@ function Tile({ label, children }: { label: string; children: ReactNode }) {
 export function KirbySheet() {
   const [reaction, setReaction] = useState<KirbyReaction | null>(null);
   const [say, setSay] = useState<string | null>("Poyo! Welcome back");
+  const [rideReaction, setRideReaction] = useState<KirbyReaction | null>(null);
 
   return (
     <div data-look="dreamland" className="min-h-full bg-background px-4 py-6 text-foreground sm:px-8">
@@ -136,8 +137,23 @@ export function KirbySheet() {
             <Tile label="sm puzzled">
               <KirbyCompanion size="sm" pose="puzzled" />
             </Tile>
-            <Tile label="lg desk late night">
-              <KirbyCompanion size="lg" sleepAfterMs={null} yawnEveryMs={180_000} />
+            <Tile label="asleep (study pages after 2 min)">
+              <KirbyCompanion size="md" sleepAfterMs={1} />
+            </Tile>
+            <Tile label="late night desk (yawns every 8 s here)">
+              <KirbyCompanion size="lg" accessory="nightcap" sleepAfterMs={null} yawnEveryMs={8_000} />
+            </Tile>
+            <Tile label="ride at sm">
+              <div className="flex flex-col items-center gap-2">
+                <KirbyCompanion size="sm" hat="sword" reaction={rideReaction} />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRideReaction({ outcome: "ride", key: Date.now() })}
+                >
+                  replay ride
+                </Button>
+              </div>
             </Tile>
           </div>
         </Section>
