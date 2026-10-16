@@ -17,6 +17,16 @@ export function mailFromAddress(
   return configured && configured.length > 0 ? configured : DEFAULT_FROM;
 }
 
+// Resend's test domain only delivers to the Resend account owner, so a reset
+// email from it never reaches anyone else, whatever the display name.
+export function canEmailAnyAccount(
+  env: { EMAIL_FROM?: string } = getEnv(),
+): boolean {
+  const from = mailFromAddress(env);
+  const mailbox = (/<([^>]+)>/.exec(from)?.[1] ?? from).trim().toLowerCase();
+  return isMailConfigured() && !mailbox.endsWith(`@${RESEND_TEST_DOMAIN}`);
+}
+
 export async function sendPasswordResetEmail(args: {
   to: string;
   resetUrl: string;

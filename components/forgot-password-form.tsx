@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label";
 export type ForgotPasswordState = {
   error: string | null;
   sent: boolean;
+  // Set when reset email cannot reach accounts yet; shown instead of "sent".
+  notice?: string;
 };
 
 type ForgotAction = (
@@ -23,6 +25,21 @@ export function ForgotPasswordForm({ action }: { action: ForgotAction }) {
     error: null,
     sent: false,
   });
+
+  if (state.notice) {
+    return (
+      <div className="space-y-5">
+        <p role="status" className="text-sm leading-relaxed text-muted-foreground">
+          {state.notice}
+        </p>
+        <p className="text-center text-sm">
+          <Link href="/login" className="text-primary underline-offset-4 hover:underline">
+            Back to sign in
+          </Link>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <form action={formAction} className="space-y-5">

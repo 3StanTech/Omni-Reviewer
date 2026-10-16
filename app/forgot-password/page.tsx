@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import Link from "next/link";
 
 import { AuthPageShell } from "@/components/auth-page-shell";
 import {
@@ -6,7 +7,7 @@ import {
   type ForgotPasswordState,
 } from "@/components/forgot-password-form";
 import { isUsableAuthSecret } from "@/lib/auth-secret";
-import { isMailConfigured, sendPasswordResetEmail } from "@/lib/mail";
+import { canEmailAnyAccount, sendPasswordResetEmail } from "@/lib/mail";
 import { normalizeLoginEmail } from "@/lib/login-throttle";
 import { resetThrottleKey } from "@/lib/password-reset";
 import { logRedactedError } from "@/lib/public-errors";
@@ -17,6 +18,9 @@ import {
 } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
+
+const RESET_UNAVAILABLE_NOTICE =
+  "Message Tristan to reset your password. Password resets by email are coming soon.";
 
 async function appOrigin(): Promise<string | null> {
   const configured = process.env.AUTH_URL?.trim();
@@ -37,8 +41,9 @@ async function requestResetAction(
   if (!isUsableAuthSecret(process.env.AUTH_SECRET) || !process.env.DATABASE_URL) {
     return { error: "Server is misconfigured. Try again later.", sent: false };
   }
-  if (!isMailConfigured()) {
-    return { error: "Server is misconfigured. Try again later.", sent: false };
+  // A stale form post must never claim "sent" while no reset email can arrive.
+  if (!canEmailAnyAccount()) {
+    return { error: null, sent: false, notice: RESET_UNAVAILABLE_NOTICE };
   }
 
   const emailRaw = formData.get("email");
@@ -93,6 +98,18 @@ async function requestResetAction(
 }
 
 export default function ForgotPasswordPage() {
+  if (!canEmailAnyAccount()) {
+    return (
+      <AuthPageShell title="Forgot password" subtitle={RESET_UNAVAILABLE_NOTICE}>
+        <p className="text-center text-sm">
+          <Link href="/login" className="text-primary underline-offset-4 hover:underline">
+            Back to sign in
+          </Link>
+        </p>
+      </AuthPageShell>
+    );
+  }
+
   return (
     <AuthPageShell
       title="Forgot password"

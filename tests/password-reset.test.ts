@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { isMailConfigured, mailFromAddress } from "@/lib/mail";
+import { canEmailAnyAccount, isMailConfigured, mailFromAddress } from "@/lib/mail";
 import {
   createResetToken,
   hashResetToken,
@@ -60,6 +60,20 @@ describe("mail configuration", () => {
     expect(mailFromAddress({ EMAIL_FROM: "Desk <notes@example.com>" })).toBe(
       "Desk <notes@example.com>",
     );
+    if (previous === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previous;
+  });
+
+  it("emails any account only from a configured sender outside Resend's test domain", () => {
+    const previous = process.env.RESEND_API_KEY;
+    const testDomain = ["resend", "dev"].join(".");
+    process.env.RESEND_API_KEY = "re_test_not_real";
+    expect(canEmailAnyAccount({ EMAIL_FROM: undefined })).toBe(false);
+    expect(canEmailAnyAccount({ EMAIL_FROM: `onboarding@${testDomain}` })).toBe(false);
+    expect(canEmailAnyAccount({ EMAIL_FROM: `Desk <Onboarding@${testDomain.toUpperCase()}>` })).toBe(false);
+    expect(canEmailAnyAccount({ EMAIL_FROM: "Desk <notes@example.com>" })).toBe(true);
+    delete process.env.RESEND_API_KEY;
+    expect(canEmailAnyAccount({ EMAIL_FROM: "Desk <notes@example.com>" })).toBe(false);
     if (previous === undefined) delete process.env.RESEND_API_KEY;
     else process.env.RESEND_API_KEY = previous;
   });
