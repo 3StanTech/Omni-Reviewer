@@ -17,9 +17,11 @@ const STUDY_REASONING = { enabled: false } as const;
 
 /**
  * Static catalogue of the free models the chain may use. Input ceilings
- * (`maxInputTokens`) are measured by live probes with data_collection deny,
- * never taken from the listing; `countsTowardFreeLimit` is whether a request
- * moved `/api/v1/key` free_model_daily_requests. Probed on 2026-10-16.
+ * (`maxInputTokens`) are measured by live probes, never taken from the
+ * listing; `countsTowardFreeLimit` is whether a request moved `/api/v1/key`
+ * free_model_daily_requests; `supportsImages` is the listing's input
+ * modalities. Probed on 2026-10-16, with free endpoints that may train on
+ * request data allowed.
  */
 export const VERIFIED_FALLBACK_CATALOGUE: readonly ProviderModelDescriptor[] = [
   {
@@ -30,6 +32,20 @@ export const VERIFIED_FALLBACK_CATALOGUE: readonly ProviderModelDescriptor[] = [
     // the answer, and on the night of Oct 15 it returned 400 above about 15K.
     maxInputTokens: 30_000,
     countsTowardFreeLimit: false,
+    supportsImages: true,
+    pricing: { prompt: 0, completion: 0 },
+    privacyCompatible: true,
+  },
+  {
+    id: "nvidia/nemotron-3.5-super-vl:free",
+    contextLength: 1_000_000,
+    maxOutputTokens: 131_072,
+    // Ask answered correctly and cited at 18K, 30K and 48K real tokens in 2-38 s.
+    // A five-lecture Locked In ran past 16K output tokens, so it stays off the
+    // Locked In head.
+    maxInputTokens: 48_000,
+    countsTowardFreeLimit: false,
+    supportsImages: true,
     pricing: { prompt: 0, completion: 0 },
     privacyCompatible: true,
   },
@@ -41,6 +57,7 @@ export const VERIFIED_FALLBACK_CATALOGUE: readonly ProviderModelDescriptor[] = [
     // to every probe on 2026-10-16, so the ceiling and gating are unmeasured.
     maxInputTokens: 200_000,
     countsTowardFreeLimit: false,
+    supportsImages: true,
     pricing: { prompt: 0, completion: 0 },
     privacyCompatible: true,
   },
@@ -82,16 +99,18 @@ export function orderedChain(
  * The models that can take this prompt: every chain entry whose measured
  * input ceiling fits the estimate plus head room and whose output cap fits the
  * request. A model outside the catalogue gets the conservative window.
+ * With `images`, only catalogued models that accept image input stay.
  */
 export function chainForPrompt(
   primary: string,
   promptTokens: number,
-  options: { outputTokens?: number; fallbacks?: readonly string[] } = {},
+  options: { outputTokens?: number; fallbacks?: readonly string[]; images?: boolean } = {},
 ): ModelChain {
   const needed = Math.ceil(promptTokens * TOKENIZER_HEADROOM);
   const outputTokens = options.outputTokens ?? 0;
   const fits = orderedChain(primary, options.fallbacks).filter((modelId) => {
     const entry = catalogueEntry(modelId);
+    if (options.images && entry?.supportsImages !== true) return false;
     const maxInput = entry?.maxInputTokens ?? CONSERVATIVE_GENERATION_CONTEXT_TOKENS;
     const maxOutput = entry?.maxOutputTokens ?? Number.POSITIVE_INFINITY;
     return maxInput >= needed && maxOutput >= outputTokens;
@@ -169,8 +188,6 @@ export function getOpenRouter() {
     appUrl,
     extraBody: {
       models: fallbacks,
-      // OpenRouter API / SDK use snake_case for this preference.
-      provider: { data_collection: "deny" },
       reasoning: STUDY_REASONING,
     },
   });
@@ -200,7 +217,6 @@ export function getOpenRouterModel(
   return openrouter(primary, {
     extraBody: {
       models: fallbacks,
-      provider: { data_collection: "deny" },
       reasoning: STUDY_REASONING,
       ...(options.healJson
         ? { plugins: [{ id: "response-healing" }] }

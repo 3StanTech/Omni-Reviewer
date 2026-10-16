@@ -5,14 +5,19 @@ import { z } from "zod";
 import { AUTH_SECRET_ERROR, isUsableAuthSecret } from "@/lib/auth-secret";
 import { logRedactedError } from "@/lib/public-errors";
 
-// Probed 2026-10-16 with data_collection deny and zero price. Every request
-// goes to the first chain model whose measured input ceiling fits (see
-// lib/openrouter.ts). Nemotron and Laguna reject the deny policy, Inkling is
-// limited to agent apps, and Qwen 3.8 is gone. Re-probe before changing these.
+// Probed 2026-10-16 without data_collection deny (free endpoints that may
+// train on request data are allowed) and zero price. Every request goes to the
+// first chain model whose measured input ceiling fits (see lib/openrouter.ts).
+// Ask goes to Nemotron 3.5 Super VL, which answered every probe correctly and
+// cited; Locked In stays on dots because Super VL writes about three times as
+// much and ran past the output cap on a five-lecture prompt. Nemotron Ultra did
+// not answer, Super 120B and Lightning misplaced citations, Inkling is limited
+// to agent apps. Re-probe before changing these.
 export const DEFAULT_MODEL = "dots-studio/dots-3-note-preview:free";
+export const DEFAULT_ASK = "nvidia/nemotron-3.5-super-vl:free";
 export const DEFAULT_VISION = "dots-studio/dots-3-note-preview:free";
 export const DEFAULT_FALLBACKS =
-  "dots-studio/dots-3-note-preview:free,google/gemma-4-31b-it:free";
+  "dots-studio/dots-3-note-preview:free,nvidia/nemotron-3.5-super-vl:free,google/gemma-4-31b-it:free";
 
 const nonEmpty = z.string().trim().min(1);
 const authSecret = z.preprocess(
@@ -50,6 +55,7 @@ const fallbackModelList = nonEmpty.refine(
   "must contain only pinned free OpenRouter model ids or openrouter/free",
 );
 const configuredModel = z.preprocess(blankAsUndefined, modelId.default(DEFAULT_MODEL));
+const configuredAskModel = z.preprocess(blankAsUndefined, modelId.default(DEFAULT_ASK));
 const configuredVisionModel = z.preprocess(
   blankAsUndefined,
   modelId.default(DEFAULT_VISION),
@@ -80,6 +86,7 @@ export const envSchema = z.object({
   AI_MODEL_LOCKED_IN: configuredModel,
   AI_MODEL_SUMMARY: configuredModel,
   AI_MODEL_JSON: configuredModel,
+  AI_MODEL_ASK: configuredAskModel,
   AI_MODEL_VISION: configuredVisionModel,
   AI_MODEL_FALLBACKS: configuredFallbacks,
 });
@@ -147,6 +154,7 @@ export function getBuildEnv(): Partial<Env> {
     AI_MODEL_LOCKED_IN: process.env.AI_MODEL_LOCKED_IN?.trim() || DEFAULT_MODEL,
     AI_MODEL_SUMMARY: process.env.AI_MODEL_SUMMARY?.trim() || DEFAULT_MODEL,
     AI_MODEL_JSON: process.env.AI_MODEL_JSON?.trim() || DEFAULT_MODEL,
+    AI_MODEL_ASK: process.env.AI_MODEL_ASK?.trim() || DEFAULT_ASK,
     AI_MODEL_VISION: process.env.AI_MODEL_VISION?.trim() || DEFAULT_VISION,
     AI_MODEL_FALLBACKS: process.env.AI_MODEL_FALLBACKS?.trim() || DEFAULT_FALLBACKS,
   };

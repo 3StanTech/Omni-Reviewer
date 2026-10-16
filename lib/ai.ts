@@ -183,8 +183,9 @@ function modelIdForPurpose(purpose: GenerationPurpose): string {
     case "locked_in":
       return env.AI_MODEL_LOCKED_IN;
     case "summary":
-    case "ask":
       return env.AI_MODEL_SUMMARY;
+    case "ask":
+      return env.AI_MODEL_ASK;
     case "json":
       return env.AI_MODEL_JSON;
     case "vision":
@@ -397,6 +398,7 @@ async function runVision(
   );
   const chain = chainForPrompt(modelIdForPurpose("vision"), promptTokens, {
     outputTokens: MAX_VISION_OUTPUT_TOKENS,
+    images: true,
   });
 
   let servedBy = chain.model;

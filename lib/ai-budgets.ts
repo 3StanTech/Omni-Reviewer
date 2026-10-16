@@ -33,7 +33,10 @@ export type ProviderModelDescriptor = {
     prompt?: number | string | null;
     completion?: number | string | null;
   } | null;
+  /** Allowed under the app's data policy: free endpoints, training on request data allowed (owner, 2026-10-16). */
   privacyCompatible?: boolean;
+  /** Accepts image input (listing input_modalities). Vision chains use only these. */
+  supportsImages?: boolean;
   /** Largest prompt the model answered in live probes; listing values are not trusted. */
   maxInputTokens?: number;
   /** Whether a request moves OpenRouter's free_model_daily_requests count. */

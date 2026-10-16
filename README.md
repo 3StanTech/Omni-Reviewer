@@ -101,6 +101,7 @@ Names only. Set values in `.env.local` (local) or your host (production):
 | `OPENROUTER_API_KEY` | OpenRouter API key for generation (server only) |
 | `AI_MODEL_LOCKED_IN` | Locked In model id (`:free`) |
 | `AI_MODEL_SUMMARY` | Summary model id (`:free`) |
+| `AI_MODEL_ASK` | Ask, Explain this and Ask why model id (`:free`) |
 | `AI_MODEL_JSON` | Test Me / Carded model id (`:free`) |
 | `AI_MODEL_VISION` | Vision model id for images (`:free`) |
 | `AI_MODEL_FALLBACKS` | Comma-separated `:free` fallback model ids. Leave the model variables blank to use the probed defaults in `lib/env.ts`; a fallback is sent only when it is in the verified catalogue in `lib/openrouter.ts`. |
@@ -167,8 +168,13 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
   clients must not rely on public blob URLs.
 - Every model request goes to the first model in its chain (`AI_MODEL_<purpose>`,
   then `AI_MODEL_FALLBACKS`) whose measured input ceiling in `lib/openrouter.ts`
-  fits the prompt. Today: dots up to 30,000 tokens, then Gemma 4 31B. Re-probe
-  before changing the catalogue; dots' listing expires 2026-12-31.
+  fits the prompt. Today, Generate and vision: dots up to 30,000 tokens, then
+  Nemotron 3.5 Super VL up to 48,000, then Gemma 4 31B. Ask: Super VL first,
+  then dots, then Gemma. Re-probe before changing the catalogue; dots' listing
+  expires 2026-12-31. Vision requests use only models that accept images.
+- Requests send no data-collection preference: free endpoints that may train on
+  request data are allowed (owner decision 2026-10-16, with the student's
+  agreement). Paid models, prompt publishing and paid training stay off.
 - Packs left today come from the app's own count of requests on gated models
   (`free_request_days`, one row per UTC day, reset 8:00 AM Manila). A per-day 429
   marks the day used up and wins over the count. Reading it calls no model.

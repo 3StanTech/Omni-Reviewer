@@ -34,7 +34,7 @@ export function countsTowardFreeLimit(
 function configuredChainModels(): string[] {
   const env = getEnv();
   const fallbacks = parseFallbackModels(env.AI_MODEL_FALLBACKS);
-  const primaries = [env.AI_MODEL_LOCKED_IN, env.AI_MODEL_SUMMARY, env.AI_MODEL_JSON, env.AI_MODEL_VISION];
+  const primaries = [env.AI_MODEL_LOCKED_IN, env.AI_MODEL_SUMMARY, env.AI_MODEL_JSON, env.AI_MODEL_ASK, env.AI_MODEL_VISION];
   return [...new Set(primaries.flatMap((primary) => orderedChain(primary, fallbacks)))];
 }
 
