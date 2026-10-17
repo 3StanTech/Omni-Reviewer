@@ -354,7 +354,8 @@ export function SourcePanel({
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
             PDFs, PowerPoints, documents and photos of pages. Pages that are mostly
-            images are read automatically.
+            images are read automatically. One lecture per pack works best. Long
+            multi-lecture packs may not generate yet.
           </p>
         </div>
         <div>

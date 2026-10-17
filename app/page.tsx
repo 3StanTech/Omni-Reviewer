@@ -82,7 +82,6 @@ export default async function HomePage({ searchParams }: HomeProps) {
   const birthday = parseBirthdayDates(process.env.BIRTHDAY_DATES).get(userId) ?? null;
   const subtitle = deskSubtitle({
     now,
-    firstName: session?.user?.name?.trim().split(/\s+/)[0] || null,
     birthday,
     firstRun: firstRun.generatedPacks === 0,
     reviewCards: bar?.reviewCards ?? 0,

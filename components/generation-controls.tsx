@@ -46,7 +46,7 @@ export function GenerationControls({
     ? sourcesAreMediaOnly
       ? "Video and audio only. Upload a PDF, image, or text file."
       : "Needs a Ready source to generate."
-    : hasViews
+    : hasViews && !state.busy
       ? "Fills only study modes that are not generated yet."
       : "Creates Locked In, Summary, Test Me, and Carded.";
   return (

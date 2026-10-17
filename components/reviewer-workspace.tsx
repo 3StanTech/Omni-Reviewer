@@ -566,7 +566,8 @@ export function ReviewerWorkspace({
     ) : null;
 
   const sourcePanel = (
-    <div data-focus-hide className="print-hide">
+    // min-w-0: inside the Sources dialog's grid, a long filename must truncate, not widen the dialog.
+    <div data-focus-hide className="print-hide min-w-0">
     <SourcePanel
       userId={userId}
       reviewerId={reviewerId}
@@ -598,7 +599,8 @@ export function ReviewerWorkspace({
             Study pack
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {hasViews
+            {/* A run keeps its opening copy as modes land, so a first Generate never reads as a repair. */}
+            {hasViews && !generation.state.busy
               ? "Generate missing fills study modes that are not generated yet."
               : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
           </p>

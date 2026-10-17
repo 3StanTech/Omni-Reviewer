@@ -1,7 +1,6 @@
 /** Inputs for the desk subtitle; `birthday` is the user's "MM-DD" or null. */
 export type DeskSubtitleInput = {
   now: Date;
-  firstName: string | null;
   birthday: string | null;
   firstRun: boolean;
   reviewCards: number;
@@ -24,15 +23,10 @@ export function deskSubtitle(input: DeskSubtitleInput): string {
   const monthDay = `${part("month")}-${part("day")}`;
   const hour = Number(part("hour"));
 
-  if (input.birthday && input.birthday === monthDay) {
-    const name = input.firstName?.trim();
-    return name ? `Happy birthday, ${name}! Study light today.` : "Happy birthday! Study light today.";
-  }
+  // The heading above already greets by name, so these lines don't repeat it.
+  if (input.birthday && input.birthday === monthDay) return "Happy birthday 🎉 Study light today.";
   if (input.firstRun && isBelatedBirthday(input.now, input.birthday, timeZone)) {
-    const name = input.firstName?.trim();
-    return name
-      ? `Happy belated birthday, ${name}! Let's set up your first study pack.`
-      : "Happy belated birthday! Let's set up your first study pack.";
+    return "Happy belated birthday 🎉 Let's set up your first study pack.";
   }
   if (input.firstRun) return "Let's set up your first study pack.";
   if (hour >= 23 || hour <= 3) return "It's late. A short session, then sleep.";

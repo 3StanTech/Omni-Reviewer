@@ -480,7 +480,7 @@ export function ReviewerList({
               id="reviewer-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Week 3 lectures"
+              placeholder="e.g. KOH and PPD lab"
               disabled={busy}
               autoFocus
               onKeyDown={(e) => {

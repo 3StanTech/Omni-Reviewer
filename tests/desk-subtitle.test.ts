@@ -5,7 +5,6 @@ import { deskSubtitle, parseBirthdayDates } from "@/lib/desk-subtitle";
 // Manila is UTC+8.
 const base = {
   now: new Date("2026-10-15T04:00:00Z"), // Manila 12:00
-  firstName: "Yana",
   birthday: null,
   firstRun: false,
   reviewCards: 0,
@@ -17,16 +16,12 @@ describe("deskSubtitle priority", () => {
   it("puts birthday before first run, first run before late night, late night before due", () => {
     const lateDue = { ...base, now: new Date("2026-09-25T15:30:00Z"), reviewCards: 3, minutes: 4 }; // Sept 25 23:30
     expect(deskSubtitle({ ...lateDue, birthday: "09-25", firstRun: true })).toBe(
-      "Happy birthday, Yana! Study light today.",
+      "Happy birthday 🎉 Study light today.",
     );
     expect(deskSubtitle({ ...lateDue, firstRun: true })).toBe("Let's set up your first study pack.");
     expect(deskSubtitle(lateDue)).toBe("It's late. A short session, then sleep.");
     expect(deskSubtitle({ ...lateDue, now: base.now })).toBe("3 cards waiting, about 4 minutes.");
     expect(deskSubtitle(base)).toBe("All caught up! Nothing due today.");
-  });
-
-  it("drops the name from the birthday line without one", () => {
-    expect(deskSubtitle({ ...base, birthday: "10-15", firstName: null })).toBe("Happy birthday! Study light today.");
   });
 });
 
@@ -44,7 +39,7 @@ describe("deskSubtitle Manila boundaries", () => {
 
   it("matches the birthday on the Manila date, not the UTC date", () => {
     const sept26 = { ...base, birthday: "09-26" };
-    const birthday = "Happy birthday, Yana! Study light today.";
+    const birthday = "Happy birthday 🎉 Study light today.";
     expect(deskSubtitle({ ...sept26, now: new Date("2026-09-25T23:30:00Z") })).toBe(birthday); // Sept 26 07:30
     expect(deskSubtitle({ ...sept26, now: new Date("2026-09-25T15:59:00Z") })).not.toBe(birthday); // Sept 25 23:59
     expect(deskSubtitle({ ...sept26, now: new Date("2026-09-26T15:59:00Z") })).toBe(birthday); // Sept 26 23:59
@@ -77,8 +72,7 @@ describe("parseBirthdayDates", () => {
 describe("deskSubtitle belated birthday", () => {
   it("greets a first run 1 to 30 days after the birthday, before the plain first-run line", () => {
     const firstRun = { ...base, firstRun: true, birthday: "09-26" }; // base is Oct 15, day 19
-    expect(deskSubtitle(firstRun)).toBe("Happy belated birthday, Yana! Let's set up your first study pack.");
-    expect(deskSubtitle({ ...firstRun, firstName: null })).toBe("Happy belated birthday! Let's set up your first study pack.");
+    expect(deskSubtitle(firstRun)).toBe("Happy belated birthday 🎉 Let's set up your first study pack.");
     expect(deskSubtitle({ ...firstRun, now: new Date("2026-10-26T16:00:00Z") })).toBe("Let's set up your first study pack."); // day 31
     expect(deskSubtitle({ ...firstRun, firstRun: false })).toBe("All caught up! Nothing due today.");
   });
