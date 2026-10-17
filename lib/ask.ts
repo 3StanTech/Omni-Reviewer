@@ -180,6 +180,8 @@ Requirements:
 - Answer using ONLY the source materials below. Use no outside knowledge, even when you know the answer.
 - End every factual sentence, bullet, and table row with its citation in the exact form [S1 p.14] or [S1 pp.14-15], or [S2] for a source without pages. Cite only pages whose text supports the claim. Never cite a page you did not read.
 - If the sources do not cover the question, make the first line exactly ${REFUSAL_MARKER} and follow it with one sentence naming what the lecture does cover nearby, with a citation. Do not answer the question itself.
+- A table row, list item, or label that states the fact counts as covering the question; answer from it and cite its page. Slide tables often arrive flattened into plain lines, with paired items joined by a hyphen ("DrugA-DrugB Increased risk of X" means combining DrugA with DrugB increases the risk of X).
+- Refuse only when no page states the answer. If your nearby sentence would state the answer, the sources cover it: answer instead.
 - You may write a mnemonic, a comparison, or a guess at what will likely be asked, but only from facts in the sources, each cited. Base "likely asked" on what the slides emphasize, never on outside exam knowledge.
 - Be concise: at most about 250 words unless the student asks for more.
 - Write plain Markdown. No raw HTML. Do not use em dashes.

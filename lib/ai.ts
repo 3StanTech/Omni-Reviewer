@@ -236,7 +236,7 @@ function jitterDelay(attempt: number): number {
 }
 
 async function withRetry<T>(
-  fn: (signal: AbortSignal) => Promise<T>,
+  fn: (signal: AbortSignal, attempt: number) => Promise<T>,
   options: {
     signal?: AbortSignal;
     attempts: number;
@@ -266,7 +266,7 @@ async function withRetry<T>(
       // The UTC day an attempt counts toward is the day it was sent.
       const sentAt = new Date();
       try {
-        result = await fn(controller.signal);
+        result = await fn(controller.signal, attempt);
       } catch (err) {
         const classified = toGenerationError(err);
         await recordModelRequest(options.chain.model, sentAt);
@@ -280,6 +280,7 @@ async function withRetry<T>(
         if (!classified.retryable || attempt === options.attempts) {
           throw classified;
         }
+        console.warn(`[generation] attempt ${attempt} on ${options.chain.model} failed (${classified.code}); retrying`);
         await sleep(jitterDelay(attempt), controller.signal);
         continue;
       }
@@ -323,6 +324,14 @@ export async function generateTextFromPrompt(
     sourceTokens?: number;
     /** Overall deadline across attempts; defaults to the generation step deadline. */
     deadlineMs?: number;
+    /**
+     * Send the first attempt to the chain's head alone, with no OpenRouter
+     * fallbacks, so a transient head error is retried on the head before the
+     * retry lets OpenRouter fall back.
+     */
+    headOnlyFirstAttempt?: boolean;
+    /** Cap on the first attempt alone, leaving the rest of the deadline for the retry. */
+    firstAttemptMs?: number;
   } = { purpose: "locked_in" },
 ): Promise<{ text: string; modelUsed: string; finishReason: FinishReason }> {
   assertPromptWithinLimit(prompt);
@@ -337,14 +346,27 @@ export async function generateTextFromPrompt(
     },
   ));
 
-  return withRetry(async (signal) => {
-    const { text, response, providerMetadata, finishReason } = await generateText({
-      model: getOpenRouterModel(chain.model, { healJson, fallbacks: chain.fallbacks }),
-      prompt,
-      maxRetries: 0,
-      maxOutputTokens: budget.maxOutputTokens,
-      abortSignal: signal,
-    });
+  return withRetry(async (signal, attempt) => {
+    const first = attempt === 1;
+    const fallbacks = first && options.headOnlyFirstAttempt ? [] : chain.fallbacks;
+    const attemptCap = first && options.firstAttemptMs ? AbortSignal.timeout(options.firstAttemptMs) : undefined;
+    let result: Awaited<ReturnType<typeof generateText>>;
+    try {
+      result = await generateText({
+        model: getOpenRouterModel(chain.model, { healJson, fallbacks }),
+        prompt,
+        maxRetries: 0,
+        maxOutputTokens: budget.maxOutputTokens,
+        abortSignal: attemptCap ? AbortSignal.any([signal, attemptCap]) : signal,
+      });
+    } catch (err) {
+      // Only this attempt ran out of time: retryable, unlike the overall deadline.
+      if (attemptCap?.aborted && !signal.aborted) {
+        throw new GenerationError("timeout", "The first attempt timed out.", true, { cause: err });
+      }
+      throw err;
+    }
+    const { text, response, providerMetadata, finishReason } = result;
     const normalizedText = text.trim();
     if (!normalizedText) {
       // Reasoning models can spend the whole output budget thinking and return
@@ -1427,6 +1449,9 @@ export async function generateCarded(
 /** Ask answers must finish inside the route's 120 s function limit. */
 export const ASK_DEADLINE_MS = 90_000;
 
+/** Ask's first attempt, on the head alone, must answer within this (the head's 45 s rule). */
+export const ASK_FIRST_ATTEMPT_MS = 45_000;
+
 /** Room kept for page labels and joins the prompt adds around each source. */
 const ASK_PROMPT_SLACK_CHARS = 2_000;
 const ASK_PER_SOURCE_SLACK_CHARS = 200;
@@ -1465,8 +1490,9 @@ export type AskAnswer = {
 };
 
 /**
- * Answer a question from the pack's own sources in one model request. The
- * answer is grounded with the text check only; the verifier is never called.
+ * Answer a question from the pack's own sources in one model request (a second
+ * only when the first attempt fails and is retried). The answer is grounded
+ * with the text check only; the verifier is never called.
  * A refusal is returned as written, without grounding tags.
  */
 export async function answerFromPack(args: {
@@ -1485,6 +1511,8 @@ export async function answerFromPack(args: {
     purpose: "ask",
     signal: args.signal,
     deadlineMs: ASK_DEADLINE_MS,
+    headOnlyFirstAttempt: true,
+    firstAttemptMs: ASK_FIRST_ATTEMPT_MS,
   });
   const parsed = parseAskAnswer(text, args.sources.length);
   const citationSources = citationSourcesFor(args.sources);

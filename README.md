@@ -142,7 +142,7 @@ Routes (all require a session; cross-user ids return 404):
 | `POST /api/reviewers/[id]/ask/[messageId]/card` | Make a card from an answer. Idempotent per answer |
 | `GET /api/search?q=` | Full-text search. A query outside 2 to 200 characters returns no results |
 
-**Free-request quota.** Each Ask, Explain or Ask why that is not reused is one model request, counted toward the shared daily free-model cap only when its model is gated (see Privacy and generation contracts). When the provider reports the per-day limit, Ask shows "Today's free requests are used up. More at 8:00 AM." and keeps the draft; a per-minute limit shows "The free model limit is used up for now. Try again later today." Search, Save to Notes, Make a card, Clear chat and a reused Explain or Ask why make no model calls. Ask does not run the grounding verifier, so a question is exactly one request.
+**Free-request quota.** Each Ask, Explain or Ask why that is not reused is one model request (two when the first attempt fails and is retried), counted toward the shared daily free-model cap only when its model is gated (see Privacy and generation contracts). When the provider reports the per-day limit, Ask shows "Today's free requests are used up. More at 8:00 AM." and keeps the draft; a per-minute limit shows "The free model limit is used up for now. Try again later today." Search, Save to Notes, Make a card, Clear chat and a reused Explain or Ask why make no model calls. Ask does not run the grounding verifier, so a question is one request, or two after a retried failure.
 
 Search reads generated `tsvector` columns, so no write path changed. It indexes the first 150,000 characters of each source and of each Locked In and Summary document, plus card fronts and backs. Text past that prefix is not searchable.
 
@@ -169,8 +169,8 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
 - Every model request goes to the first model in its chain (`AI_MODEL_<purpose>`,
   then `AI_MODEL_FALLBACKS`) whose measured input ceiling in `lib/openrouter.ts`
   fits the prompt. Today, Generate and vision: dots up to 30,000 tokens, then
-  Nemotron 3.5 Super VL up to 48,000, then Gemma 4 31B. Ask: Super VL first,
-  then dots, then Gemma. Re-probe before changing the catalogue; dots' listing
+  Nemotron 3.5 Super VL up to 48,000, then Gemma 4 31B. Ask: Super VL alone
+  first (up to 45 s), then once more with dots and Gemma as fallbacks. Re-probe before changing the catalogue; dots' listing
   expires 2026-12-31. Vision requests use only models that accept images.
 - Requests send no data-collection preference: free endpoints that may train on
   request data are allowed (owner decision 2026-10-16, with the student's
