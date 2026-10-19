@@ -88,7 +88,6 @@ describe("home pack row contract", () => {
     expect(list).not.toContain("{reviewer.dueTodayCount} due");
     // The Review button still shows whenever anything is due.
     expect(list).toContain("{reviewer.dueTodayCount > 0 ? (\n                <Button");
-    expect(list).toContain("{reviewer.examDate}");
     expect(list).toContain("Rename");
     expect(list).toContain("Delete");
   });

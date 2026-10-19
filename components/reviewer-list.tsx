@@ -38,7 +38,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Panel, PanelHeader } from "@/components/ui/panel";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatStamp } from "@/lib/format-generated-at";
+import { formatCalendarDay, formatStamp } from "@/lib/format-generated-at";
 import { BATCH_ACCEPT } from "@/lib/generation-queue";
 import { useIsClient } from "@/lib/use-is-client";
 import { dueSplitCopy, WEAK_SECTION_DEFINITION } from "@/lib/today-plan";
@@ -394,7 +394,7 @@ export function ReviewerList({
                     {reviewer.dueTodayCount > 0 ? (
                       <span>{dueSplitCopy(reviewer.reviewDueCount, reviewer.newTodayCount)}</span>
                     ) : null}
-                    {reviewer.examDate ? <span>{reviewer.examDate}</span> : null}
+                    {reviewer.examDate ? <span>Exam {formatCalendarDay(reviewer.examDate)}</span> : null}
                     <PackMastery mastery={reviewer.mastery} />
                   </span>
                 </span>

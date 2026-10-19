@@ -34,7 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatStamp } from "@/lib/format-generated-at";
+import { formatCalendarDay, formatStamp } from "@/lib/format-generated-at";
 import { kirbyHat } from "@/lib/kirby-hat";
 import type { ViewKind } from "@/lib/types";
 import { useIsClient } from "@/lib/use-is-client";
@@ -507,7 +507,7 @@ export function ReviewerWorkspace({
   const unreadableHint = unreadablePages > 0
     ? unreadablePages === 1 ? "1 page unreadable" : `${unreadablePages} pages unreadable`
     : undefined;
-  const examDateLabel = currentExamDate ? `Exam date: ${currentExamDate}` : "Set exam date";
+  const examDateLabel = currentExamDate ? `Exam date: ${formatCalendarDay(currentExamDate)}` : "Set exam date";
   const packMenuItems: ModeMenuItem[] = [
     ...(hasViews ? [{
       id: "sources",

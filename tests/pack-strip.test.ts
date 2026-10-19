@@ -131,7 +131,6 @@ describe("pack workspace", () => {
     expect(workspace).toContain('id: "sources"');
     expect(workspace).toContain("`Sources (${sources.length})`");
     expect(workspace).toContain('id: "exam-date"');
-    expect(workspace).toContain("`Exam date: ${currentExamDate}`");
     expect(workspace).toContain('"Set exam date"');
     expect(workspace).toContain("<DialogTitle>Exam date</DialogTitle>");
     expect(workspace).toContain("Cards will be scheduled no later than this date.");

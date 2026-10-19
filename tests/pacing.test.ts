@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatDay, formatStamp } from "@/lib/format-generated-at";
+import { formatCalendarDay, formatDay, formatStamp } from "@/lib/format-generated-at";
 import { daysUntilExam, dueLabel, NEW_CARDS_PER_DAY, newCardAllowance, selectTodayCards } from "@/lib/pacing";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -110,5 +110,20 @@ describe("formatStamp and formatDay", () => {
   it("formats a day as month and day", () => {
     expect(formatDay(new Date(2026, 9, 9, 8, 0))).toBe("Oct 9");
     expect(formatDay(new Date(2026, 0, 31))).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/);
+  });
+});
+
+describe("formatCalendarDay", () => {
+  it("prints a stored exam day without shifting it by time zone", () => {
+    expect(formatCalendarDay("2026-10-23")).toBe("Oct 23");
+    expect(formatCalendarDay("2026-01-01")).toBe("Jan 1");
+    expect(formatCalendarDay("2026-12-31")).toBe("Dec 31");
+    expect(formatCalendarDay("2028-02-29")).toBe("Feb 29");
+  });
+
+  it("leaves anything that is not a real day unchanged", () => {
+    expect(formatCalendarDay("2026-02-30")).toBe("2026-02-30");
+    expect(formatCalendarDay("Oct 23")).toBe("Oct 23");
+    expect(formatCalendarDay("")).toBe("");
   });
 });
