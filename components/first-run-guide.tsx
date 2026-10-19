@@ -40,6 +40,7 @@ export function FirstRunGuide({ state }: { state: FirstRunGuideState }) {
   return (
     <Panel className="print-hide" aria-labelledby="first-run-guide-title">
       <PanelHeader
+        sticker
         label={<span id="first-run-guide-title">Get started</span>}
         icon={<Compass weight="bold" aria-hidden className="size-4 shrink-0" />}
         wrapLabel

@@ -37,7 +37,7 @@ export function SectionMasteryList({ headings, sections }: { headings: StudyHead
                   <WarningCircle
                     weight="fill"
                     role="img"
-                    aria-label="Weak section"
+                    aria-label="Needs improvement"
                     aria-describedby={WEAK_DEFINITION_ID}
                     className="mt-0.5 size-4 shrink-0 text-warning"
                   >

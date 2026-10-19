@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { Question } from "@phosphor-icons/react";
 
 import { buttonVariants } from "@/components/ui/button";
@@ -24,7 +24,7 @@ export const STUDY_HELP_LINES: ReadonlyArray<ReadonlyArray<{ lead: string; text:
   ],
   [
     {
-      lead: "Weak section",
+      lead: "Needs improvement",
       text: ": under 60% correct across 3 or more answers from Test Me and Carded. See the plan suggests a re-test or a re-read.",
     },
   ],
@@ -32,18 +32,35 @@ export const STUDY_HELP_LINES: ReadonlyArray<ReadonlyArray<{ lead: string; text:
 
 const TRIGGER_CLASS = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 max-sm:w-11 max-sm:px-0");
 
+type StudyHelpProps = {
+  className?: string;
+  /** Controlled open state. When set, StudyHelp renders no trigger of its own; the caller opens it. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** The caller's control that opened it; focus returns there on close. */
+  anchorRef?: RefObject<HTMLElement | null>;
+};
+
 /**
- * "How cards come back": how New, To review, Again, Good, the exam cap and Weak work.
+ * "How cards come back": how New, To review, Again, Good, the exam cap and Needs improvement work.
  * A popover under the trigger on desktop, the Contents sheet pattern on phones.
+ * Uncontrolled it brings its own trigger (Today card); controlled it opens from the caller (Carded's options menu).
  */
-export function StudyHelp({ className }: { className?: string }) {
-  const [open, setOpen] = useState(false);
+export function StudyHelp({ className, open: openProp, onOpenChange, anchorRef }: StudyHelpProps) {
+  const controlled = openProp !== undefined;
+  const [openState, setOpenState] = useState(false);
+  const open = controlled ? openProp : openState;
   const [compactSheet, setCompactSheet] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
   const headingId = useId();
+
+  function setOpen(next: boolean) {
+    if (!controlled) setOpenState(next);
+    onOpenChange?.(next);
+  }
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 640px)");
@@ -58,9 +75,9 @@ export function StudyHelp({ className }: { className?: string }) {
       panelRef.current?.focus();
       return;
     }
-    if (restoreFocus.current) triggerRef.current?.focus();
+    if (restoreFocus.current) (anchorRef?.current ?? triggerRef.current)?.focus();
     restoreFocus.current = false;
-  }, [open]);
+  }, [open, anchorRef]);
 
   // The floating jump and Ask buttons hide under the phone sheet, as they do under Contents.
   useEffect(() => {
@@ -92,6 +109,8 @@ export function StudyHelp({ className }: { className?: string }) {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
+    // setOpen is recreated each render; the listeners only need the latest closure while open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   function close() {
@@ -101,19 +120,21 @@ export function StudyHelp({ className }: { className?: string }) {
 
   return (
     <div ref={rootRef} className={cn("print-hide relative inline-flex", className)}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={TRIGGER_CLASS}
-        aria-label="How cards come back"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={`${headingId}-panel`}
-        onClick={() => (open ? close() : setOpen(true))}
-      >
-        <Question weight="bold" aria-hidden />
-        <span className="max-sm:sr-only">How cards come back</span>
-      </button>
+      {controlled ? null : (
+        <button
+          ref={triggerRef}
+          type="button"
+          className={TRIGGER_CLASS}
+          aria-label="How cards come back"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={`${headingId}-panel`}
+          onClick={() => (open ? close() : setOpen(true))}
+        >
+          <Question weight="bold" aria-hidden />
+          <span className="max-sm:sr-only">How cards come back</span>
+        </button>
+      )}
       {open ? (
         <>
           <button

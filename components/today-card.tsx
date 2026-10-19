@@ -35,7 +35,8 @@ function todayStats(bar: TodayBarData): TodayStat[] {
   if (bar.weakSections > 0) {
     stats.push({
       value: String(bar.weakSections),
-      label: bar.weakSections === 1 ? "weak section" : "weak sections",
+      // The tile's value carries the count, so one label reads for one or many.
+      label: "needs improvement",
       weak: true,
     });
   }
@@ -71,8 +72,9 @@ export function TodayCard({
   const stats = plan.empty ? [] : todayStats(plan.bar);
   const first = plan.doFirst[0];
   return (
-    <Panel aria-label="Today">
+    <Panel aria-label="Today" data-panel="today">
       <PanelHeader
+        sticker
         label="Today"
         icon={<CalendarCheck weight="bold" aria-hidden className="size-4 shrink-0" />}
         actions={<span className="text-xs font-medium text-muted-foreground">All topics</span>}
@@ -103,11 +105,13 @@ export function TodayCard({
                 </span>
               ) : null}
             </p>
-            <div aria-hidden className="flex min-w-0 flex-wrap gap-y-3">
+            {/* Dream Land turns the columns into pastel tiles on their own row (app/globals.css). */}
+            <div aria-hidden className="flex min-w-0 flex-wrap gap-y-3 dreamland:w-full dreamland:gap-3">
               {stats.map((stat) => (
                 <div
                   key={stat.label}
-                  className="min-w-0 border-l border-divider px-4 first:border-l-0 first:pl-0 max-sm:px-3 max-sm:first:pl-0"
+                  data-stat-tile
+                  className="min-w-0 border-l border-divider px-4 first:border-l-0 first:pl-0 max-sm:px-3 max-sm:first:pl-0 dreamland:min-w-[8rem] dreamland:flex-1 max-sm:dreamland:basis-[40%]"
                   title={stat.weak ? WEAK_SECTION_DEFINITION : undefined}
                 >
                   <p className="text-[1.375rem] leading-tight font-bold tabular-nums break-words text-foreground">
@@ -119,7 +123,7 @@ export function TodayCard({
             </div>
           </>
         )}
-        <div className="flex flex-wrap items-center gap-1.5 md:ml-auto max-md:w-full">
+        <div data-today-actions className="flex flex-wrap items-center gap-1.5 md:ml-auto max-md:w-full">
           {first ? (
             <Button nativeButton={false} className="min-h-11" render={<Link href={startHref(first, hrefs)} />}>
               Start studying

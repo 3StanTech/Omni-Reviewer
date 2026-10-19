@@ -124,15 +124,15 @@ describe("todayBarSegments", () => {
   it("omits zero and null segments and joins in order", () => {
     expect(
       todayBarSegments({ dueCards: 32, reviewCards: 12, newCards: 20, weakSections: 3, exam: { topicName: "Pharm", days: 9 }, minutes: 20 }),
-    ).toEqual(["12 to review", "20 new", "3 weak sections", "Pharm exam in 9 days", "About 20 min"]);
+    ).toEqual(["12 to review", "20 new", "3 sections need improvement", "Pharm exam in 9 days", "About 20 min"]);
     expect(todayBarSegments({ dueCards: 38, reviewCards: 38, newCards: 0, weakSections: 2, exam: { topicName: "Pharm", days: 9 }, minutes: 35 })).toEqual([
       "38 to review",
-      "2 weak sections",
+      "2 sections need improvement",
       "Pharm exam in 9 days",
       "About 35 min",
     ]);
     expect(todayBarSegments({ dueCards: 0, reviewCards: 0, newCards: 0, weakSections: 1, exam: null, minutes: 5 })).toEqual([
-      "1 weak section",
+      "1 section needs improvement",
       "About 5 min",
     ]);
     expect(todayBarSegments({ dueCards: 1, reviewCards: 0, newCards: 1, weakSections: 0, exam: { topicName: "Pharm", days: 1 }, minutes: 0 })).toEqual([
@@ -144,7 +144,7 @@ describe("todayBarSegments", () => {
 
   it("flags only the weak part for its definition", () => {
     const parts = todayBarParts({ dueCards: 2, reviewCards: 2, newCards: 0, weakSections: 1, exam: null, minutes: 5 });
-    expect(parts.filter((part) => part.weak).map((part) => part.text)).toEqual(["1 weak section"]);
+    expect(parts.filter((part) => part.weak).map((part) => part.text)).toEqual(["1 section needs improvement"]);
     expect(WEAK_SECTION_DEFINITION).toBe("Under 60% correct on 3 or more answers");
   });
 });

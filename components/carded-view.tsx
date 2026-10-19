@@ -1,17 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Tooltip } from "@base-ui/react/tooltip";
 import {
   CaretLeft,
   CaretRight,
   Cards,
+  DotsThree,
+  DownloadSimple,
   Eye,
   EyeSlash,
-  Presentation,
+  FileText,
+  PencilSimple,
+  PushPin,
+  Question,
+  Star,
 } from "@phosphor-icons/react";
 
 import { ExplainThisButton } from "@/components/ask-provider";
-import { CardExport } from "@/components/card-export";
+import { useCardExport } from "@/components/card-export";
 import { EmptyState } from "@/components/empty-state";
 import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { KirbyCompanion, type KirbyReaction } from "@/components/kirby-companion";
@@ -20,7 +27,17 @@ import { SittingRecap } from "@/components/sitting-recap";
 import { StudyHelp } from "@/components/study-help";
 import { MarkdownBody } from "@/components/study-markdown";
 import { firstPageCitation } from "@/components/timed-test-me";
+import { WarpStar } from "@/components/kirby-art";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { stripCitations } from "@/lib/citations";
 import { parseCardedItems } from "@/lib/learning";
 import { isClozeCardFront, renderClozeText } from "@/lib/learning";
@@ -130,14 +147,68 @@ function WithKirby({
   );
 }
 
-function gradePreview(card: DurableCardView, rating: "again" | "good"): string {
-  return intervalCopy(card.nextIntervals[rating].days);
-}
-
-function intervalCopy(days: number) {
+/** "today", "tomorrow" or "in N days". */
+function dayCopy(days: number) {
   if (days <= 0) return "today";
   return days === 1 ? "tomorrow" : `in ${days} days`;
 }
+
+/** "Back today", "Back tomorrow" or "Back in N days": when a rated card returns. */
+function intervalCopy(days: number) {
+  return `Back ${dayCopy(days)}`;
+}
+
+/** A keycap, shown on fine pointers only. */
+function Keycap({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="hidden h-5 min-w-5 place-items-center rounded-md border border-current px-[5px] font-mono text-[11px] font-semibold opacity-70 pointer-fine:inline-grid">
+      {children}
+    </kbd>
+  );
+}
+
+/** Card toolbar icon button: 34px on fine pointers, 44px on touch. */
+const CARD_TOOL_CLASS = "size-[34px] min-h-[34px] min-w-[34px] text-muted-foreground pointer-coarse:size-11 pointer-coarse:min-h-11 pointer-coarse:min-w-11";
+
+/** A due rating button with its return date in a tooltip on hover and keyboard focus. */
+function RateButton({
+  days,
+  onRate,
+  disabled,
+  variant,
+  children,
+}: {
+  days: number;
+  onRate: () => void;
+  disabled: boolean;
+  variant: "outline" | "default";
+  children: ReactNode;
+}) {
+  const back = intervalCopy(days);
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger
+        render={<Button type="button" variant={variant} className={RATE_BUTTON_CLASS} disabled={disabled} />}
+        onClick={onRate}
+      >
+        {children}
+        <span className="sr-only">, {back.charAt(0).toLowerCase() + back.slice(1)}</span>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Positioner side="top" sideOffset={10} className="z-50">
+          <Tooltip.Popup className="flex items-center gap-1 rounded-[10px] bg-foreground px-3 py-[7px] text-[13px] whitespace-nowrap text-background shadow-[0_6px_18px_rgb(74_34_54/18%)]">
+            <Star weight="fill" aria-hidden className="size-3.5 text-[#ffd84a]" />
+            {back}
+            <Tooltip.Arrow className="carded-pop-arrow" />
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
+/** Again and Good: 46px with keycaps on desktop, full-width halves of the phone thumb bar. */
+const RATE_BUTTON_CLASS = "h-[46px] min-w-[150px] gap-2.5 px-5 text-[15px] max-sm:min-w-0";
 
 export function CardedView({
   contentJson,
@@ -194,15 +265,52 @@ export function CardedView({
   // The pack's copy hat on every Carded Kirby (Dream Land only).
   const hat = kirbyHat(reviewerId);
   const sourceViewer = useSourceViewer();
+  // Phone toast after a saved rating: "Back in 28 days" (coarse pointers only, never in practice).
+  const [toast, setToast] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const optionsTrigger = useRef<HTMLButtonElement>(null);
+  const dueId = useId();
+  const openingHelp = useRef(false);
+  const cardExport = useCardExport(cards, reviewerName);
   const advanceTimer = useRef<number | null>(null);
+  const toastTimer = useRef<number | null>(null);
   const reviewEpoch = useRef(0);
   const requestIds = useRef(new Map<string, string>());
+  // Bumped whenever a round starts or the toast is cleared, so a late response cannot bring back an old round's toast.
+  // State (not a ref write) so the round switchers stay pure; the ref mirrors it for the async review handler.
+  const [toastRoundState, setToastRound] = useState(0);
+  const toastRound = useRef(0);
+  // False after unmount: a late review response then skips its UI effects and timers.
+  const mounted = useRef(true);
 
   useEffect(() => {
+    toastRound.current = toastRoundState;
+  }, [toastRoundState]);
+
+  useEffect(() => {
+    mounted.current = true;
     return () => {
+      mounted.current = false;
       if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     };
   }, []);
+
+  function clearToast() {
+    setToastRound((round) => round + 1);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setToast(null);
+  }
+
+  function showToast(text: string) {
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setToast(text);
+    toastTimer.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimer.current = null;
+    }, 2200);
+  }
 
   function captureQueue() {
     const now = Date.now();
@@ -257,6 +365,7 @@ export function CardedView({
   const packEmpty = cards.length === 0;
 
   function enterBrowse() {
+    clearToast();
     setMode("browse");
     setBrowseIndex(0);
     setFlipped(false);
@@ -267,13 +376,20 @@ export function CardedView({
   }
 
   function enterDue() {
+    // clearToast, inlined: the React Compiler reads a helper call here as render-time, which flags captureQueue's Date.now.
+    setToastRound((round) => round + 1);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setToast(null);
     setMode("due");
     captureQueue();
   }
 
+
+
   function enterPractice(cardsToPractice: CapturedCard[]) {
     if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
     advanceTimer.current = null;
+    clearToast();
     setMode("practice");
     setPracticeCaptured(cardsToPractice);
     setPracticeIndex(0);
@@ -332,6 +448,7 @@ export function CardedView({
     const requestId = requestIds.current.get(card.id) ?? crypto.randomUUID();
     requestIds.current.set(card.id, requestId);
     const epoch = ++reviewEpoch.current;
+    const round = toastRound.current;
     setBusy(true);
     setError(null);
     try {
@@ -344,19 +461,22 @@ export function CardedView({
           clientRequestId: requestId,
         }),
       });
+      // A saved rating still reaches the parent after unmount; only local UI waits on mounted below.
       if (epoch !== reviewEpoch.current) return;
       if (!response.ok) throw new Error(await readApiError(response));
       // A replayed request reports the rating its first attempt saved, which may differ from this tap.
       const data = (await response.json()) as { card: DurableCardView; rating: "again" | "good" };
       const saved = data.rating;
       onCardsChange(durableCards.map((item) => item.id === data.card.id ? data.card : item));
+      if (!mounted.current) return;
       setRatedIds((current) => current.includes(card.id) ? current : [...current, card.id]);
       setTally((current) => ({ ...current, [saved]: current[saved] + 1 }));
       if (saved === "again") setAgainIds((current) => current.includes(card.id) ? current : [...current, card.id]);
       setLastRatedAt(Date.now());
       setKirby(reactionFor(saved));
       requestIds.current.delete(card.id);
-      setScheduleHint(`Next review ${intervalCopy(data.card.intervalDays)}`);
+      setScheduleHint(`Next review ${dayCopy(data.card.intervalDays)}`);
+      if (round === toastRound.current) showToast(intervalCopy(data.card.intervalDays));
       if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
       advanceTimer.current = window.setTimeout(() => {
         if (epoch !== reviewEpoch.current) return;
@@ -366,10 +486,10 @@ export function CardedView({
         advanceTimer.current = null;
       }, 700);
     } catch (caught) {
-      if (epoch !== reviewEpoch.current) return;
+      if (!mounted.current || epoch !== reviewEpoch.current) return;
       setError(caught instanceof Error ? caught.message : "Could not save review.");
     } finally {
-      if (epoch === reviewEpoch.current) setBusy(false);
+      if (mounted.current && epoch === reviewEpoch.current) setBusy(false);
     }
   }
 
@@ -531,32 +651,126 @@ export function CardedView({
       : dueSession.empty
       ? "0 of 0 due"
       : `${dueSession.completed} of ${dueSession.total}`;
+  const showProgress = mode === "due" && !dueSession.empty;
+  const due = isDurableCard(card) ? dueLabel(new Date(card.dueAt), new Date(sessionStartedAt)) : null;
+  const cardTools = (isDurableCard(card) && (!practicing || flipped))
+    || (backCitation !== null && backPage !== null && sourceViewer.available);
+  const progressPercent = dueSession.total > 0 ? Math.round((dueSession.completed / dueSession.total) * 100) : 0;
 
   return (
     <div data-carded-root className="mx-auto flex w-full max-w-lg flex-col gap-4 dreamland:sm:max-w-[40rem]">
-      <div className="flex items-start justify-between gap-2 text-sm text-muted-foreground">
-        <div className="space-y-1">
-          <p>{sessionLabel}</p>
-          {practicing ? (
-            <p className="text-foreground">Practice, not scheduled</p>
+      {/* Session row: progress on the left, Browse all or Study due and the options menu on the right. */}
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-sm text-muted-foreground">
+        <div className="flex min-w-0 flex-1 items-center gap-3 max-md:basis-full">
+          {showProgress ? (
+            <>
+              <span aria-hidden className="font-semibold text-foreground tabular-nums">
+                {dueSession.completed} / {dueSession.total}
+              </span>
+              <div
+                role="progressbar"
+                aria-label="Session progress"
+                aria-valuemin={0}
+                aria-valuemax={dueSession.total}
+                aria-valuenow={dueSession.completed}
+                aria-valuetext={sessionLabel}
+                className="relative h-2.5 min-w-[60px] flex-1 rounded-full bg-muted dreamland:ml-3.5 dreamland:bg-[#f6dfe7]"
+              >
+                <span
+                  className="absolute inset-y-0 left-0 rounded-full bg-primary dreamland:bg-[linear-gradient(90deg,#ff8fb4,#c2185b)]"
+                  style={{ width: `${progressPercent}%` }}
+                />
+                {/* Dream Land: a Warp Star rides the head of the fill. */}
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute top-1/2 hidden w-[34px] -translate-x-[60%] -translate-y-1/2 print-hide dreamland:block"
+                  style={{ left: `${progressPercent}%` }}
+                >
+                  <WarpStar trail={false} />
+                </span>
+              </div>
+            </>
           ) : (
-            <p>Remaining: {remainingCopy}</p>
+            <span className="font-semibold text-foreground tabular-nums">{sessionLabel}</span>
           )}
+          {practicing ? (
+            <span className="carded-pill">Practice, not scheduled</span>
+          ) : mode === "due" && remainingCopy !== "none" ? (
+            <span className="carded-pill">
+              <Cards weight="bold" aria-hidden className="size-3.5" />
+              {remainingCopy}
+            </span>
+          ) : null}
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <CardExport cards={cards} reviewerName={reviewerName} />
+        <div className="flex items-center gap-1 max-md:ml-auto">
           {browsing || practicing ? (
             <Button type="button" variant="ghost" size="sm" onClick={enterDue}>
               Study due
             </Button>
-          ) : null}
-          {!browsing ? (
+          ) : (
             <Button type="button" variant="ghost" size="sm" onClick={enterBrowse}>
               <Eye weight="bold" />
               Browse all
             </Button>
-          ) : null}
-          <StudyHelp />
+          )}
+          <div className="relative inline-flex">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                ref={optionsTrigger}
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="print-hide pointer-coarse:size-11"
+                    aria-label="Carded options"
+                    title="Carded options"
+                  />
+                }
+              >
+                <DotsThree weight="bold" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="w-auto min-w-60"
+                finalFocus={() => {
+                  // Opening "How cards come back" moves focus into its panel; the menu must not take it back.
+                  if (!openingHelp.current) return true;
+                  openingHelp.current = false;
+                  return false;
+                }}
+              >
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Export cards</DropdownMenuLabel>
+                  {cardExport.options.map((option) => (
+                    <DropdownMenuItem
+                      key={option.kind}
+                      disabled={option.count === 0}
+                      onClick={() => cardExport.exportKind(option.kind)}
+                    >
+                      <DownloadSimple weight="bold" aria-hidden />
+                      <span className="flex flex-col">
+                        <span>{option.label}</span>
+                        {option.count === 0 ? <span className="text-xs text-muted-foreground">{option.empty}</span> : null}
+                      </span>
+                      <span className="ml-auto pl-3 text-xs text-muted-foreground tabular-nums">{option.count}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => {
+                    openingHelp.current = true;
+                    setHelpOpen(true);
+                  }}
+                >
+                  <Question weight="bold" aria-hidden />
+                  How cards come back
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <StudyHelp open={helpOpen} onOpenChange={setHelpOpen} anchorRef={optionsTrigger} className="absolute top-full right-0" />
+          </div>
         </div>
       </div>
       {mode === "due" && dueSession.empty ? (
@@ -607,33 +821,11 @@ export function CardedView({
         </WithKirby>
       ) : null}
 
-      {card ? (
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {isDurableCard(card) ? <span>{dueLabel(new Date(card.dueAt), new Date(sessionStartedAt))}</span> : null}
-        {isDurableCard(card) && (card.isEdited || card.isPinned) ? <span className="text-warning">Protected from silent overwrite</span> : null}
-        {dueStale ? <span className="text-warning">This card changed. Start a new due session before rating it.</span> : null}
-        {isDurableCard(card) && !practicing ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => { if (!editing) { setFrontDraft(card.front); setBackDraft(card.back); setDraftCardId(card.id); setDraftRevision(card.revision); } setEditing((open) => !open); }} disabled={busy}>{editing ? "Cancel edit" : "Edit card"}</button> : null}
-        {isDurableCard(card) && !practicing ? <button type="button" className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted pointer-coarse:min-h-11 pointer-coarse:px-3" onClick={() => void togglePin()} disabled={busy}>{card.isPinned ? "Unpin" : "Pin card"}</button> : null}
-        {isDurableCard(card) && flipped ? (
-          <ExplainThisButton request={{ kind: "explain", target: { type: "card", cardId: card.id } }} />
-        ) : null}
-        {backCitation && backPage !== null && sourceViewer.available ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => sourceViewer.openSource({
-              source: backCitation.source,
-              page: backPage,
-              pageEnd: backCitation.pageEnd,
-              claim: stripCitations(card.back).trim() || null,
-            })}
-          >
-            <Presentation weight="bold" />
-            Page {backPage}
-          </Button>
-        ) : null}
-      </div>
+      {isDurableCard(card) && (card.isEdited || card.isPinned || dueStale) ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-warning">
+          {card.isEdited || card.isPinned ? <span>Protected from silent overwrite</span> : null}
+          {dueStale ? <span>This card changed. Start a new due session before rating it.</span> : null}
+        </div>
       ) : null}
 
       {card && isCloze ? (
@@ -656,7 +848,7 @@ export function CardedView({
 
       {card ? (
       <div className="dreamland:relative dreamland:sm:flex dreamland:sm:items-start dreamland:sm:gap-[18px]">
-        <div className="carded-scene min-w-0 dreamland:max-sm:mr-16 dreamland:sm:flex-1">
+        <div className="carded-scene relative min-w-0 dreamland:max-sm:mr-16 dreamland:sm:flex-1">
           <div
             role="button"
             tabIndex={0}
@@ -672,14 +864,16 @@ export function CardedView({
               flipped && "is-flipped",
             )}
             aria-label="Flip"
+            aria-describedby={due ? dueId : undefined}
             aria-pressed={flipped}
           >
             <div className="carded-face carded-front">
-              <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-                Front
+              <span className="mb-3 inline-flex items-center gap-2.5">
+                <span className="text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">Front</span>
+                {due ? <span aria-hidden className="carded-due">{due}</span> : null}
               </span>
               <MarkdownBody source={frontSource} />
-              <span className="mt-6 text-xs text-muted-foreground">Flip</span>
+              <span className="mt-6 inline-flex items-center gap-1.5 text-xs text-muted-foreground">Flip<Keycap>Space</Keycap></span>
             </div>
             <div
               className="carded-face carded-back"
@@ -691,13 +885,81 @@ export function CardedView({
                 if (isInteractiveInsideFace(event.target)) event.stopPropagation();
               }}
             >
-              <span className="mb-3 text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-                Back
+              <span className="mb-3 inline-flex items-center gap-2.5">
+                <span className="text-[0.65rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">Back</span>
+                {due ? <span aria-hidden className="carded-due">{due}</span> : null}
               </span>
               <MarkdownBody source={card.back} />
-              <span className="mt-6 text-xs text-muted-foreground">Flip</span>
+              <span className="mt-6 inline-flex items-center gap-1.5 text-xs text-muted-foreground">Flip<Keycap>Space</Keycap></span>
             </div>
           </div>
+          {due ? <span id={dueId} className="sr-only">{due}</span> : null}
+          {/* Card tools sit on the card's corner, outside the flip target: top-right, top-left on phones so Kirby keeps the right. */}
+          {cardTools ? (
+            <div className="print-hide absolute top-3 right-3 z-10 flex gap-0.5 max-sm:top-2 max-sm:right-auto max-sm:left-2">
+              {isDurableCard(card) && !practicing ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className={CARD_TOOL_CLASS}
+                  aria-label={editing ? "Cancel edit" : "Edit card"}
+                  title={editing ? "Cancel edit" : "Edit card"}
+                  disabled={busy}
+                  onClick={() => {
+                    if (!editing) {
+                      setFrontDraft(card.front);
+                      setBackDraft(card.back);
+                      setDraftCardId(card.id);
+                      setDraftRevision(card.revision);
+                    }
+                    setEditing((open) => !open);
+                  }}
+                >
+                  <PencilSimple weight="bold" aria-hidden />
+                </Button>
+              ) : null}
+              {isDurableCard(card) && !practicing ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className={cn(CARD_TOOL_CLASS, card.isPinned && "text-primary")}
+                  aria-label={card.isPinned ? "Unpin card" : "Pin card"}
+                  title={card.isPinned ? "Unpin card" : "Pin card"}
+                  disabled={busy}
+                  onClick={() => void togglePin()}
+                >
+                  <PushPin weight={card.isPinned ? "fill" : "bold"} aria-hidden />
+                </Button>
+              ) : null}
+              {isDurableCard(card) && flipped ? (
+                <ExplainThisButton
+                  iconOnly
+                  className={CARD_TOOL_CLASS}
+                  request={{ kind: "explain", target: { type: "card", cardId: card.id } }}
+                />
+              ) : null}
+              {backCitation && backPage !== null && sourceViewer.available ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className={CARD_TOOL_CLASS}
+                  aria-label={`Open source, page ${backPage}`}
+                  title={`Open source, page ${backPage}`}
+                  onClick={() => sourceViewer.openSource({
+                    source: backCitation.source,
+                    page: backPage,
+                    pageEnd: backCitation.pageEnd,
+                    claim: stripCitations(card.back).trim() || null,
+                  })}
+                >
+                  <FileText weight="bold" aria-hidden />
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <KirbyCompanion
           size="md"
@@ -708,12 +970,6 @@ export function CardedView({
       </div>
       ) : null}
 
-      {card ? (
-        <p className="carded-key-hint text-xs text-muted-foreground">
-          {browsing ? "← → move · Space flip · F focus" : "Space flip · 1 Again · 2 Good · F focus"}
-        </p>
-      ) : null}
-
       {browsing ? (
       <div className="flex items-center justify-between gap-3">
         <Button
@@ -721,6 +977,7 @@ export function CardedView({
           variant="outline"
           onClick={() => go(-1)}
           disabled={safeBrowseIndex === 0}
+          title="Previous (←)"
         >
           <CaretLeft weight="bold" />
           Previous
@@ -730,6 +987,7 @@ export function CardedView({
           variant="outline"
           onClick={() => go(1)}
           disabled={safeBrowseIndex >= browseCards.length - 1}
+          title="Next (→)"
         >
           Next
           <CaretRight weight="bold" />
@@ -753,38 +1011,117 @@ export function CardedView({
         </div>
       ) : null}
       {!browsing && isDurableCard(card) && flipped && !dueStale ? (
-        <div className="carded-thumb-bar flex flex-wrap gap-2 rounded-xl border border-border/80 bg-surface/50 p-4">
+        <div className="carded-thumb-bar flex items-center justify-center gap-2.5 py-1.5">
           {practicing ? (
             <>
-              <Button type="button" variant="outline" onClick={() => practiceRate("again")}>
+              <Button type="button" variant="outline" className={RATE_BUTTON_CLASS} onClick={() => practiceRate("again")}>
                 Again
               </Button>
-              <Button type="button" variant="secondary" onClick={() => practiceRate("good")}>
+              <Button type="button" className={RATE_BUTTON_CLASS} onClick={() => practiceRate("good")}>
                 Good
               </Button>
             </>
           ) : scheduleHint ? (
-            <p className="w-full text-sm text-foreground">{scheduleHint}</p>
+            <p className="w-full text-center text-sm text-foreground">{scheduleHint}</p>
           ) : (
             <>
-              <Button type="button" variant="outline" onClick={() => void review("again")} disabled={busy}>
-                Again, {gradePreview(card, "again")}
-              </Button>
-              <Button type="button" variant="secondary" onClick={() => void review("good")} disabled={busy}>
-                Good, {gradePreview(card, "good")}
-              </Button>
+              <RateButton
+                variant="outline"
+                days={card.nextIntervals.again.days}
+                disabled={busy}
+                onRate={() => void review("again")}
+              >
+                Again
+                <Keycap>1</Keycap>
+              </RateButton>
+              <RateButton
+                variant="default"
+                days={card.nextIntervals.good.days}
+                disabled={busy}
+                onRate={() => void review("good")}
+              >
+                Good
+                <Keycap>2</Keycap>
+              </RateButton>
             </>
           )}
         </div>
       ) : null}
+      <div role="status" className="carded-toast print-hide">
+        {toast && mode === "due" ? (
+          <>
+            <Star weight="fill" aria-hidden className="size-4 text-[#ffd84a]" />
+            {toast}
+          </>
+        ) : null}
+      </div>
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       <style>{`
-        .carded-key-hint {
+        .carded-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          height: 28px;
+          padding: 0 12px;
+          border-radius: 999px;
+          background: var(--secondary);
+          color: var(--secondary-foreground);
+          font-size: 13px;
+          font-weight: 500;
+          white-space: nowrap;
+        }
+        .carded-due {
+          display: inline-flex;
+          align-items: center;
+          height: 24px;
+          padding: 0 10px;
+          border-radius: 999px;
+          background: color-mix(in oklch, var(--warning) 15%, transparent);
+          color: var(--warning);
+          font-size: 12px;
+          font-weight: 500;
+          white-space: nowrap;
+        }
+        [data-look="dreamland"] .carded-due {
+          background: #fff3c4;
+          color: #7a4d00;
+        }
+        .carded-pop-arrow {
+          width: 12px;
+          height: 6px;
+          bottom: -6px;
+          background: var(--foreground);
+          clip-path: polygon(0 0, 100% 0, 50% 100%);
+        }
+        .carded-toast {
           display: none;
         }
-        @media (pointer: fine) {
-          .carded-key-hint {
-            display: block;
+        .carded-toast:not(:empty) {
+          position: fixed;
+          left: 50%;
+          bottom: calc(104px + env(safe-area-inset-bottom));
+          z-index: 40;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          transform: translateX(-50%);
+          padding: 10px 16px;
+          border-radius: 999px;
+          background: var(--foreground);
+          color: var(--background);
+          font-size: 14px;
+          white-space: nowrap;
+          box-shadow: 0 8px 22px rgb(74 34 54 / 22%);
+        }
+        @media (prefers-reduced-motion: no-preference) {
+          .carded-toast:not(:empty) {
+            animation: carded-toast-in 180ms ease-out;
+          }
+        }
+        @keyframes carded-toast-in {
+          from {
+            opacity: 0;
+            transform: translate(-50%, 6px);
           }
         }
         @media (max-width: 639px) {
@@ -792,6 +1129,7 @@ export function CardedView({
             position: sticky;
             bottom: 0;
             z-index: 10;
+            padding-top: 0.75rem;
             padding-bottom: max(1rem, env(safe-area-inset-bottom));
             background: var(--background);
           }
@@ -803,8 +1141,11 @@ export function CardedView({
         .carded-scene {
           perspective: 1400px;
         }
+        /* Both faces share one grid cell, so the card is always as tall as the taller face. */
         .carded-flipper {
           position: relative;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
           min-height: 220px;
           width: 100%;
           cursor: pointer;
@@ -820,7 +1161,9 @@ export function CardedView({
           transform: rotateX(180deg);
         }
         .carded-face {
+          grid-area: 1 / 1;
           display: flex;
+          min-width: 0;
           min-height: 220px;
           width: 100%;
           flex-direction: column;
@@ -829,7 +1172,7 @@ export function CardedView({
           border-radius: 1rem;
           border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
           background: color-mix(in oklch, var(--surface) 70%, transparent);
-          padding: 2.5rem 1.5rem;
+          padding: 3.25rem 1.5rem 2.5rem;
           text-align: center;
           box-shadow: 0 10px 30px oklch(0 0 0 / 25%);
           backface-visibility: hidden;
@@ -840,12 +1183,13 @@ export function CardedView({
             min-height: 260px;
           }
         }
-        .carded-front {
-          position: relative;
+        @media (max-width: 639px) {
+          /* The card tools sit top-left on phones; 44px touch targets need the taller top. */
+          .carded-face {
+            padding-top: 3.5rem;
+          }
         }
         .carded-back {
-          position: absolute;
-          inset: 0;
           background: color-mix(in oklch, var(--primary) 10%, var(--surface));
           border-color: color-mix(in oklch, var(--primary) 30%, var(--border));
           transform: rotateX(180deg);

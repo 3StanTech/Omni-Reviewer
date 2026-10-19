@@ -251,7 +251,7 @@ export function todayBarParts(bar: TodayBarData): TodayBarPart[] {
   const parts: TodayBarPart[] = [];
   if (bar.reviewCards > 0) parts.push({ text: `${bar.reviewCards} to review` });
   if (bar.newCards > 0) parts.push({ text: `${bar.newCards} new` });
-  if (bar.weakSections > 0) parts.push({ text: plural(bar.weakSections, "weak section", "weak sections"), weak: true });
+  if (bar.weakSections > 0) parts.push({ text: plural(bar.weakSections, "section needs improvement", "sections need improvement"), weak: true });
   if (bar.exam) {
     parts.push({
       text:

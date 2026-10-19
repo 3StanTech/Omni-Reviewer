@@ -171,14 +171,14 @@ describe("pack row mastery summary", () => {
 });
 
 describe("rows and Contents render bars from props", () => {
-  it("renders Mastery N% and Weak: title in a pack row", () => {
+  it("renders Mastery N% and Needs improvement: title in a pack row", () => {
     const html = renderToStaticMarkup(
       createElement(PackMastery, { mastery: { score: 0.48, weakTitle: "Aminoglycosides" } }),
     );
     expect(html).toContain("Mastery");
     expect(html).toContain('aria-label="Mastery 48 percent"');
     expect(html).toContain("48%");
-    expect(html).toContain("Weak: Aminoglycosides");
+    expect(html).toContain("Needs improvement: Aminoglycosides");
   });
 
   it("renders nothing in a row without a score or weak section", () => {

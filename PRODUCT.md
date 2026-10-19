@@ -68,7 +68,7 @@ Generated only on explicit Generate or Redo. Tab changes never call the model. S
 1. **Locked In** - comprehensive, cohesive, chronological long-form study document (sanitized Markdown with tables, KaTeX, and legacy semantic ink spans rendered neutrally; GFM footnotes are unsupported). Source of truth. It supports explicit Edit, Save changes, and Cancel.
 2. **Summary** - detailed summary of Locked In for last-minute review. It uses the same explicit Markdown editor and save/revision contract as Locked In.
 3. **Test Me** - sit the exam. Recognition from Locked In. Default untimed path is one question at a time with numbered multiple-choice tiles. The key scores you. Attempts and misses persist. An optional server-timed run remains; it opens with a short "Ready... Go!" (about 1.4 s) before the session is created, so the countdown never uses timed seconds. This mode has a last question. It does not schedule tomorrow's work. The recap shows the score with a percent, a breakdown by Locked In section, and each miss with the reader's answer beside the correct one.
-4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with remaining-due chrome ("Remaining: N to review · M new"). Each button shows its next interval. The session recap offers Practice missed and Practice all, which re-run cards without saving ratings or changing due dates; there is no Restart. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
+4. **Carded** - remember over time. Recall from Summary. End-over-end flip, then self-grade Again / Good. A due queue with a progress bar and an "N to review · M new" pill. Hovering or focusing a button shows when the card comes back ("Back tomorrow", "Back in N days"), and on a phone a brief toast says it after each rating. The session recap offers Practice missed and Practice all, which re-run cards without saving ratings or changing due dates; there is no Restart. A front using `{{answer}}` placeholders is a cloze card. Carded never shows multiple-choice options.
 
 Looks (Dream Land, the default, plus Day and Night) are chrome only; Dream Land also shows the Kirby companion. Legacy Thea-Style and RemNote-Style values in local storage normalize to Day; they do not add objects or layouts.
 
@@ -88,7 +88,7 @@ Carded schedules with FSRS (`ts-fsrs`, MIT) and two buttons, Again and Good.
 - **Good grows the interval.** Target retention is 0.9 and the longest interval is 365 days. There is no fuzz, so a given history always gives the same schedule.
 - **Exam cap.** An optional exam date on the pack caps every due date at the exam, shows a countdown on the pack, and makes cards due now once the exam has passed.
 - **Existing cards.** Cards from before FSRS were converted by replaying their review history. Cards never reviewed stay new.
-- **Next interval.** Each Carded button shows the interval it would give.
+- **Next interval.** Each Carded button shows when the card would come back ("Back tomorrow", "Back in N days") in a tooltip on hover or focus; on a phone a brief toast says it after each rating.
 
 ### Exam pacing
 
@@ -100,14 +100,14 @@ Mastery is computed when a pack is read, from answers already stored. It makes n
 
 - **Sections** are the `##` headings of the current Locked In, the same ones Contents lists.
 - **Evidence** is the latest Test Me answer for each question and the latest grade for each card. An item counts toward a section when it cites a page that section cites.
-- **Shown** once a section has 3 or more answered items. A section under 60% is weak.
-- **Where it shows.** Pack rows show pack mastery and the weakest section. Contents shows a bar per section.
+- **Shown** once a section has 3 or more answered items. A section under 60% needs improvement.
+- **Where it shows.** Pack rows show pack mastery and the section that most needs improvement. Contents shows a bar per section.
 
 ### Today
 
-A one-line bar on the desk sums up the day: cards due, weak sections, the nearest exam, and about how many minutes. It is hidden until there is a pack, and a part with nothing in it is left out. It opens a modal with:
+A one-line bar on the desk sums up the day: cards due, sections that need improvement, the nearest exam, and about how many minutes. It is hidden until there is a pack, and a part with nothing in it is left out. It opens a modal with:
 
-- **Do first.** Review due cards, re-test the weakest sections, then re-read one.
+- **Do first.** Review due cards, re-test the sections that need improvement, then re-read one.
 - **Exam pacing.** New cards per day for each topic with an exam.
 - **Just browse.** Close the plan and pick any pack.
 
@@ -166,7 +166,7 @@ A tutor for one pack. It answers from that pack's sources and nowhere else.
 - **Clear chat.** Hides the thread. Answers saved to Notes stay. Nothing is hard-deleted, and a repeat Explain after Clear asks the model again.
 - **One request per question, no verifier.** The answer is not re-checked by the claim verifier or the text-overlap check; the prompt requires a citation on every fact. The answer arrives whole (not streamed) after a "Reading your sources" pending bubble. On failure nothing is stored and the composer keeps the draft with the error. When the free limit is used up, the message is "The free model limit is used up for now. Try again later today."
 - **Tags on answers.** A cited sentence is trusted. A sentence of 6 words or more with no citation gets **Not from your uploaded sources**; shorter sentences are never tagged. Text overlap is not used on answers because it flags correct, cited explanations, especially on slides read from images. The tag is informational: chat answers are not editable, so there is no Keep or Delete.
-- **Starter chips.** "What will likely be asked?" and "Make me a mnemonic for this lecture", plus "Explain <weakest section>" when mastery has a weak section. They make no request until chosen.
+- **Starter chips.** "What will likely be asked?" and "Make me a mnemonic for this lecture", plus "Explain <weakest section>" when a section needs improvement. They make no request until chosen.
 - **Keys and layout.** **A** opens the panel; it is ignored with a modifier key, while typing in a field, or while a dialog is open. **Escape** or the collapse arrow closes it and focus returns to the pill. On desktop it is a right-hand side panel; at 640 px or less it is a bottom sheet. Keys typed in the panel never reach Carded or Test Me, so Space does not flip a card.
 
 ### Explain this and Ask why

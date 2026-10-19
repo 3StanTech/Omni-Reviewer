@@ -362,9 +362,34 @@ function AskProviderInner({ reviewerId, sections = null, initialSavedCount = 0, 
  * "Explain this" beside a missed Test Me item or a flipped card. Renders
  * nothing outside a pack, where there is no Ask panel to answer.
  */
-export function ExplainThisButton({ request, className }: { request: AskRequest; className?: string }) {
+export function ExplainThisButton({
+  request,
+  className,
+  iconOnly = false,
+}: {
+  request: AskRequest;
+  className?: string;
+  /** A ghost icon button named "Explain this", for toolbars such as Carded's card tools. */
+  iconOnly?: boolean;
+}) {
   const ask = useOptionalAsk();
   if (!ask) return null;
+  if (iconOnly) {
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className={className}
+        aria-label="Explain this"
+        title="Explain this"
+        disabled={ask.pending}
+        onClick={() => void ask.ask(request)}
+      >
+        <Lightbulb weight="bold" aria-hidden />
+      </Button>
+    );
+  }
   return (
     <Button
       type="button"

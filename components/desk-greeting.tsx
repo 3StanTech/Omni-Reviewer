@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { BirthdayCake } from "@/components/kirby-art";
+import { BirthdayCake, GreetingStickers } from "@/components/kirby-art";
 import { cueKirby, KirbyCompanion } from "@/components/kirby-companion";
 import type { DeskKirbyLook } from "@/lib/desk-kirby";
 
@@ -32,7 +32,8 @@ function markWelcomed() {
 
 /**
  * The desk title block. Day and Night show the plain title and subtitle; Dream Land wraps
- * them in a speech bubble (app/globals.css `.desk-greeting-bubble`) with Kirby beside it.
+ * them in a scalloped, stitched speech card with a sweets sticker row (app/globals.css
+ * `.desk-greeting-bubble`) and Kirby beside it.
  * The mood switch is CSS only, so the server and client render the same markup. `look` is
  * computed on the server (`deskKirbyLook`); the welcome wave (or the belated birthday dance)
  * plays once per browser session.
@@ -67,17 +68,20 @@ export function DeskGreeting({
   }, [say]);
 
   return (
-    <div className="mb-6 flex items-center gap-3.5">
-      <div className="desk-greeting-bubble min-w-0 flex-1 space-y-1">
+    <div className="mb-6 flex items-center gap-3.5 dreamland:mb-[34px] dreamland:items-start">
+      <div className="desk-greeting-bubble min-w-0 flex-1">
+        {/* Dream Land: the stitched seam inside the scalloped card. */}
+        <span aria-hidden="true" className="desk-greeting-stitch hidden dreamland:block" />
         <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
           {title}
           <span className="hidden dreamland:inline">!</span>
         </h1>
         {subtitle ? (
-          <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{subtitle}</p>
+          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">{subtitle}</p>
         ) : null}
+        <GreetingStickers />
       </div>
-      <div className="relative shrink-0">
+      <div className="relative shrink-0 dreamland:mt-3.5">
         <KirbyCompanion
           size="lg"
           area="desk"

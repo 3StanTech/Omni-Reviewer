@@ -35,19 +35,22 @@ type PanelHeaderProps = {
   actions?: React.ReactNode;
   /** Let the label wrap instead of truncating (the Today card never truncates). */
   wrapLabel?: boolean;
+  /** Dream Land draws the label as a sticker pill over the panel's top edge (desk panels only). */
+  sticker?: boolean;
   className?: string;
 };
 
-function PanelHeader({ label, icon, actions, wrapLabel = false, className }: PanelHeaderProps) {
+function PanelHeader({ label, icon, actions, wrapLabel = false, sticker = false, className }: PanelHeaderProps) {
   return (
     <div
       data-slot="panel-header"
+      data-sticker={sticker ? "" : undefined}
       className={cn(
         "flex items-center justify-between gap-3 rounded-t-[var(--radius)] border-b border-divider bg-card-head px-4 py-2.5",
         className,
       )}
     >
-      <div className="flex min-w-0 items-center gap-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+      <div data-slot="panel-title" className="flex min-w-0 items-center gap-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
         {icon}
         <span className={wrapLabel ? undefined : "truncate"}>{label}</span>
       </div>

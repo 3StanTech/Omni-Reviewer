@@ -110,7 +110,7 @@
   --chart-5: #fbeef2;
   --radius: 1.25rem;
   --star: #f2c230;
-  --sidebar: #ffe4ee;
+  --sidebar: #fbe3ee;
   --sidebar-foreground: #4a2236;
   --sidebar-primary: #c2185b;
   --sidebar-primary-foreground: #ffffff;
@@ -254,6 +254,16 @@
         transparent 50%
       );
     background-attachment: fixed;
+  }
+
+  /* Dream Land: a blush-to-lilac wash that scrolls with the page. The html colour stops the
+     body background propagating to the viewport-high root, so the gradient spans the body. */
+  html[data-look="dreamland"] {
+    background-color: #efe8fc;
+  }
+
+  html[data-look="dreamland"] body {
+    background-image: linear-gradient(180deg, #fdeaf2 0%, #f6e9fa 45%, #efe8fc 100%);
   }
 
   ::selection {
@@ -885,35 +895,207 @@ html[data-focus="on"] main {
   }
 }
 
-/* Dream Land: the desk greeting speaks through a bubble whose tail points right, toward Kirby. */
+/* Dream Land: the desk greeting is a scalloped, stitched card (Yana's planner) whose tail
+   points right, toward Kirby. The outline comes from stacked drop-shadows so it follows the
+   scallops; `.desk-greeting-stitch` is the dashed seam inside. */
 [data-look="dreamland"] .desk-greeting-bubble {
   position: relative;
-  padding: 16px 22px;
-  background-color: var(--card);
-  border: 1.5px solid var(--border);
-  border-radius: 24px;
-  box-shadow: var(--panel-shadow);
+  padding: 22px 28px 14px;
+  background-color: #ffeef5;
+  border: 0;
+  border-radius: 26px 26px 0 0;
+  filter: drop-shadow(1.5px 0 0 #f0b9cc) drop-shadow(-1.5px 0 0 #f0b9cc) drop-shadow(0 -1.5px 0 #f0b9cc)
+    drop-shadow(0 1.5px 0 #f0b9cc) drop-shadow(0 3px 0 #f3c6d6);
 }
 
 [data-look="dreamland"] .desk-greeting-bubble::before {
   content: "";
   position: absolute;
-  top: 50%;
+  top: 46px;
   right: -11px;
   width: 20px;
   height: 20px;
   margin-top: -10px;
-  background: var(--card);
-  border-top: 1.5px solid var(--border);
-  border-right: 1.5px solid var(--border);
+  background: #ffeef5;
+  border-top: 1.5px solid #f0b9cc;
+  border-right: 1.5px solid #f0b9cc;
   border-radius: 0 4px 0 0;
   transform: rotate(45deg);
 }
 
+[data-look="dreamland"] .desk-greeting-bubble::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -11px;
+  height: 12px;
+  background: radial-gradient(circle at 12px 0, #ffeef5 11.5px, transparent 12px) 0 0 / 24px 12px repeat-x;
+}
+
+[data-look="dreamland"] .desk-greeting-stitch {
+  position: absolute;
+  inset: 8px 8px -2px;
+  border: 1.6px dashed #eba7c0;
+  border-bottom: 0;
+  border-radius: 20px 20px 0 0;
+  pointer-events: none;
+}
+
+[data-look="dreamland"] .desk-greeting-bubble h1 {
+  color: #b0144f;
+}
+
+/* The sweets sticker row; `hidden dreamland:flex` on the element owns its display. */
+.greeting-stickers {
+  gap: 14px;
+  margin-top: 12px;
+  align-items: flex-end;
+}
+
+.greeting-stickers > svg {
+  width: 34px;
+  height: auto;
+  filter: drop-shadow(0 1.5px 0 #f0b9cc);
+}
+
+.greeting-stickers > svg:nth-child(odd) {
+  transform: rotate(-6deg);
+}
+
+.greeting-stickers > svg:nth-child(even) {
+  transform: rotate(5deg) translateY(-3px);
+}
+
 @media (max-width: 640px) {
   [data-look="dreamland"] .desk-greeting-bubble {
-    padding: 12px 16px;
+    padding: 18px 20px 12px;
   }
+
+  .greeting-stickers > svg {
+    width: 24px;
+  }
+}
+
+/* Dream Land: desk panels (PanelHeader `sticker`) wear their title as a sticker pill riding
+   over the top edge. The flex column's gap plus this margin gives the pill room (~30px). */
+[data-look="dreamland"] [data-slot="panel"]:has(> [data-slot="panel-header"][data-sticker]) {
+  position: relative;
+  overflow: visible;
+  border-radius: 24px;
+}
+
+[data-look="dreamland"] [data-slot="panel"]:has(> [data-slot="panel-header"][data-sticker]):not(:first-child) {
+  margin-top: 10px;
+}
+
+/* The pack list loses its clipping for the pill, so the last row's hover tint keeps the corner. */
+[data-look="dreamland"] [data-slot="panel"]:has(> [data-slot="panel-header"][data-sticker]) > ul > li:last-child {
+  overflow: hidden;
+  border-radius: 0 0 24px 24px;
+}
+
+[data-look="dreamland"] [data-slot="panel-header"][data-sticker] {
+  justify-content: flex-end;
+  min-height: 30px;
+  padding-top: 22px;
+  background: transparent;
+  border-radius: 24px 24px 0 0;
+}
+
+[data-look="dreamland"] [data-slot="panel-header"][data-sticker] > [data-slot="panel-title"] {
+  position: absolute;
+  top: -21px;
+  left: 18px;
+  max-width: calc(100% - 36px);
+  height: 40px;
+  padding: 0 18px 0 12px;
+  gap: 9px;
+  background: #fff;
+  border: 2px solid #c9b6f2;
+  border-radius: 9999px;
+  box-shadow: 3px 3px 0 #e6d9fb;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: #5b3aa6;
+}
+
+[data-look="dreamland"] [data-slot="panel-header"][data-sticker] > [data-slot="panel-title"] > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--primary);
+}
+
+/* The pill's aside, e.g. "· In Microbiology". */
+[data-look="dreamland"] [data-slot="panel-header"][data-sticker] > [data-slot="panel-title"] > span > span {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+/* The Today card's header holds only "All topics" under the pill, so no divider. */
+[data-look="dreamland"] [data-panel="today"] > [data-slot="panel-header"][data-sticker] {
+  padding-top: 12px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  [data-look="dreamland"] [data-slot="panel-header"][data-sticker] > [data-slot="panel-title"] {
+    top: -19px;
+    left: 15px;
+    max-width: calc(100% - 30px);
+    height: 36px;
+    font-size: 15px;
+  }
+}
+
+/* Dream Land: the Today card's stats become pastel tiles on their own row, colours cycling
+   by position (pink, butter, sky, lilac) so neighbours never repeat. Values stay at least
+   4.5:1 on their tile. */
+[data-look="dreamland"] [data-stat-tile] {
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 16px;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n + 1) {
+  background: #ffe4ee;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n + 2) {
+  background: #fff3c4;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n + 3) {
+  background: #e3f0ff;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n) {
+  background: #efe6fb;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n + 1) > p:first-child {
+  color: #b0144f;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n + 2) > p:first-child {
+  color: #8a5a00;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n + 3) > p:first-child {
+  color: #1f5fa8;
+}
+
+[data-look="dreamland"] [data-stat-tile]:nth-child(4n) > p:first-child {
+  color: #5b3aa6;
+}
+
+/* The actions sit under the tiles, left-aligned. */
+[data-look="dreamland"] [data-today-actions] {
+  margin-left: 0;
 }
 
 /* Kirby companion (Dream Land only; fan art drawn in SVG). Gradients come from <KirbyDefs/>. */

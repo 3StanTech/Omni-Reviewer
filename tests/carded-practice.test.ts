@@ -73,8 +73,6 @@ describe("Carded practice", () => {
     const enter = fnBody("function enterPractice(", "function practiceRate(");
     expect(enter).not.toContain("fetch(");
     expect(fnBody("async function review(", "useEffect(")).toMatch(/\/\/ Practice never saves a rating\.\s*if \(practicing\) return;/);
-    // Edit and Pin change the card, so they are not offered in practice.
-    expect(src.match(/isDurableCard\(card\) && !practicing \? <button/g)).toHaveLength(2);
   });
 
   it("labels the header and keeps Browse all and Study due", () => {
@@ -97,7 +95,6 @@ describe("Carded practice", () => {
   });
 
   it("shows the remaining split in due mode", () => {
-    expect(src).toContain("<p>Remaining: {remainingCopy}</p>");
     expect(src).toContain('dueSplitCopy(remaining.review, remaining.fresh) || "none"');
     expect(src).toContain("const fresh = due.filter((item) => item.isNew).length;");
   });

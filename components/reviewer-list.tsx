@@ -11,6 +11,7 @@ import {
   Notebook,
   PencilSimple,
   Plus,
+  Stack,
   Trash,
   UploadSimple,
   WarningCircle,
@@ -59,7 +60,7 @@ export type ReviewerListItem = {
   mastery?: { score: number | null; weakTitle: string | null } | null;
 };
 
-/** The pack row's mastery bar and weak-section chip; nothing until the pack has a score. */
+/** The pack row's mastery bar and needs-improvement chip; nothing until the pack has a score. */
 export function PackMastery({ mastery }: { mastery: ReviewerListItem["mastery"] }) {
   const weakDefinitionId = useId();
   if (!mastery) return null;
@@ -78,7 +79,7 @@ export function PackMastery({ mastery }: { mastery: ReviewerListItem["mastery"] 
           aria-describedby={weakDefinitionId}
         >
           <WarningCircle weight="bold" aria-hidden className="mt-px size-3.5 shrink-0 text-warning" />
-          <span className="line-clamp-2 min-w-0 break-words">Weak: {mastery.weakTitle}</span>
+          <span className="line-clamp-2 min-w-0 break-words">Needs improvement: {mastery.weakTitle}</span>
           <span id={weakDefinitionId} hidden>
             {WEAK_SECTION_DEFINITION}
           </span>
@@ -171,7 +172,9 @@ export function ReviewerList({
       <>
         <Panel aria-label="Study packs" className="overflow-hidden">
           <PanelHeader
+            sticker
             label="Study packs"
+            icon={<Stack weight="bold" aria-hidden className="hidden size-4 shrink-0 dreamland:block" />}
             actions={<Skeleton className="h-8 w-36" />}
           />
           {topicChips}
@@ -288,7 +291,9 @@ export function ReviewerList({
     <>
     <Panel aria-label="Study packs" className="overflow-hidden">
       <PanelHeader
+        sticker
         className="max-md:flex-wrap max-md:*:last:w-full"
+        icon={<Stack weight="bold" aria-hidden className="hidden size-4 shrink-0 dreamland:block" />}
         label={
           <>
             Study packs

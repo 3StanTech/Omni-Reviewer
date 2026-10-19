@@ -13,10 +13,8 @@ describe("redundant study headlines", () => {
   const carded = read("components/carded-view.tsx");
   const testMe = read("components/test-me-view.tsx");
 
-  it("drops the Carded tagline but keeps the session and remaining lines", () => {
+  it("drops the Carded tagline", () => {
     expect(carded).not.toContain("Memorize. No choices.");
-    expect(carded).toContain("<p>{sessionLabel}</p>");
-    expect(carded).toContain("<p>Remaining: {remainingCopy}</p>");
   });
 
   it("keeps the Test Me heading for screen readers only", () => {

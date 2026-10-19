@@ -80,10 +80,10 @@ describe("Today card", () => {
         doFirst: [{ kind: "retest", packId: "p2", sectionId: "cells", title: "Cells", score: 0.3, missed: 4 }],
       }),
     );
-    const weak = html.match(/<span title="Under 60% correct on 3 or more answers" aria-describedby="([^"]+)">3 weak sections<\/span>/);
+    const weak = html.match(/<span title="Under 60% correct on 3 or more answers" aria-describedby="([^"]+)">3 sections need improvement<\/span>/);
     expect(weak).not.toBeNull();
     expect(html).toContain(`<span id="${weak?.[1]}" hidden="">Under 60% correct on 3 or more answers</span>`);
-    expect(html).toContain("3 weak sections</span> · About 20 min");
+    expect(html).toContain("3 sections need improvement</span> · About 20 min");
   });
 
   it("offers How cards come back beside See the plan", () => {

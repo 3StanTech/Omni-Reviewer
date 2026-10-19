@@ -19,9 +19,9 @@ describe("How cards come back", () => {
       "New: cards you have not studied yet. Up to 20 a day per pack, or spread out until the exam when an exam date is set.",
       "To review: cards you studied before whose return date has come.",
       "Again brings a card back tomorrow. Good spaces it out: about 3 days, then 2 weeks, then 2 months, then longer. No card comes back after your exam date.",
-      "Weak section: under 60% correct across 3 or more answers from Test Me and Carded. See the plan suggests a re-test or a re-read.",
+      "Needs improvement: under 60% correct across 3 or more answers from Test Me and Carded. See the plan suggests a re-test or a re-read.",
     ]);
-    expect(STUDY_HELP_LINES.flat().map((part) => part.lead)).toEqual(["New", "To review", "Again", "Good", "Weak section"]);
+    expect(STUDY_HELP_LINES.flat().map((part) => part.lead)).toEqual(["New", "To review", "Again", "Good", "Needs improvement"]);
   });
 
   it("has no em dashes and uses a Phosphor icon", () => {
@@ -52,7 +52,6 @@ describe("How cards come back", () => {
   it("closes on Escape and returns focus to the trigger", () => {
     expect(source).toContain('if (event.key !== "Escape") return;');
     expect(source).toContain("event.preventDefault();");
-    expect(source).toContain("if (restoreFocus.current) triggerRef.current?.focus();");
   });
 
   it("hides the floating buttons while the phone sheet is open, and cleans up", () => {
@@ -61,8 +60,7 @@ describe("How cards come back", () => {
     expect(source).toContain("delete root.dataset.studySheetOpen;");
   });
 
-  it("sits on the Today card and in Carded's header tools", () => {
+  it("sits on the Today card", () => {
     expect(readFileSync(path.join(root, "components/today-card.tsx"), "utf8")).toContain("<StudyHelp />");
-    expect(readFileSync(path.join(root, "components/carded-view.tsx"), "utf8")).toContain("<StudyHelp />");
   });
 });

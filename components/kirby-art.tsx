@@ -339,8 +339,21 @@ const TREAT_DRAW: Record<CafeTreatKind, (p: Paint) => ReactNode> = {
   ),
 };
 
-/** One Café treat on its plate for the week row (Mon shortcake through Sun pancakes). */
-export function CafeTreat({ kind, state, className }: { kind: CafeTreatKind; state: CafeTreatState; className?: string }) {
+/**
+ * One Café treat on its plate for the week row (Mon shortcake through Sun pancakes).
+ * `plate={false}` draws the treat alone, cropped to it (the greeting's sticker row).
+ */
+export function CafeTreat({
+  kind,
+  state,
+  plate = true,
+  className,
+}: {
+  kind: CafeTreatKind;
+  state: CafeTreatState;
+  plate?: boolean;
+  className?: string;
+}) {
   const outline = state === "outline";
   const paint: Paint = (fill, stroke) =>
     outline
@@ -349,11 +362,48 @@ export function CafeTreat({ kind, state, className }: { kind: CafeTreatKind; sta
         ? { fill, stroke, strokeWidth: 1 }
         : { fill };
   return (
-    <Art viewBox="0 0 40 38" className={cn(state === "faint" && "opacity-40", className)}>
-      <ellipse cx="20" cy="32" rx="16.5" ry="4.5" fill="#fff" stroke="#e8c9d6" strokeWidth="1.2" />
-      <ellipse cx="20" cy="31.6" rx="10" ry="2.2" fill="none" stroke="#f3dce6" strokeWidth="1" />
+    <Art viewBox={plate ? "0 0 40 38" : "0 2 40 32"} className={cn(state === "faint" && "opacity-40", className)}>
+      {plate ? (
+        <>
+          <ellipse cx="20" cy="32" rx="16.5" ry="4.5" fill="#fff" stroke="#e8c9d6" strokeWidth="1.2" />
+          <ellipse cx="20" cy="31.6" rx="10" ry="2.2" fill="none" stroke="#f3dce6" strokeWidth="1" />
+        </>
+      ) : null}
       {state === "full" || outline ? <g strokeDasharray={outline ? "2.2 1.8" : undefined}>{TREAT_DRAW[kind](paint)}</g> : null}
     </Art>
+  );
+}
+
+/** A small heart sticker, the motif from Yana's planner. */
+export function HeartSticker({ className }: { className?: string }) {
+  return (
+    <Art viewBox="0 0 24 22" className={className}>
+      <path
+        d="M12 20 C4 14 1.5 10 1.5 6.5 A5 5 0 0 1 12 4.5 A5 5 0 0 1 22.5 6.5 C22.5 10 20 14 12 20 Z"
+        fill="#ff8fb4"
+        stroke="#d9668f"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <ellipse cx="7" cy="7" rx="2" ry="1.3" fill="#fff" opacity=".6" transform="rotate(-30 7 7)" />
+    </Art>
+  );
+}
+
+/**
+ * The sweets sticker row under the desk greeting (Dream Land only; app/globals.css
+ * `.greeting-stickers` sizes and tilts them). Decoration only, so hidden from readers and print.
+ */
+export function GreetingStickers() {
+  return (
+    <div aria-hidden="true" className="greeting-stickers print-hide hidden dreamland:flex">
+      <CafeTreat kind="shortcake" state="full" plate={false} />
+      <HeartSticker />
+      <CafeTreat kind="parfait" state="full" plate={false} />
+      <CafeTreat kind="donut" state="full" plate={false} />
+      <WarpStar trail={false} />
+      <CafeTreat kind="macaron" state="full" plate={false} />
+    </div>
   );
 }
 

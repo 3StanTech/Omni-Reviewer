@@ -120,10 +120,10 @@ Schema commands (`db:baseline`, `db:migrate`, `db:backfill-fsrs`, and `db:push` 
 
 ## Scheduling and study engine
 
-- **FSRS.** Cards use `ts-fsrs` (MIT) with Again and Good only. Again always means tomorrow. Target retention is 0.9, the longest interval is 365 days, and there is no fuzz and no same-day step. Intervals are capped at the pack's exam date. Cards that existed before FSRS were converted by replaying their review history. The Carded buttons show the next interval.
+- **FSRS.** Cards use `ts-fsrs` (MIT) with Again and Good only. Again always means tomorrow. Target retention is 0.9, the longest interval is 365 days, and there is no fuzz and no same-day step. Intervals are capped at the pack's exam date. Cards that existed before FSRS were converted by replaying their review history. The Carded buttons show when the card comes back ("Back tomorrow", "Back in N days") on hover or focus.
 - **Pacing.** Only packs with an exam date. New cards are spread so each is reviewed at least twice before the exam: `ceil(newRemaining / max(1, daysUntilExam - 2))` per day, over a rolling 24 hours. Packs without an exam date show every due new card.
-- **Mastery.** Per Locked In `##` section, from the latest Test Me answer for each question and the latest card grade, mapped to sections by the pages they cite. Shown once a section has 3 or more answered items, and weak under 60%. Pack rows show pack mastery and the weakest section, and Contents shows a bar per section. No model calls.
-- **Today.** A one-line bar on the desk (cards due, weak sections, nearest exam, about N minutes) opens a modal with Do first, exam pacing per topic, and Just browse.
+- **Mastery.** Per Locked In `##` section, from the latest Test Me answer for each question and the latest card grade, mapped to sections by the pages they cite. Shown once a section has 3 or more answered items, and needing improvement under 60%. Pack rows show pack mastery and the section that most needs improvement, and Contents shows a bar per section. No model calls.
+- **Today.** A one-line bar on the desk (cards due, sections that need improvement, nearest exam, about N minutes) opens a modal with Do first, exam pacing per topic, and Just browse.
 
 ## Ask this pack and search
 

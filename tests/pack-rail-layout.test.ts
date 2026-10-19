@@ -101,7 +101,7 @@ describe("section mastery list", () => {
     { id: "energy", title: "Energy", score: null, items: 1, weak: false },
   ];
 
-  it("lists the top two heading levels with mastery, weak marked, and no links", () => {
+  it("lists the top two heading levels with mastery, needs-improvement marked, and no links", () => {
     const html = renderToStaticMarkup(createElement(SectionMasteryList, { headings, sections }));
     expect(html).toContain("Sections");
     expect(html).toContain("Cells");
@@ -109,7 +109,7 @@ describe("section mastery list", () => {
     expect(html).toContain("Energy");
     expect(html).not.toContain("Pumps");
     expect(html).not.toContain("<a ");
-    expect(html.match(/aria-label="Weak section"/g)?.length).toBe(1);
+    expect(html.match(/aria-label="Needs improvement"/g)?.length).toBe(1);
     expect(html).toContain('aria-label="Mastery 80 percent"');
     expect(html).toContain("Not enough answers yet");
   });
@@ -117,7 +117,7 @@ describe("section mastery list", () => {
   it("shows no score note when mastery is missing", () => {
     const html = renderToStaticMarkup(createElement(SectionMasteryList, { headings, sections: null }));
     expect(html.match(/Not enough answers yet/g)?.length).toBe(3);
-    expect(html).not.toContain("Weak section");
+    expect(html).not.toContain("Needs improvement");
   });
 
   it("renders nothing without headings", () => {
