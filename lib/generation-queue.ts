@@ -21,7 +21,7 @@ export const USED_UP_COPY = "Today's free requests are used up. More at 8:00 AM.
 /** The packs-left line, or null when the count is unknown. `low` tints it. */
 export function packsLeftCopy(state: FreeRequestState): { text: string; low: boolean } | null {
   if (state.exhausted) return { text: USED_UP_COPY, low: true };
-  if (!state.limited) return { text: "No daily limit on today's free models", low: false };
+  if (!state.limited) return { text: `Requests available today · ${resetCopy()}`, low: false };
   if (state.packsLeft === null) return null;
   if (state.packsLeft < 1) return { text: `Less than a pack left today · ${resetCopy()}`, low: true };
   const packs = state.packsLeft === 1 ? "pack" : "packs";

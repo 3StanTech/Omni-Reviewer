@@ -191,7 +191,7 @@ export function ReviewerList({
         <EmptyState
         icon={<Notebook weight="duotone" className="size-5" />}
         title="Create a topic first"
-        description="Topics live in the shelf on the left. Start with a course or subject, then add study packs inside it."
+        description="Start with a topic for a course or subject, then add study packs inside it."
         action={
           <p className="text-sm text-muted-foreground">
             Use New topic to begin.

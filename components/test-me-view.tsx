@@ -487,7 +487,7 @@ function UntimedSitting({
           {breakdown.length > 0 ? (
             <div className="mt-4 space-y-2">
               <h3 className="text-sm font-semibold text-foreground">By section</h3>
-              <ul className="space-y-1.5">
+              <ul className="space-y-1.5 max-[640px]:pr-16">
                 {breakdown.map((row) => (
                   <li key={row.id} className="flex min-w-0 items-center gap-3 text-sm">
                     <span className="min-w-0 flex-1 break-words text-foreground">{row.title}</span>

@@ -76,7 +76,7 @@ describe("packsLeftCopy", () => {
     expect(packsLeftCopy({ ...state, requestsLeft: 12, packsLeft: 1 })?.text).toBe("About 1 pack left today · resets 8:00 AM");
     expect(packsLeftCopy({ ...state, requestsLeft: 5, packsLeft: 0 })).toEqual({ text: "Less than a pack left today · resets 8:00 AM", low: true });
     expect(packsLeftCopy({ ...state, exhausted: true })).toEqual({ text: "Today's free requests are used up. More at 8:00 AM.", low: true });
-    expect(packsLeftCopy({ ...state, limited: false, requestsLeft: null, packsLeft: null })?.text).toBe("No daily limit on today's free models");
+    expect(packsLeftCopy({ ...state, limited: false, requestsLeft: null, packsLeft: null })?.text).toBe("Requests available today · resets 8:00 AM");
     expect(packsLeftCopy({ ...state, requestsLeft: null, packsLeft: null })).toBeNull();
   });
 });

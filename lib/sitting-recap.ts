@@ -29,7 +29,7 @@ export type SectionBreakdownRow = { id: string; title: string; correct: number; 
 /**
  * Correct answers per Locked In section this sitting, in document order. An
  * item counts for the first section its citations overlap; items with no
- * matching section go to "Other", last. Sections without items are left out.
+ * matching section go to "Across the pack", last. Sections without items are left out.
  */
 export function sectionBreakdown({
   lockedIn,
@@ -40,7 +40,7 @@ export function sectionBreakdown({
 }): SectionBreakdownRow[] {
   const sections = lockedIn ? sectionsFromLockedIn(lockedIn) : [];
   const rows = sections.map((section) => ({ id: section.id, title: section.title, correct: 0, total: 0 }));
-  const other = { id: "other", title: "Other", correct: 0, total: 0 };
+  const other = { id: "other", title: "Across the pack", correct: 0, total: 0 };
   for (const item of items) {
     const pages = citedPages(item.text);
     const index = sections.findIndex((section) => pagesOverlap(pages, section.pages));

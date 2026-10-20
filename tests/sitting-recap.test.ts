@@ -77,7 +77,7 @@ describe("sectionBreakdown", () => {
     expect(rows.every((row) => row.id)).toBe(true);
   });
 
-  it("groups items without a matching section as Other, last", () => {
+  it("groups items without a matching section as Across the pack, last", () => {
     expect(sectionBreakdown({
       lockedIn: LOCKED_IN,
       items: [
@@ -87,13 +87,13 @@ describe("sectionBreakdown", () => {
       ],
     })).toEqual([
       { id: expect.any(String), title: "Cells", correct: 1, total: 1 },
-      { id: "other", title: "Other", correct: 1, total: 2 },
+      { id: "other", title: "Across the pack", correct: 1, total: 2 },
     ]);
   });
 
-  it("puts everything under Other without a Locked In and is empty without items", () => {
+  it("puts everything under Across the pack without a Locked In and is empty without items", () => {
     expect(sectionBreakdown({ lockedIn: null, items: [{ text: "A [S1 p.1]", correct: true }] })).toEqual([
-      { id: "other", title: "Other", correct: 1, total: 1 },
+      { id: "other", title: "Across the pack", correct: 1, total: 1 },
     ]);
     expect(sectionBreakdown({ lockedIn: LOCKED_IN, items: [] })).toEqual([]);
   });

@@ -135,7 +135,16 @@ function AssistantBubble({ message, question, reviewerId, onMakeCard, onToggleSa
         <UnsourcedActionsProvider value={null}>
           <SourceViewerProvider reviewerId={reviewerId} citationSources={message.citationSources}>
             {message.refused ? <p>{ASK_REFUSED_COPY}</p> : null}
-            {message.content.trim() ? <MarkdownBody source={message.content} /> : null}
+            {message.content.trim() ? (
+              message.refused ? (
+                // A refused note reads like the fixed line above it, not like a serif study answer.
+                <div className="[&_.prose-study]:font-sans [&_.prose-study]:text-sm [&_.prose-study]:leading-relaxed">
+                  <MarkdownBody source={message.content} />
+                </div>
+              ) : (
+                <MarkdownBody source={message.content} />
+              )
+            ) : null}
           </SourceViewerProvider>
         </UnsourcedActionsProvider>
 

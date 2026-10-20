@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowClockwise,
   CircleNotch,
@@ -168,6 +168,10 @@ export function SourcePanel({
   vision,
 }: SourcePanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const pasteToggleRef = useRef<HTMLButtonElement>(null);
+  const pasteTitleRef = useRef<HTMLInputElement>(null);
+  // Where focus goes after the paste form opens or closes; read by the effect below.
+  const pasteFocusRef = useRef<"title" | "toggle" | null>(null);
   const [sources, setSources] = useState(initialSources);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
@@ -181,6 +185,7 @@ export function SourcePanel({
   const [pasteText, setPasteText] = useState("");
   const [pasteBusy, setPasteBusy] = useState(false);
   const [pasteError, setPasteError] = useState<string | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
 
   function commit(next: SourceListItem[]) {
     setSources(next);
@@ -328,6 +333,8 @@ export function SourcePanel({
       commit(next);
       setPasteTitle("");
       setPasteText("");
+      setPasteOpen(false);
+      pasteFocusRef.current = "toggle";
     } catch (caught) {
       setPasteError(
         caught instanceof Error ? caught.message : "Could not add pasted text.",
@@ -335,6 +342,22 @@ export function SourcePanel({
     } finally {
       setPasteBusy(false);
     }
+  }
+
+  // Typed text is never hidden: the form stays open while it holds text.
+  const hasPasteText = pasteText.trim() !== "";
+  const pasteShown = pasteOpen || hasPasteText;
+
+  useEffect(() => {
+    const target = pasteFocusRef.current;
+    if (!target) return;
+    pasteFocusRef.current = null;
+    (target === "title" ? pasteTitleRef : pasteToggleRef).current?.focus();
+  }, [pasteShown, pasteBusy]);
+
+  function setPasteFormOpen(open: boolean) {
+    pasteFocusRef.current = open ? "title" : "toggle";
+    setPasteOpen(open);
   }
 
   return (
@@ -378,7 +401,7 @@ export function SourcePanel({
           />
           <Button
             type="button"
-            variant="outline"
+            variant="default"
             disabled={uploading}
             onClick={() => inputRef.current?.click()}
           >
@@ -399,7 +422,25 @@ export function SourcePanel({
         </div>
       </div>
 
-      <div className="grid gap-2 rounded-xl border border-border/80 bg-surface/40 p-3 sm:p-4">
+      <div>
+        <Button
+          ref={pasteToggleRef}
+          type="button"
+          variant="link"
+          size="sm"
+          aria-expanded={pasteShown}
+          aria-controls="source-paste-form"
+          disabled={hasPasteText}
+          onClick={() => setPasteFormOpen(!pasteShown)}
+        >
+          {pasteShown ? "Hide paste text" : "Paste text instead"}
+        </Button>
+      </div>
+      <div
+        id="source-paste-form"
+        hidden={!pasteShown}
+        className="grid gap-2 rounded-xl border border-border/80 bg-surface/40 p-3 sm:p-4"
+      >
         <div>
           <h3 className="text-sm font-semibold text-foreground">Paste text</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
@@ -409,6 +450,7 @@ export function SourcePanel({
         <label htmlFor="source-paste-title" className="grid gap-1 text-xs text-muted-foreground">
           Title
           <input
+            ref={pasteTitleRef}
             id="source-paste-title"
             name="pasteTitle"
             value={pasteTitle}
@@ -437,6 +479,11 @@ export function SourcePanel({
           <Button type="button" variant="outline" disabled={pasteBusy || !pasteText.trim()} onClick={() => void addPaste()}>
             {pasteBusy ? "Adding" : "Add pasted text"}
           </Button>
+          {hasPasteText ? null : (
+            <Button type="button" variant="ghost" onClick={() => setPasteFormOpen(false)}>
+              Cancel
+            </Button>
+          )}
           <span className="text-xs text-muted-foreground">
             {pasteText.length.toLocaleString()} / {MAX_PASTE_TEXT_CHARS.toLocaleString()}
           </span>

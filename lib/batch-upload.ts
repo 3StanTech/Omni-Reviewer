@@ -44,6 +44,12 @@ export function normalizeSource(raw: Record<string, unknown>): SourceListItem {
   };
 }
 
+/** How long Blob upload progress may stay still before the upload is aborted. */
+export const UPLOAD_STALL_MS = 60_000;
+
+export const UPLOAD_STALLED_COPY =
+  "Upload stalled. Check your connection and try again.";
+
 /**
  * Upload one file to Blob and register it as a source of the pack. The pack
  * page and the Study desk's batch upload share this sequence: client token
@@ -87,15 +93,53 @@ export async function uploadSourceFile(args: {
   // The server mints the opaque attempt identity together with the Blob
   // client token. Keep it only for this registration request.
   const attemptToken = tokenPayload.attemptToken;
-  const blob = await put(pathname, file, {
-    access: "private",
-    token: tokenPayload.clientToken,
-    contentType: file.type || undefined,
-    multipart,
-    onUploadProgress: ({ percentage }) => {
-      args.onProgress?.(Math.round(percentage));
-    },
+  // The stall timer covers the Blob `put` only. It restarts only when the
+  // upload percentage rises past the highest value seen, so the 0% event each
+  // retry reports does not count as progress. When it fires, the upload fails
+  // at once and Blob is aborted so it stops at its next attempt.
+  const controller = new AbortController();
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  let rejectStalled: (error: Error) => void = () => {};
+  const stalledPromise = new Promise<never>((_, reject) => {
+    rejectStalled = reject;
   });
+  const armStallTimer = () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      rejectStalled(new Error(UPLOAD_STALLED_COPY));
+      controller.abort();
+    }, UPLOAD_STALL_MS);
+  };
+  let highestPercentage = 0;
+  // Blob throttles progress with a trailing call that can land after `put`
+  // settles; ignore it so it cannot re-arm the timer or move the bar.
+  let uploadDone = false;
+  let blob: Awaited<ReturnType<typeof put>>;
+  try {
+    armStallTimer();
+    const upload = put(pathname, file, {
+      access: "private",
+      token: tokenPayload.clientToken,
+      contentType: file.type || undefined,
+      multipart,
+      abortSignal: controller.signal,
+      onUploadProgress: ({ percentage }) => {
+        if (uploadDone) return;
+        if (percentage > highestPercentage) {
+          highestPercentage = percentage;
+          armStallTimer();
+        }
+        args.onProgress?.(Math.round(percentage));
+      },
+    });
+    // Whichever promise loses the race must not surface as unhandled.
+    upload.catch(() => {});
+    stalledPromise.catch(() => {});
+    blob = await Promise.race([upload, stalledPromise]);
+  } finally {
+    uploadDone = true;
+    clearTimeout(stallTimer);
+  }
 
   const res = await fetch(`/api/reviewers/${reviewerId}/sources`, {
     method: "POST",
