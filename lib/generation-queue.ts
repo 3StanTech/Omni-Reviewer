@@ -79,6 +79,7 @@ export type QueueRunner = {
 export type QueueRowState =
   | { kind: "uploading" }
   | { kind: "reading" }
+  | { kind: "uploadFailed" }
   | { kind: "unreadable" }
   | { kind: "queued" }
   | { kind: "generating"; step: GenerateKind | null; index: number; total: number }
@@ -167,6 +168,8 @@ export function queueRowLabel(state: QueueRowState): string {
       return "Uploading";
     case "reading":
       return "Reading";
+    case "uploadFailed":
+      return "Could not upload";
     case "unreadable":
       return "Could not read this file";
     case "queued":

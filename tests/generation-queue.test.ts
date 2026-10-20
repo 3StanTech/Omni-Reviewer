@@ -159,6 +159,7 @@ describe("queueRowState", () => {
       queueRowLabel({ kind: "queued" }),
       queueRowLabel({ kind: "waiting" }),
       queueRowLabel({ kind: "failed" }),
+      queueRowLabel({ kind: "uploadFailed" }),
       queueRowLabel({ kind: "unreadable" }),
     ];
     expect(labels).toEqual([
@@ -167,6 +168,7 @@ describe("queueRowState", () => {
       "Queued",
       "Waiting for tomorrow's free requests (resets 8:00 AM)",
       "Could not generate",
+      "Could not upload",
       "Could not read this file",
     ]);
     expect(resetCopy()).toBe("resets 8:00 AM");

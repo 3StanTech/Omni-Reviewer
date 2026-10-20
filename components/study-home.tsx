@@ -108,6 +108,7 @@ export function StudyHome({
         rows={queue.rows}
         status={queue.status}
         remove={queue.remove}
+        dismissUpload={queue.dismissUpload}
         retry={queue.retry}
         checkAgain={queue.checkAgain}
       />

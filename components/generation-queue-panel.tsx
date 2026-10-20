@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 
 type GenerationQueuePanelProps = Pick<
   ReturnType<typeof useGenerationQueue>,
-  "rows" | "status" | "remove" | "retry" | "checkAgain"
+  "rows" | "status" | "remove" | "dismissUpload" | "retry" | "checkAgain"
 >;
 
 function RowIcon({ state }: { state: QueueRowState }) {
@@ -42,12 +42,15 @@ function RowIcon({ state }: { state: QueueRowState }) {
     case "waiting":
       return <Clock aria-hidden className={cn(className, "text-muted-foreground")} weight="bold" />;
     case "failed":
+    case "uploadFailed":
     case "unreadable":
       return <WarningCircle aria-hidden className={cn(className, "text-warning")} weight="bold" />;
   }
 }
 
 function canRemove(row: QueueRow): boolean {
+  // A failed upload whose empty pack was deleted has no pack, only its row.
+  if (row.state.kind === "uploadFailed") return true;
   return row.reviewerId !== null
     && row.state.kind !== "generating"
     && row.state.kind !== "uploading"
@@ -59,6 +62,7 @@ export function GenerationQueuePanel({
   rows,
   status,
   remove,
+  dismissUpload,
   retry,
   checkAgain,
 }: GenerationQueuePanelProps) {
@@ -158,7 +162,9 @@ export function GenerationQueuePanel({
                   size="icon-xs"
                   aria-label={`Remove ${row.name} from the queue`}
                   title="Remove from queue"
-                  onClick={() => void remove(row.reviewerId!)}
+                  onClick={() =>
+                    row.reviewerId ? void remove(row.reviewerId) : dismissUpload(row.key)
+                  }
                 >
                   <X weight="bold" />
                 </Button>

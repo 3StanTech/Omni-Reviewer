@@ -38,7 +38,7 @@ type UploadRow = {
   reviewerId: string | null;
   topicId: string;
   name: string;
-  state: "uploading" | "reading" | "unreadable";
+  state: "uploading" | "reading" | "uploadFailed" | "unreadable";
   message: string | null;
 };
 
@@ -287,6 +287,8 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
           ...current,
           { key, reviewerId: null, topicId, name, state: "uploading", message: null },
         ]);
+        let reviewerId: string | null = null;
+        let landed = false;
         try {
           const created = await fetch("/api/reviewers", {
             method: "POST",
@@ -294,7 +296,7 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
             body: JSON.stringify({ topicId, name }),
           });
           if (!created.ok) throw new Error(await readApiError(created));
-          const { id: reviewerId } = (await created.json()) as { id: string };
+          reviewerId = ((await created.json()) as { id: string }).id;
           patch(key, { reviewerId });
           const source = await uploadSourceFile({
             userId,
@@ -302,7 +304,10 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
             file,
             // Ingest runs inside the register request once the bytes land.
             onProgress: (percentage) => {
-              if (percentage >= 100) patch(key, { state: "reading" });
+              if (percentage >= 100) {
+                landed = true;
+                patch(key, { state: "reading" });
+              }
             },
           });
           if (source.ingestStatus !== "ready") {
@@ -322,9 +327,26 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
           setUploads((current) => current.filter((row) => row.key !== key));
           void kick();
         } catch (caught) {
+          const message = caught instanceof Error ? caught.message : null;
+          if (landed) {
+            // The bytes arrived and reading them failed.
+            patch(key, { state: "unreadable", message });
+            continue;
+          }
+          // The file never arrived, so no source was registered: the pack this
+          // batch just made is empty and goes with the failed upload.
+          let deleted = false;
+          if (reviewerId) {
+            try {
+              deleted = (await fetch(`/api/reviewers/${reviewerId}`, { method: "DELETE" })).ok;
+            } catch {
+              deleted = false;
+            }
+          }
           patch(key, {
-            state: "unreadable",
-            message: caught instanceof Error ? caught.message : null,
+            state: "uploadFailed",
+            message,
+            ...(deleted ? { reviewerId: null } : {}),
           });
         }
       }
@@ -350,6 +372,11 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
       setError(caught instanceof Error ? caught.message : "Could not update the queue.");
     }
   }, [loadQueue]);
+
+  /** Clears a failed upload's row whose pack is already gone. */
+  const dismissUpload = useCallback((key: string) => {
+    setUploads((current) => current.filter((row) => row.key !== key));
+  }, []);
 
   const retry = useCallback(async (reviewerId: string) => {
     failedRef.current.delete(reviewerId);
@@ -413,6 +440,7 @@ export function useGenerationQueue({ userId }: { userId: string | null }) {
     rows,
     enqueueFiles,
     remove,
+    dismissUpload,
     retry,
     checkAgain,
     packsReady,
