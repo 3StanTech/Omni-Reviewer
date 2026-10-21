@@ -39,8 +39,9 @@ export async function GET(
   }
   const { kind, citations, notes } = parsed.data;
 
+  // Read-only print pages: the pack workspace would start its own reads and saves.
   const packPath = `/topics/${reviewer.topicId}/reviewers/${reviewer.id}`;
-  const url = new URL(kind === "packet" ? `${packPath}/packet` : `${packPath}?mode=${kind}`, requestUrl.origin);
+  const url = new URL(kind === "packet" ? `${packPath}/packet` : `${packPath}/print?kind=${kind}`, requestUrl.origin);
   const bodyData = kind === "packet" ? undefined : { exportCitations: citations, exportAnnotations: notes };
 
   try {

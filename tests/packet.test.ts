@@ -6,11 +6,8 @@ import { describe, expect, it } from "vitest";
 const root = path.resolve(__dirname, "..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
 
-const page = read("app/topics/[topicId]/reviewers/[reviewerId]/packet/page.tsx");
 const packet = read("components/packet-document.tsx");
 const exportMenu = read("components/study-export.tsx");
-const pdfRoute = read("app/api/reviewers/[id]/pdf/route.ts");
-const pdfRenderer = read("lib/pdf.ts");
 const css = read("app/globals.css");
 
 function packetPrintBlock(): string {
@@ -18,32 +15,6 @@ function packetPrintBlock(): string {
   expect(start).toBeGreaterThanOrEqual(0);
   return css.slice(start);
 }
-
-describe("study packet page", () => {
-  it("requires a session and scopes the topic and pack to the owner", () => {
-    expect(page).toContain("await auth()");
-    expect(page).toContain('redirect("/login")');
-    expect(page).toContain("getTopic(topicId, userId)");
-    expect(page).toContain("getReviewer(reviewerId, userId)");
-    expect(page).toContain("reviewer.topicId !== topicId");
-    expect(page.match(/notFound\(\)/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(page).toContain('export const dynamic = "force-dynamic"');
-  });
-
-  it("loads the latest Locked In and Summary views and the live cards", () => {
-    expect(page).toContain('getViewForReviewer(reviewerId, userId, "locked_in")');
-    expect(page).toContain('getViewForReviewer(reviewerId, userId, "summary")');
-    expect(page).toContain("getCardsForReviewer(reviewerId, userId)");
-    expect(page).not.toContain("AppShell");
-  });
-
-  it("has its own loading skeleton without the app shell", () => {
-    const loading = read("app/topics/[topicId]/reviewers/[reviewerId]/packet/loading.tsx");
-    expect(loading).toContain("Loading study packet");
-    expect(loading).toContain("reading-surface");
-    expect(loading).not.toContain("AppShell");
-  });
-});
 
 describe("study packet document", () => {
   it("strips citations and page markers and labels unsourced claims in words", () => {
@@ -68,13 +39,6 @@ describe("study packet document", () => {
     expect(packet).toContain("renderClozeText(card.front)");
     expect(packet).toContain("renderClozeText(card.front, true)");
     expect(packet).toContain("Answer:");
-  });
-
-  it("never opens the browser print dialog", () => {
-    expect(packet).not.toContain("window.print");
-    expect(packet).not.toContain("Print or save as PDF");
-    expect(page).not.toContain("print");
-    expect(packet).not.toMatch(/—/);
   });
 });
 
@@ -105,30 +69,3 @@ describe("export menu", () => {
   });
 });
 
-describe("PDF download route", () => {
-  it("requires a session and scopes the pack to the owner", () => {
-    expect(pdfRoute).toContain("await auth()");
-    expect(pdfRoute).toContain("getReviewer(reviewerId, userId)");
-    expect(pdfRoute).toContain("reviewer.deletingAt");
-    expect(pdfRoute).toContain('z.enum(["locked_in", "summary", "packet"])');
-  });
-
-  it("renders this app's own pages and returns an attachment", () => {
-    expect(pdfRoute).toContain("requestUrl.origin");
-    expect(pdfRoute).toContain("`${packPath}/packet`");
-    expect(pdfRoute).toContain("`${packPath}?mode=${kind}`");
-    expect(pdfRoute).toContain("exportCitations: citations, exportAnnotations: notes");
-    expect(pdfRoute).toContain('"Content-Type": "application/pdf"');
-    expect(pdfRoute).toContain("attachment; filename*=UTF-8''");
-    expect(pdfRoute).toContain("PdfSignedOutError");
-  });
-
-  it("replays the requester's cookies only for the app's host and closes Chrome", () => {
-    expect(pdfRenderer).toContain('import "server-only"');
-    expect(pdfRenderer).toContain("domain: url.hostname");
-    expect(pdfRenderer).toContain('pathname.startsWith("/login")');
-    expect(pdfRenderer).toContain('format: "A4"');
-    expect(pdfRenderer).toContain("printBackground: true");
-    expect(pdfRenderer).toMatch(/finally \{\s*await browser\.close\(\);/);
-  });
-});

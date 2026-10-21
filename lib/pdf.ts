@@ -7,6 +7,7 @@ chromium.setGraphicsMode = false;
 
 const LOAD_TIMEOUT_MS = 30_000;
 const CONTENT_SELECTOR = '.prose-study:not([role="status"]), .print-document';
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 export class PdfSignedOutError extends Error {}
 
@@ -47,6 +48,12 @@ export async function renderPdf({ url, cookieHeader, bodyData }: RenderPdfInput)
   try {
     await browser.setCookie(...parseCookies(cookieHeader, url));
     const page = await browser.newPage();
+    // Rendering an export only reads: refuse any request that could write.
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      if (READ_METHODS.has(request.method())) void request.continue();
+      else void request.abort("blockedbyclient");
+    });
     // Print the Day look; with no saved look the app starts in Dream Land.
     await page.evaluateOnNewDocument(() => localStorage.setItem("omni-look", "day"));
     await page.goto(url.toString(), { waitUntil: "networkidle2", timeout: LOAD_TIMEOUT_MS });
