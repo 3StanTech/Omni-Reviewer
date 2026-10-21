@@ -29,7 +29,6 @@ import {
   claimGenerationJobStep,
   completeClaimedGenerationJob,
   getGenerationJobForReviewer,
-  getLatestFullGenerationJobForReviewer,
   getLatestView,
   getReviewer,
   getViewForGeneration,
@@ -68,19 +67,9 @@ async function responseForJob(
   job: JobRow,
   status = 200,
 ) {
-  const fullBaseline = job.mode === "single"
-    ? await getLatestFullGenerationJobForReviewer(reviewerId, userId)
-    : null;
-  const viewsPayload = await loadGenerationViews(
-    reviewerId,
-    {
-      userId,
-      latestJob: job,
-      baselineFullJob: fullBaseline?.mode === "full"
-        ? { mode: "full", generationRunId: fullBaseline.generationRunId, step: fullBaseline.step }
-        : null,
-    },
-  );
+  // The job supplies response metadata only; visibility comes from the
+  // reviewer's persisted lineage so a historical job id cannot widen it.
+  const viewsPayload = await loadGenerationViews(reviewerId, { userId });
   const safeErrorMessage = publicGenerationErrorMessage(
     job.errorCode,
     job.errorMessage,

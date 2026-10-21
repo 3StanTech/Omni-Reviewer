@@ -16,13 +16,26 @@ import {
   selectVisibleGenerationRows,
   viewsPayloadFromRows,
 } from "@/lib/serialize-view";
-import { listAnnotationPageForReviewer } from "@/lib/queries";
+import {
+  getActiveGenerationJobForReviewer,
+  getGenerationLineage,
+  getLatestGenerationJobForReviewer,
+  listAnnotationPageForReviewer,
+} from "@/lib/queries";
 
 export type GenerationViewKind = "locked_in" | "summary" | "test_me" | "carded";
 
+/**
+ * The one view projection for refresh, poll, resume, save, grounding and
+ * export. With a userId, visibility always comes from the owner's persisted
+ * state: the replacement-boundary lineage and the reviewer's current job
+ * (active first, else latest). A caller's `latestJob` is then ignored, so
+ * polling a historical job id answers with the same views as /views.
+ */
 export async function loadGenerationViews(
   reviewerId: string,
   options?: string | {
+    /** Used only without a userId; with one, the current job is read from the database. */
     latestJob?: {
       mode: "full" | "single";
       generationRunId: string;
@@ -32,6 +45,7 @@ export async function loadGenerationViews(
       completedKinds?: GenerateKind[] | null;
       active?: boolean;
     } | null;
+    /** @deprecated Ignored; the boundary is resolved from persisted job order. */
     baselineFullJob?: {
       mode: "full";
       generationRunId: string;
@@ -67,12 +81,21 @@ export async function loadGenerationViews(
     ? { locked_in: annotationPages[0].nextCursor, summary: annotationPages[1].nextCursor }
     : undefined;
 
-  if (typeof options === "object" && options?.latestJob) {
-    const visible = selectVisibleGenerationRows(
-      rows,
-      options.latestJob,
-      options.baselineFullJob ?? null,
-    );
+  if (typeof options === "object" && (userId || options.latestJob)) {
+    const resolveLatestJob = async () => {
+      if (!userId) return options.latestJob ?? null;
+      return (
+        (await getActiveGenerationJobForReviewer(reviewerId, userId)) ??
+        getLatestGenerationJobForReviewer(reviewerId, userId)
+      );
+    };
+    const [latestJob, lineage] = await Promise.all([
+      resolveLatestJob(),
+      userId
+        ? getGenerationLineage(reviewerId, userId, rows.map((row) => row.generationRunId))
+        : null,
+    ]);
+    const visible = selectVisibleGenerationRows(rows, latestJob, lineage);
     return viewsPayloadFromRows(visible.rows, {
       currentGenerationRunId: visible.currentGenerationRunId,
       staleKinds: [...new Set([...visible.staleKinds, ...manualStaleKinds(rows)])],

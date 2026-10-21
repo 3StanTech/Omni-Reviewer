@@ -109,6 +109,7 @@ import {
 import {
   type GenerateKind,
 } from "@/lib/generation-plan";
+import type { GenerationLineage } from "@/lib/serialize-view";
 
 export async function listTopics(userId: string): Promise<Topic[]> {
   return db
@@ -4280,12 +4281,17 @@ export async function getLatestGenerationJobForReviewer(
         eq(generationJobs.userId, userId),
       ),
     )
-    .orderBy(desc(generationJobs.createdAt), desc(generationJobs.updatedAt))
+    // Order by immutable creation identity; updatedAt moves on every claim.
+    .orderBy(desc(generationJobs.createdAt), desc(generationJobs.id))
     .limit(1);
   return row ?? null;
 }
 
-/** Find the latest full-pack run used as the revision baseline for redo overlays. */
+/**
+ * Find the latest full replacement run (a full redo, including legacy redo
+ * rows): the revision boundary for view visibility. Additive missing-mode runs
+ * are also mode "full" but never replace saved modes, so they are excluded.
+ */
 export async function getLatestFullGenerationJobForReviewer(
   reviewerId: string,
   userId: string,
@@ -4298,11 +4304,51 @@ export async function getLatestFullGenerationJobForReviewer(
         eq(generationJobs.reviewerId, reviewerId),
         eq(generationJobs.userId, userId),
         eq(generationJobs.mode, "full"),
+        sql`${generationJobs.intent} <> 'generate_missing'::generation_job_intent`,
       ),
     )
-    .orderBy(desc(generationJobs.createdAt), desc(generationJobs.updatedAt))
+    .orderBy(desc(generationJobs.createdAt), desc(generationJobs.id))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Resolve which of the given view run ids were created at or after the
+ * replacement boundary. Creation time is compared in SQL so microsecond order
+ * is kept; a run created at the boundary's exact timestamp that is not the
+ * boundary itself counts as earlier, so a tie never re-shows replaced content.
+ */
+export async function getGenerationLineage(
+  reviewerId: string,
+  userId: string,
+  runIds: readonly (string | null | undefined)[],
+): Promise<GenerationLineage> {
+  const boundary = await getLatestFullGenerationJobForReviewer(reviewerId, userId);
+  if (!boundary) return { boundaryRunId: null, currentRunIds: [] };
+  const candidates = [
+    ...new Set(runIds.filter((id): id is string => Boolean(id) && id !== boundary.generationRunId)),
+  ];
+  if (candidates.length === 0) {
+    return { boundaryRunId: boundary.generationRunId, currentRunIds: [boundary.generationRunId] };
+  }
+  const later = await db
+    .select({ generationRunId: generationJobs.generationRunId })
+    .from(generationJobs)
+    .where(
+      and(
+        eq(generationJobs.reviewerId, reviewerId),
+        eq(generationJobs.userId, userId),
+        inArray(generationJobs.generationRunId, candidates),
+        gt(
+          generationJobs.createdAt,
+          sql`(SELECT b.created_at FROM generation_jobs b WHERE b.id = ${boundary.id})`,
+        ),
+      ),
+    );
+  return {
+    boundaryRunId: boundary.generationRunId,
+    currentRunIds: [boundary.generationRunId, ...new Set(later.map((row) => row.generationRunId))],
+  };
 }
 
 /** Reactivate a terminal run so Retry/Resume preserves its frozen scope. */

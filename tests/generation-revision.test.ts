@@ -44,6 +44,9 @@ const fake = vi.hoisted(() => ({
   views: new Map<string, FakeView>(),
   staleKinds: new Set<string>(),
   failKinds: new Set<string>(),
+  dbRows: [] as unknown[],
+  currentJob: null as unknown,
+  lineage: { boundaryRunId: null as string | null, currentRunIds: [] as string[] },
 }));
 
 vi.mock("server-only", () => ({}));
@@ -58,7 +61,7 @@ vi.mock("@/lib/db", () => {
     for (const method of ["update", "set", "where", "select", "from", "orderBy"]) {
       node[method] = () => node;
     }
-    node.then = (resolve: (value: unknown[]) => unknown) => resolve([]);
+    node.then = (resolve: (value: unknown[]) => unknown) => resolve(fake.dbRows);
     return node;
   };
   return { db: { update: () => chain(), select: () => chain() } };
@@ -78,6 +81,10 @@ vi.mock("@/lib/queries", () => {
     getReviewer: vi.fn(async () => ({ id: "reviewer-1" })),
     getGenerationJobForReviewer: vi.fn(async () => snapshot()),
     getLatestFullGenerationJobForReviewer: vi.fn(async () => null),
+    getActiveGenerationJobForReviewer: vi.fn(async () => null),
+    getLatestGenerationJobForReviewer: vi.fn(async () => fake.currentJob),
+    getGenerationLineage: vi.fn(async () => fake.lineage),
+    listAnnotationPageForReviewer: vi.fn(async () => ({ annotations: [], nextCursor: null })),
     reactivateGenerationJobForResume: vi.fn(async () => {
       Object.assign(fake.job, {
         status: "queued",
@@ -479,10 +486,9 @@ describe("generation revision boundaries", () => {
   });
 
   it("uses a partial full run as baseline and overlays a later terminal single redo", () => {
-    const fullBaseline = {
-      mode: "full" as const,
-      generationRunId: "run-full-partial",
-      step: "test_me",
+    const lineage = {
+      boundaryRunId: "run-full-partial",
+      currentRunIds: ["run-full-partial", "run-single-summary"],
     };
     const singleRedo = {
       mode: "single" as const,
@@ -498,7 +504,7 @@ describe("generation revision boundaries", () => {
         { kind: "carded", generationRunId: "run-old" },
       ],
       singleRedo,
-      fullBaseline,
+      lineage,
     );
 
     expect(result.rows.map((row) => [row.kind, row.generationRunId])).toEqual([
@@ -507,6 +513,194 @@ describe("generation revision boundaries", () => {
     ]);
     expect(result.staleKinds).toEqual(["test_me", "carded"]);
     expect(result.currentGenerationRunId).toBe("run-full-partial");
+  });
+
+  it("keeps an earlier single redo visible after a later single redo of another mode", () => {
+    const rows = [
+      { kind: "locked_in", generationRunId: "run-full" },
+      { kind: "summary", generationRunId: "run-redo-summary" },
+      { kind: "test_me", generationRunId: "run-redo-test-me" },
+      { kind: "carded", generationRunId: "run-full" },
+    ];
+    const lineage = {
+      boundaryRunId: "run-full",
+      currentRunIds: ["run-full", "run-redo-summary", "run-redo-test-me"],
+    };
+    const redoTestMe = {
+      mode: "single" as const,
+      intent: "redo" as const,
+      generationRunId: "run-redo-test-me",
+      step: "test_me",
+      active: false,
+    };
+
+    const done = selectVisibleGenerationRows(rows, redoTestMe, lineage);
+    expect(done.rows.map((row) => [row.kind, row.generationRunId])).toEqual(rows.map((row) => [row.kind, row.generationRunId]));
+    expect(done.staleKinds).toEqual([]);
+    expect(done.currentGenerationRunId).toBe("run-full");
+
+    // While Test Me is being redone, only Test Me is hidden; the earlier
+    // Summary redo stays on screen.
+    const running = selectVisibleGenerationRows(
+      [...rows.slice(0, 2), { kind: "test_me", generationRunId: "run-full" }, rows[3]!],
+      { ...redoTestMe, active: true },
+      { boundaryRunId: "run-full", currentRunIds: ["run-full", "run-redo-summary"] },
+    );
+    expect(running.rows.map((row) => row.kind)).toEqual(["locked_in", "summary", "carded"]);
+    expect(running.staleKinds).toEqual(["test_me"]);
+  });
+
+  it("never makes an additive missing-mode run the boundary for a later redo", () => {
+    // Full redo, then Generate missing filled Carded, then Summary was redone.
+    const rows = [
+      { kind: "locked_in", generationRunId: "run-full" },
+      { kind: "summary", generationRunId: "run-redo-summary" },
+      { kind: "test_me", generationRunId: "run-full" },
+      { kind: "carded", generationRunId: "run-missing" },
+    ];
+    const result = selectVisibleGenerationRows(
+      rows,
+      { mode: "single", intent: "redo", generationRunId: "run-redo-summary", step: "summary", active: false },
+      { boundaryRunId: "run-full", currentRunIds: ["run-full", "run-missing", "run-redo-summary"] },
+    );
+
+    expect(result.rows).toHaveLength(4);
+    expect(result.staleKinds).toEqual([]);
+    expect(result.currentGenerationRunId).toBe("run-full");
+  });
+
+  it("keeps a missing-mode run additive over rows from earlier valid runs", () => {
+    const result = selectVisibleGenerationRows(
+      [
+        { kind: "locked_in", generationRunId: "run-full" },
+        { kind: "summary", generationRunId: "run-redo-summary" },
+        { kind: "test_me", generationRunId: "run-full" },
+      ],
+      {
+        mode: "full",
+        intent: "generate_missing",
+        generationRunId: "run-missing",
+        step: "carded",
+        targetKinds: ["carded"],
+        active: true,
+      },
+      { boundaryRunId: "run-full", currentRunIds: ["run-full", "run-redo-summary"] },
+    );
+
+    expect(result.rows.map((row) => row.kind)).toEqual(["locked_in", "summary", "test_me"]);
+    expect(result.staleKinds).toEqual(["carded"]);
+    expect(result.currentGenerationRunId).toBe("run-missing");
+  });
+
+  it("never re-shows rows replaced by a later full redo, even after an unrelated single redo", () => {
+    // run-old-redo predates the partial full redo run-full-2, so its Summary
+    // and the run-full-1 rows stay hidden after a failed Carded redo.
+    const result = selectVisibleGenerationRows(
+      [
+        { kind: "locked_in", generationRunId: "run-full-2" },
+        { kind: "summary", generationRunId: "run-old-redo" },
+        { kind: "test_me", generationRunId: "run-full-1" },
+        { kind: "carded", generationRunId: null },
+      ],
+      { mode: "single", intent: "redo", generationRunId: "run-redo-carded", step: "carded", active: false },
+      { boundaryRunId: "run-full-2", currentRunIds: ["run-full-2"] },
+    );
+
+    expect(result.rows.map((row) => row.kind)).toEqual(["locked_in"]);
+    expect(result.staleKinds).toEqual(["summary", "test_me", "carded"]);
+    expect(result.currentGenerationRunId).toBe("run-full-2");
+  });
+
+  describe("a historical job after a later full redo", () => {
+    // Summary redo A succeeded; full redo B then replaced Locked In but
+    // stopped before Summary. A's Summary predates B and must stay hidden.
+    const historicalSummaryRedo = {
+      mode: "single" as const,
+      intent: "redo" as const,
+      status: "succeeded",
+      generationRunId: "old-summary",
+      step: "summary",
+      targetKinds: ["summary"] as Kind[],
+      active: false,
+    };
+    const partialFullRedo = {
+      mode: "full" as const,
+      intent: "redo" as const,
+      status: "partial",
+      generationRunId: "new-full",
+      step: "summary",
+      targetKinds: ["locked_in", "summary", "test_me", "carded"] as Kind[],
+      active: false,
+    };
+    const lineage = { boundaryRunId: "new-full", currentRunIds: ["new-full"] };
+
+    it("gives the selector the same answer for the historical job as for the current one", () => {
+      const rows = [
+        { kind: "locked_in", generationRunId: "new-full" },
+        { kind: "summary", generationRunId: "old-summary" },
+      ];
+      for (const job of [partialFullRedo, historicalSummaryRedo]) {
+        const result = selectVisibleGenerationRows(rows, job, lineage);
+        expect(result.rows.map((row) => row.kind)).toEqual(["locked_in"]);
+        expect(result.staleKinds).toEqual(["summary"]);
+        expect(result.currentGenerationRunId).toBe("new-full");
+      }
+    });
+
+    it("answers a poll of the historical job id with the same views as a normal load", async () => {
+      const { loadGenerationViews } =
+        await vi.importActual<typeof import("@/lib/generation-jobs")>("@/lib/generation-jobs");
+      const view = (kind: Kind, generationRunId: string) => ({
+        id: `view-${kind}`,
+        reviewerId: "reviewer-1",
+        kind,
+        content: `# ${kind}`,
+        contentJson: { citationSources: [] },
+        modelId: "model/free",
+        generationRunId,
+        revision: 1,
+        contentRevision: 1,
+        annotationRevision: 1,
+        isEdited: false,
+        isPinned: false,
+        generatedAt: new Date("2026-10-01T00:00:00.000Z"),
+        updatedAt: new Date("2026-10-01T00:00:00.000Z"),
+      });
+      fake.dbRows = [view("locked_in", "new-full"), view("summary", "old-summary")];
+      fake.currentJob = partialFullRedo;
+      fake.lineage = lineage;
+      try {
+        const normal = await loadGenerationViews("reviewer-1", { userId: "user-1" });
+        const historical = await loadGenerationViews("reviewer-1", {
+          userId: "user-1",
+          latestJob: historicalSummaryRedo,
+        });
+
+        expect(normal.locked_in?.generationRunId).toBe("new-full");
+        expect(normal.summary).toBeNull();
+        expect(normal.staleKinds).toEqual(["summary"]);
+        expect(historical).toEqual(normal);
+      } finally {
+        fake.dbRows = [];
+        fake.currentJob = null;
+        fake.lineage = { boundaryRunId: null, currentRunIds: [] };
+      }
+    });
+  });
+
+  it("keeps legacy pre-run rows when no full replacement run exists", () => {
+    const result = selectVisibleGenerationRows(
+      [
+        { kind: "locked_in", generationRunId: null },
+        { kind: "summary", generationRunId: "run-redo-summary" },
+      ],
+      { mode: "single", intent: "redo", generationRunId: "run-redo-summary", step: "summary", active: false },
+      { boundaryRunId: null, currentRunIds: [] },
+    );
+
+    expect(result.rows.map((row) => row.kind)).toEqual(["locked_in", "summary"]);
+    expect(result.staleKinds).toEqual([]);
+    expect(result.currentGenerationRunId).toBeNull();
   });
 
   it("hides only the mode being replaced during a single-mode redo", () => {

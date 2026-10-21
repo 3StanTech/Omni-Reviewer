@@ -11,7 +11,6 @@ import {
   getGenerationExistingKinds,
   getGenerationUpstreamRevisions,
   getActiveGenerationJobForReviewer,
-  getLatestFullGenerationJobForReviewer,
   getLatestGenerationJobForReviewer,
   getLatestView,
   getReviewer,
@@ -78,21 +77,12 @@ export async function POST(
   // changed since the first click.
   const active = await getActiveGenerationJobForReviewer(reviewerId, userId);
   if (active) {
-    const fullBaseline = active.mode === "single"
-      ? await getLatestFullGenerationJobForReviewer(reviewerId, userId)
-      : null;
     return NextResponse.json({
       jobId: active.id,
       status: active.status,
       step: active.step,
       job: serializeGenerationJob(active),
-      views: await loadGenerationViews(reviewerId, {
-        userId,
-        latestJob: active,
-        baselineFullJob: fullBaseline?.mode === "full"
-          ? { mode: "full", generationRunId: fullBaseline.generationRunId, step: fullBaseline.step }
-          : null,
-      }),
+      views: await loadGenerationViews(reviewerId, { userId }),
     });
   }
 
@@ -114,25 +104,12 @@ export async function POST(
       });
       if (resumed) {
         if (!fromQueue) await clearReviewerQueued(reviewerId);
-        const resumedBaseline = resumed.mode === "single"
-          ? await getLatestFullGenerationJobForReviewer(reviewerId, userId)
-          : null;
         return NextResponse.json({
           jobId: resumed.id,
           status: resumed.status,
           step: resumed.step,
           job: serializeGenerationJob(resumed),
-          views: await loadGenerationViews(reviewerId, {
-            userId,
-            latestJob: resumed,
-            baselineFullJob: resumedBaseline?.mode === "full"
-              ? {
-                  mode: "full",
-                  generationRunId: resumedBaseline.generationRunId,
-                  step: resumedBaseline.step,
-                }
-              : null,
-          }),
+          views: await loadGenerationViews(reviewerId, { userId }),
         });
       }
     }
@@ -257,20 +234,11 @@ export async function POST(
   });
   if (!fromQueue) await clearReviewerQueued(reviewerId);
 
-  const fullBaseline = job.mode === "single"
-    ? await getLatestFullGenerationJobForReviewer(reviewerId, userId)
-    : null;
   return NextResponse.json({
     jobId: job.id,
     status: job.status,
     step: job.step,
     job: serializeGenerationJob(job),
-    views: await loadGenerationViews(reviewerId, {
-      userId,
-      latestJob: job,
-      baselineFullJob: fullBaseline?.mode === "full"
-        ? { mode: "full", generationRunId: fullBaseline.generationRunId, step: fullBaseline.step }
-        : null,
-    }),
+    views: await loadGenerationViews(reviewerId, { userId }),
   });
 }

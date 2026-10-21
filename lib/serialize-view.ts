@@ -49,6 +49,22 @@ type GenerationVisibilityJob = {
   active?: boolean;
 };
 
+/**
+ * Run provenance for the persisted rows. The boundary is the latest full
+ * replacement run (a full redo, including legacy redo rows); additive
+ * missing-mode runs never become a boundary. `currentRunIds` lists the rows'
+ * run ids created at or after that boundary, resolved from persisted job
+ * order rather than view timestamps.
+ */
+export type GenerationLineage = {
+  boundaryRunId: string | null;
+  currentRunIds: readonly string[];
+};
+
+function isReplacementRun(job: GenerationVisibilityJob | null | undefined): boolean {
+  return job?.mode === "full" && job.intent !== "generate_missing";
+}
+
 export function manualStaleKinds(
   rows: Array<{ kind: string; isEdited?: boolean; updatedAt?: Date }>,
 ): string[] {
@@ -72,116 +88,68 @@ export function manualStaleKinds(
 }
 
 /**
- * Select rows safe for a normal view refresh. During a full run, only rows
- * from that run are visible; an older downstream row is reported as stale but
- * never returned as content. During a single-mode redo, hide only the mode
- * currently being replaced.
+ * Select rows safe for a normal view refresh. Rows from the latest full
+ * replacement run, or from any run after it, stay visible: a later single
+ * redo or missing-mode run never hides another run's saved mode. Rows older
+ * than that boundary are reported as stale but never returned as content.
+ * During an active single-mode redo, the mode being replaced is hidden until
+ * the redo commits its row; a missing-mode run shows a target kind only once
+ * that run commits it. Without a boundary (legacy or redo-only history) every
+ * persisted row, including pre-run rows with no run id, is kept.
  */
 export function selectVisibleGenerationRows<T extends GenerationViewRow>(
   rows: T[],
   latestJob?: GenerationVisibilityJob & { completedKinds?: string[] | null } | null,
-  baselineFullJob?: {
-    mode: "full";
-    generationRunId: string;
-    step: string | null;
-    intent?: "generate_missing" | "redo";
-    targetKinds?: string[] | null;
-  } | null,
+  lineage?: GenerationLineage | null,
 ): {
   rows: T[];
   currentGenerationRunId: string | null;
   staleKinds: string[];
 } {
-  if (!latestJob) {
+  // The latest job, when it is a full replacement, is itself the boundary;
+  // this anchors callers that have not resolved lineage.
+  const boundaryRunId =
+    lineage?.boundaryRunId ??
+    (latestJob && isReplacementRun(latestJob) ? latestJob.generationRunId : null);
+  if (!latestJob && !boundaryRunId) {
     return { rows, currentGenerationRunId: null, staleKinds: [] };
   }
 
-  const staleKinds = new Set<string>();
-  const targetKinds = new Set(
-    latestJob.targetKinds?.length
-      ? latestJob.targetKinds
-      : latestJob.mode === "single" && latestJob.step
-        ? [latestJob.step]
-        : ["locked_in", "summary", "test_me", "carded"],
+  const currentRunIds = new Set(lineage?.currentRunIds ?? []);
+  if (boundaryRunId) currentRunIds.add(boundaryRunId);
+  const missingTargets = new Set(
+    latestJob?.intent === "generate_missing"
+      ? latestJob.targetKinds?.length
+        ? latestJob.targetKinds
+        : ["locked_in", "summary", "test_me", "carded"]
+      : [],
   );
 
-  // Missing-mode runs are additive: existing rows outside the frozen target
-  // list remain visible while newly committed rows overlay their target kind.
-  // A concurrent insert into a target is preserved by the persistence CAS and
-  // is reported as a partial/stale run rather than silently replaced.
-  if (latestJob.intent === "generate_missing") {
-    const visibleRows = rows.filter(
-      (row) => !targetKinds.has(row.kind) || row.generationRunId === latestJob.generationRunId,
-    );
-    for (const kind of targetKinds) {
-      if (!visibleRows.some((row) => row.kind === kind && row.generationRunId === latestJob.generationRunId)) {
-        staleKinds.add(kind);
-      }
+  const staleKinds = new Set<string>();
+  const visibleRows = rows.filter((row) => {
+    const runId = row.generationRunId ?? null;
+    const fromLatestJob = latestJob != null && runId === latestJob.generationRunId;
+    // The boundary always wins: the job only narrows what lineage allows, so
+    // no job, current or historical, can re-show replaced content.
+    let visible = !boundaryRunId || (runId !== null && currentRunIds.has(runId));
+    // A concurrent insert into a missing-mode target is preserved by the
+    // persistence CAS and reported as stale rather than shown as this run.
+    if (missingTargets.has(row.kind)) visible &&= fromLatestJob;
+    if (latestJob?.active && latestJob.mode === "single" && row.kind === latestJob.step) {
+      visible &&= fromLatestJob;
     }
-    return {
-      rows: visibleRows,
-      currentGenerationRunId: latestJob.generationRunId,
-      staleKinds: [...staleKinds],
-    };
-  }
-
-  const fullJob =
-    latestJob.mode === "full" ? latestJob : baselineFullJob ?? null;
-
-  if (!fullJob) {
-    // There is no full-run baseline to anchor a single-mode run. Preserve the
-    // existing rows rather than inventing a revision boundary.
-    return {
-      rows: rows.filter((row) => {
-        const current = !latestJob.active || row.kind !== latestJob.step;
-        if (!current) staleKinds.add(row.kind);
-        return current;
-      }),
-      currentGenerationRunId: null,
-      staleKinds: [...staleKinds],
-    };
-  }
-
-  const baselineRows = rows.filter((row) => {
-    const current = row.generationRunId === fullJob.generationRunId;
-    if (!current) staleKinds.add(row.kind);
-    return current;
+    if (!visible) staleKinds.add(row.kind);
+    return visible;
   });
 
-  if (latestJob.mode === "full") {
-    return {
-      rows: baselineRows,
-      currentGenerationRunId: fullJob.generationRunId,
-      staleKinds: [...staleKinds],
-    };
-  }
-
-  // A single-mode run is an overlay on the latest full-run baseline. If the
-  // redo has not produced a row yet, hide the actively replaced baseline mode
-  // but retain it after a terminal failed redo.
-  const overlay = rows.find(
-    (row) =>
-      row.kind === latestJob.step &&
-      row.generationRunId === latestJob.generationRunId,
-  );
-  const visibleRows = baselineRows.filter(
-    (row) => !(latestJob.active && row.kind === latestJob.step),
-  );
-  if (overlay) {
-    const existingIndex = visibleRows.findIndex((row) => row.kind === overlay.kind);
-    if (existingIndex === -1) visibleRows.push(overlay);
-    else visibleRows[existingIndex] = overlay;
-  }
-
-  const visibleKinds = new Set(visibleRows.map((row) => row.kind));
-  for (const kind of visibleKinds) staleKinds.delete(kind);
-  for (const row of rows) {
-    if (!visibleKinds.has(row.kind)) staleKinds.add(row.kind);
+  for (const kind of missingTargets) {
+    if (!visibleRows.some((row) => row.kind === kind)) staleKinds.add(kind);
   }
 
   return {
     rows: visibleRows,
-    currentGenerationRunId: fullJob.generationRunId,
+    currentGenerationRunId:
+      latestJob?.intent === "generate_missing" ? latestJob.generationRunId : boundaryRunId,
     staleKinds: [...staleKinds],
   };
 }
