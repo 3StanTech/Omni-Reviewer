@@ -59,7 +59,7 @@ Failed sources keep an error message. Video/audio-only packs cannot generate in 
 - **Cost.** About one free model request per 8 image pages, counted toward the shared daily free-request cap. A 40-slide scanned deck is about 5 requests.
 - **Interrupted reading resumes.** Pages already read are never read again. If the tab closes mid-read, reading picks up on the next visit. If the free limit is reached, reading stops and continues the next time the pack is opened.
 - **Generate waits.** While slides are being read in this tab, Generate and Redo are disabled with a note. A pack generated while some pages are unread simply lacks those pages until Redo.
-- **Failure.** A page with nothing readable is marked as such and is not retried, so reading always finishes.
+- **Failure.** A page with nothing readable is marked as such and is not retried, so reading always finishes. A page counts as unreadable only when the provider refuses that image on its last try. When the model key or model itself is refused (401, 403, 404), pages stay unread and the pack says "Slide reading isn't available right now. These pages stay unread, so try again later."
 
 ## Four study modes
 
@@ -126,6 +126,7 @@ A one-line bar on the desk sums up the day: cards due, sections that need improv
 - **Redo** lives on the active study mode. Confirm when that mode already has content.
 - Redo Locked In rebuilds Locked In, then Summary, Test Me, and Carded from current sources.
 - Redo Summary / Test Me / Carded rewrites only that mode from persisted upstream (Locked In or Summary).
+- **What shows after several runs.** The latest full Redo (Redo Locked In, which rebuilds every mode) is the boundary; before any full Redo, every saved mode shows. Every mode saved by it or by a later run shows: Redo Summary then Redo Carded keeps both, and Generate missing then Redo Test Me keeps all four. A mode left from before the boundary, such as one a partial or failed full Redo never reached, is hidden and reported stale until it is redone. While a single-mode Redo runs, only that mode is hidden until it saves. Editing a mode never hides it. Pack, print and PDF views follow the same rule.
 - Disabled when the required upstream is missing, or when no source is `ready` for Locked In / Generate.
 - Cards made from Ask answers are user-authored (edited), so Redo Carded keeps them under the same protection rules. The protected-cards confirmation therefore lists them too.
 - Locked In, Summary, and individual card faces can be edited. Save and Cancel are explicit. A failed save keeps the draft on screen. A saved edit increments its revision. Edited or pinned content is never silently overwritten. Redo requires an explicit confirmation and reports downstream modes as stale after a Locked In edit.
@@ -150,6 +151,7 @@ A one-line bar on the desk sums up the day: cards due, sections that need improv
 - Citation chips open the source in a modal. PDFs render the cited page in the browser from the private file stream. **Full screen** fills the window (no browser fullscreen, so it works on iPhone), with zoom from Fit to 300%, Prev/Next and "Page N of M"; Esc leaves full screen first, and the choice is remembered on the device. Text sources show a wider, larger column.
 - Test Me explanations and card backs end with a citation. After a wrong answer, **Open page N** opens the cited page. Card citations appear only after the flip.
 - Locked In and Summary download as PDF (browser print) or Markdown, with options for highlights and notes and for citations.
+- **Exports are read-only.** The server-made PDFs of Locked In, Summary and the study packet only read the pack: no model, slide-reading or Ask request, and no change to cards, modes, jobs, notes or sources. A packet for a pack whose cards were never saved lists its Carded items without saving them. Another user's pack is not found.
 
 ## Ask this pack
 
@@ -192,6 +194,7 @@ The header button opens a dialog that searches every pack the signed-in user own
 ## Auth and security facts
 
 - Auth.js Credentials against the `users` table (scrypt password hashes). Session `user.id` is the user uuid.
+- **Lockout.** Five failed sign-ins for one email within 15 minutes lock it for 15 minutes. The login page and direct credentials-callback posts count together. While locked, even the right password gets "Too many sign-in attempts. Try again in a few minutes." A successful sign-in clears the count. If the lock cannot be checked, sign-in is refused rather than allowed.
 - No public register page. Invite with `npm run user:create -- email@x [name]`; the script reads the password from hidden stdin.
 - Forgot password is public at `/forgot-password`. It emails a hashed, single-use, one-hour reset link via Resend. The success copy does not reveal whether the email exists. While the From address is Resend's test sender (which only reaches the Resend account owner) or mail is not configured, the page shows "Message Tristan to reset your password. Password resets by email are coming soon." instead of the form, and a stale form post gets the same notice. `/reset-password` is also public.
 - Middleware/proxy protects pages and APIs; unauthenticated pages go to `/login` except forgot/reset password; APIs return 401.

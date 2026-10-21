@@ -184,13 +184,35 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
 - Each completed study mode is persisted immediately. A partial or failed run
   keeps completed modes available and reports the failed step without silently
   replacing it with stale content.
+- Which saved modes show: the latest full redo is the replacement boundary
+  (without one, every saved mode shows). A
+  mode saved by that run or by any later run (a single-mode Redo or Generate
+  missing) shows, so redoing Summary and then Carded keeps both. A mode saved
+  before the boundary, including one a partial or failed full redo never
+  reached, is hidden and listed in `staleKinds`. While a single-mode Redo is
+  running, only that mode is hidden until it saves; Generate missing shows a
+  mode once it saves it and never hides the others. Saving an edit does not
+  change a mode's run, so an edit never hides it. The views API, the print pages and the PDF exports
+  all use this one rule (`loadGenerationViews`).
+- PDF exports are read-only. `GET /api/reviewers/[id]/pdf?kind=locked_in|summary|packet`
+  renders the print page (`/print?kind=` or `/packet`) in headless Chrome
+  (`CHROME_EXECUTABLE_PATH` locally) with the requester's cookies. It makes no
+  model, vision or Ask request and writes no cards, views, jobs, annotations or
+  sources: the packet lists saved cards, or the Carded items in memory when no
+  card rows exist. Another owner's pack id answers 404.
 - Provider errors are returned through the app’s stable error shape. Raw
   provider payloads and credentials are never sent to the browser.
 
 ## Login and invites
 
 - Sign in at `/login` with email + password.
-- Five failed sign-ins in 15 minutes lock that email for 15 minutes.
+- Five failed sign-ins for one email within 15 minutes lock that email for 15
+  minutes. The login page and direct posts to the Auth.js credentials callback
+  share one counter (`login_throttles`). During the lock even the correct
+  password is refused ("Too many sign-in attempts. Try again in a few
+  minutes."; the callback redirects with `code=login_locked`). A successful
+  sign-in clears the count, and the first failure after a lock ends starts a
+  new count. If the lock state cannot be read or written, sign-in is refused.
 - Forgot password sends a one-hour, single-use link when `RESEND_API_KEY` is set and `EMAIL_FROM` is a verified sender. The form does not say whether the email has an invite. While `EMAIL_FROM` is unset (Resend's test sender, which reaches no one else), the page tells the user to message Tristan instead; reset with `npm run user:reset-password`.
 - Create invites (no public register):
 
@@ -220,6 +242,32 @@ password line to the command from a protected secret source.
 | `npm test` | Run Vitest |
 
 GitHub Actions runs `npm test` and `npm run lint` on main and pull requests.
+
+### Real-app contract checks
+
+`scripts/verify-study-contracts.ts` drives a running dev server over HTTP for
+four contracts: S1a login lockout, S2 which saved modes show, S3a slide pages
+staying unread when the vision key or model is refused, and S5a read-only PDF
+exports. It needs a disposable Neon branch and never calls a real model:
+
+```bash
+npx tsx scripts/verify-study-contracts.ts --init-fixtures <fixtures dir>
+NODE_OPTIONS="--import $PWD/tests/support/controlled-services.mjs" \
+  NEXT_TELEMETRY_DISABLED=1 npx next dev -p 3218
+npx tsx scripts/verify-study-contracts.ts --origin http://localhost:3218 \
+  --out <evidence dir outside the repo> --fixtures <fixtures dir> --scenario all
+```
+
+Both processes need `DATABASE_URL` (the branch), `ALLOWED_DB_HOST` (its exact
+hostname), `CONTROLLED_SERVICES_LOG`, `CONTROLLED_SERVICES_CONTROL` and, for
+the server, `CONTROLLED_SERVICES_FIXTURES`, a fake `OPENROUTER_API_KEY`,
+`AUTH_SECRET`, `AUTH_URL` and `CHROME_EXECUTABLE_PATH`. The preload answers
+OpenRouter and Blob with controlled responses, passes through only localhost
+and that Neon host, and blocks the rest; each script header documents its
+contract. The CLI refuses a non-local origin, a database host other than
+`ALLOWED_DB_HOST`, and an evidence directory inside the repository. It creates
+`*@example.invalid` users, deletes them after each scenario, and writes
+redacted JSON evidence (and S5a's PDFs) to `<out>/<run id>/`.
 
 ## Notable dependencies
 
