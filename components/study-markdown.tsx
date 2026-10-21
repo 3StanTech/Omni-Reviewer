@@ -34,6 +34,8 @@ const MATH_TAGS = [
   "menclose",
   "merror",
   "mfenced",
+  // \frac, \binom and \genfrac; without it a fraction flattens to "dt".
+  "mfrac",
   "mglyph",
   "mi",
   "mlabeledtr",
@@ -332,6 +334,8 @@ const studySanitizeSchema: Schema = {
     ],
     annotation: [["encoding", "application/x-tex"]],
     mo: [["stretchy", "false"]],
+    // \binom draws no bar ("0px"); \genfrac sets an em width.
+    mfrac: [["linethickness", /^\d+(?:\.\d+)?(?:px|em)$/]],
     h1: [...(defaultSchema.attributes?.h1 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
     h2: [...(defaultSchema.attributes?.h2 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
     h3: [...(defaultSchema.attributes?.h3 ?? []), ["id", STUDY_HEADING_ID_PATTERN]],
