@@ -8,11 +8,6 @@ import {
   LOGIN_THROTTLE_LOCKED_MESSAGE,
   normalizeLoginEmail,
 } from "@/lib/login-throttle";
-import {
-  clearLoginThrottle,
-  isLoginEmailLocked,
-  recordLoginFailure,
-} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -35,49 +30,29 @@ async function loginAction(
     return "Password is required.";
   }
 
-  const normalized = normalizeLoginEmail(emailRaw);
-
-  try {
-    if (await isLoginEmailLocked(normalized)) {
-      return LOGIN_THROTTLE_LOCKED_MESSAGE;
-    }
-  } catch {
-    return "Server is misconfigured. Try again later.";
-  }
-
+  // The throttle lives in authorize (auth.ts) so direct callback posts share
+  // the same lockout; this action only maps its codes to messages.
   try {
     await signIn("credentials", {
-      email: normalized,
+      email: normalizeLoginEmail(emailRaw),
       password,
       redirectTo: "/",
     });
-    await clearLoginThrottle(normalized);
     return null;
   } catch (error) {
     if (error instanceof AuthError) {
-      if (
-        "code" in error &&
-        (error as { code?: string }).code === "server_misconfigured"
-      ) {
-        return "Server is misconfigured. Try again later.";
-      }
-      try {
-        const recorded = await recordLoginFailure(normalized);
-        if (recorded.locked) {
-          return LOGIN_THROTTLE_LOCKED_MESSAGE;
-        }
-      } catch {
-        return "Server is misconfigured. Try again later.";
-      }
-      return "Invalid email or password.";
-    }
-    try {
-      await clearLoginThrottle(normalized);
-    } catch {
-      // Redirect must still propagate.
+      return loginErrorMessage((error as { code?: string }).code);
     }
     throw error;
   }
+}
+
+function loginErrorMessage(code: string | undefined): string {
+  if (code === "login_locked") return LOGIN_THROTTLE_LOCKED_MESSAGE;
+  if (code === "server_misconfigured") {
+    return "Server is misconfigured. Try again later.";
+  }
+  return "Invalid email or password.";
 }
 
 export default function LoginPage() {

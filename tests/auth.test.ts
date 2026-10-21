@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { isValidElement, type ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   hashPassword,
@@ -9,8 +10,92 @@ import {
   safeEqualPassword,
   verifyPassword,
 } from "@/lib/auth-utils";
+import { LOGIN_THROTTLE_LOCKED_MESSAGE } from "@/lib/login-throttle";
+
+const signIn = vi.hoisted(() => vi.fn());
+vi.mock("@/auth", () => ({ signIn }));
+vi.mock("@/components/login-form", () => ({ LoginForm: () => null }));
+vi.mock("next-auth", async () => {
+  const errors = await import("@auth/core/errors");
+  return { AuthError: errors.AuthError };
+});
 
 const root = path.resolve(__dirname, "..");
+
+type LoginAction = (prev: string | null, formData: FormData) => Promise<string | null>;
+
+function findAction(node: ReactNode): LoginAction | null {
+  if (!isValidElement<{ action?: LoginAction; children?: ReactNode }>(node)) {
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = findAction(child);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  if (node.props.action) return node.props.action;
+  return findAction(node.props.children);
+}
+
+async function loadLoginAction(): Promise<LoginAction> {
+  const { default: LoginPage } = await import("@/app/login/page");
+  const action = findAction(LoginPage());
+  if (!action) throw new Error("login action not found");
+  return action;
+}
+
+function loginForm(email: string, password: string) {
+  const form = new FormData();
+  form.set("email", email);
+  form.set("password", password);
+  return form;
+}
+
+async function signInError(code: string) {
+  const { CredentialsSignin } = await import("@auth/core/errors");
+  const error = new CredentialsSignin();
+  error.code = code;
+  return error;
+}
+
+describe("login page action", () => {
+  beforeEach(() => {
+    vi.stubEnv("AUTH_SECRET", "a".repeat(48));
+    vi.stubEnv("DATABASE_URL", "postgres://test");
+  });
+
+  it("maps authorize codes to the login messages", async () => {
+    const action = await loadLoginAction();
+    const cases: [string, string][] = [
+      ["login_locked", LOGIN_THROTTLE_LOCKED_MESSAGE],
+      ["server_misconfigured", "Server is misconfigured. Try again later."],
+      ["invalid_credentials", "Invalid email or password."],
+    ];
+    for (const [code, message] of cases) {
+      signIn.mockRejectedValueOnce(await signInError(code));
+      expect(await action(null, loginForm(" Yana@Example.com ", "pw"))).toBe(
+        message,
+      );
+    }
+    expect(signIn).toHaveBeenLastCalledWith("credentials", {
+      email: "yana@example.com",
+      password: "pw",
+      redirectTo: "/",
+    });
+  });
+
+  it("lets the success redirect propagate", async () => {
+    const action = await loadLoginAction();
+    const redirect = Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;/;307;",
+    });
+    signIn.mockRejectedValueOnce(redirect);
+    await expect(action(null, loginForm("yana@example.com", "pw"))).rejects.toBe(
+      redirect,
+    );
+  });
+});
 
 describe("auth", () => {
   it("timing-safe compare rejects a wrong password", () => {
