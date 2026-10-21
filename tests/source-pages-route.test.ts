@@ -352,6 +352,48 @@ describe("source pages route", () => {
         expect(replaceTextMock).not.toHaveBeenCalled();
       });
 
+      it("settles a refusal that reaches the route wrapped by the retry loop", async () => {
+        visionMock.mockRejectedValue(new GenerationError("unknown", "Generation failed unexpectedly.", false, { cause: rejected() }));
+        const response = await POST(await batchRequest([{ page: 2, image: jpeg() }], { last: "1" }), context);
+        expect(response.status).toBe(200);
+        expect((await response.json()).unreadable).toEqual([2]);
+      });
+
+      const providerError = (status: number, message: string) => Object.assign(new Error(message), {
+        statusCode: status,
+        responseBody: JSON.stringify({ error: { message } }),
+      });
+
+      it.each([
+        ["a rejected key", providerError(401, "No auth credentials found")],
+        ["a forbidden key", providerError(403, "Key is disabled")],
+        ["a missing model", providerError(404, "No endpoints found for this model")],
+        ["a wrapped rejected key", new GenerationError("unknown", "Generation failed unexpectedly.", false, {
+          cause: providerError(401, "User not found."),
+        })],
+      ])("keeps the page pending with a setup message on %s", async (_label, error) => {
+        visionMock.mockRejectedValue(error);
+        const response = await POST(await batchRequest([{ page: 1, image: jpeg() }], { last: "1" }), context);
+        expect(response.status).toBe(502);
+        const body = await response.json();
+        expect(body.error).toBe("Slide reading isn't available right now. These pages stay unread, so try again later.");
+        expect(JSON.stringify(body)).not.toMatch(/credentials|disabled|endpoints|User not found/);
+        expect(replaceTextMock).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["a model without image input", providerError(400, "No endpoints found that support image input")],
+        ["a bad request that does not name the image", providerError(400, "Provider returned error")],
+        ["a config limit", new GenerationError("token_limit", "This source is too long for today's free models.", false)],
+        ["the daily limit", new GenerationError("daily_limit", "x", false)],
+        ["an unclassified error of our own", new GenerationError("unknown", "x", false)],
+      ])("does not settle on %s", async (_label, error) => {
+        visionMock.mockRejectedValue(error);
+        const response = await POST(await batchRequest([{ page: 1, image: jpeg() }], { last: "1" }), context);
+        expect([429, 502]).toContain(response.status);
+        expect(replaceTextMock).not.toHaveBeenCalled();
+      });
+
       it("does not settle a refused page that is not on its last try", async () => {
         visionMock.mockRejectedValue(rejected());
         const response = await POST(await batchRequest([{ page: 1, image: jpeg() }], { final: true }), context);

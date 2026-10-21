@@ -163,16 +163,44 @@ async function writeReadings(
   return row ? { row, read: [...applicable.keys()].sort((a, b) => a - b) } : null;
 }
 
+/** The exact token_limit runVision throws when a reading is too long to keep. */
+const READING_TOO_LONG = "Vision output exceeds the safe text limit.";
+/** Statuses a provider uses to refuse a request's own payload. */
+const CONTENT_REJECTION_STATUSES = new Set([400, 413, 415, 422]);
+const IMAGE_REFUSAL = /\b(?:invalid|corrupt(?:ed)?|malformed|unsupported|undecodable|could not (?:parse|process|decode|read)|unable to (?:parse|process|decode|read)|failed to (?:parse|process|decode|read)|too large)\b[^.]{0,60}\bimage|\bimage\b[^.]{0,60}\b(?:is |was )?(?:invalid|corrupt(?:ed)?|malformed|unsupported|undecodable|too large)\b/i;
+/** Refusals about the account or model setup, which a different page would hit too. */
+const SETUP_REFUSAL = /\b(?:model|endpoints?|provider|api[ _-]?key|auth\w*|credentials?|permission|not found|support)/i;
+const SETUP_FAILURE = "Slide reading isn't available right now. These pages stay unread, so try again later.";
+
 /**
- * Whether the provider refused this request's own content: a 4xx answer other
- * than quota (402, 429), or a reading too long to keep. Outages (5xx, network),
- * timeouts and our own errors are not, so they never settle a page.
+ * Whether the provider verifiably refused this request's own image: a payload
+ * status (400, 413, 415, 422) whose reason names the image and not the model
+ * or account, or our own check that the reading is too long to keep. Auth,
+ * missing model, quota, config, outage and timeout errors never settle a page.
  */
-function isContentRejection(error: unknown, code: string): boolean {
-  if (code === "rate_limited" || code === "daily_limit" || code === "payment_required") return false;
-  if (code === "token_limit") return true;
+function isContentRejection(error: unknown): boolean {
+  if (isReadingTooLong(error)) return true;
+  // Our own errors carry no provider answer; a wrapped one is read through its cause.
+  if (error instanceof GenerationError && error.cause === undefined) return false;
+  const parsed = parseProviderError(error);
+  if (parsed.status === undefined || !CONTENT_REJECTION_STATUSES.has(parsed.status)) return false;
+  const reason = `${parsed.code ?? ""} ${parsed.message}`;
+  return IMAGE_REFUSAL.test(reason) && !SETUP_REFUSAL.test(reason);
+}
+
+function isReadingTooLong(error: unknown): boolean {
+  return error instanceof GenerationError && error.code === "token_limit" && error.message === READING_TOO_LONG;
+}
+
+/** A refusal of the key, account or model, rather than of this request. */
+function isSetupFailure(error: unknown, code: string): boolean {
+  if (code === "token_limit" && !isReadingTooLong(error)) {
+    // No configured model can take this request; a reading would not help.
+    return true;
+  }
+  if (code !== "unknown") return false;
   const status = parseProviderError(error).status;
-  return status !== undefined && status >= 400 && status < 500 && status !== 402 && status !== 429;
+  return status === 401 || status === 403 || status === 404;
 }
 
 /** Read one batch of rendered page images and merge the readings into the source text. */
@@ -262,10 +290,12 @@ export async function POST(request: Request, context: RouteContext) {
       // a 400 is otherwise invisible behind its classified code.
       providerMessage: parsed.message,
     });
-    const message = publicGenerationErrorMessage(classified.code, classified.message)
-      ?? "Could not read the slide images. Try again.";
+    const message = isSetupFailure(error, classified.code)
+      ? SETUP_FAILURE
+      : publicGenerationErrorMessage(classified.code, classified.message)
+        ?? "Could not read the slide images. Try again.";
     const quota = classified.code === "rate_limited" || classified.code === "daily_limit" || classified.code === "payment_required";
-    if (!(batch.last && !timedOut && !request.signal.aborted && isContentRejection(error, classified.code))) {
+    if (!(batch.last && !timedOut && !request.signal.aborted && isContentRejection(error))) {
       return NextResponse.json(
         { error: message, code: classified.code },
         { status: quota ? 429 : 502 },
