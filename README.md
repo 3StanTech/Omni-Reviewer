@@ -144,7 +144,7 @@ Routes (all require a session; cross-user ids return 404):
 | Route | Purpose |
 | --- | --- |
 | `GET /api/reviewers/[id]/ask` | The pack's current thread and its answers saved to Notes |
-| `POST /api/reviewers/[id]/ask` | Ask a question, Explain a missed Test Me item or a card, or Ask why for an unsourced sentence. Returns one JSON response (not streamed). A repeat Explain or Ask why returns the earlier answer with `reused: true` and no model call. `maxDuration` is 120 |
+| `POST /api/reviewers/[id]/ask` | Ask a question, Explain a missed Test Me item or a card, or Ask why for an unsourced sentence. Returns one JSON response (not streamed). A repeat Explain or Ask why returns the earlier answer with `reused: true` and no model call, while the card or Test Me item's answer-affecting fields, the chosen answer and the pack's Ready sources are unchanged; an edit gets a fresh answer. `maxDuration` is 120 |
 | `DELETE /api/reviewers/[id]/ask` | Clear chat. Hides the thread; answers saved to Notes stay |
 | `PATCH /api/reviewers/[id]/ask/[messageId]` | Save an answer to Notes, or remove it (`{ saved }`) |
 | `POST /api/reviewers/[id]/ask/[messageId]/card` | Make a card from an answer. Idempotent per answer |
@@ -166,6 +166,7 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
 4. `npm run db:backfill-fsrs` is a one-time run after `0001`. It sets FSRS state on cards that have none by replaying their reviews, and it is idempotent, so a second run changes nothing.
 5. `0002_tutor` only adds objects, so it needs no backfill and rerunning `npm run db:migrate` is a no-op. Adding the `search_tsv` columns computes the vector for existing rows, which is quick at this scale.
 6. `0004_free_request_ledger` only adds the `free_request_days` table, so it needs no backfill.
+7. `0005_session_version` adds `users.session_version` (integer, default 0), so it needs no backfill and sessions issued before it stay valid. Run it before deploying code that reads the column. Reverting that code un-revokes sessions signed out by a reset; rotate `AUTH_SECRET` if the revocation must hold.
 
 `npm run db:push` is for local scratch databases only. Never run it against production.
 
@@ -208,6 +209,10 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
   model, vision or Ask request and writes no cards, views, jobs, annotations or
   sources: the packet lists saved cards, or the Carded items in memory when no
   card rows exist. Another owner's pack id answers 404.
+- Saved study content must stay displayable. A save, a "Check again" or a
+  generated mode over the reader's limits (100,000 characters, or too much
+  math) is refused with the reason and nothing is written; the editor keeps
+  the draft, and a refused generation fails with `render_limit`.
 - Provider errors are returned through the app’s stable error shape. Raw
   provider payloads and credentials are never sent to the browser.
 
@@ -222,6 +227,13 @@ Migrations are committed in `drizzle/`. `drizzle/0000_baseline` is the schema as
   sign-in clears the count, and the first failure after a lock ends starts a
   new count. If the lock state cannot be read or written, sign-in is refused.
 - Forgot password sends a one-hour, single-use link when `RESEND_API_KEY` is set and `EMAIL_FROM` is a verified sender. The form does not say whether the email has an invite. While `EMAIL_FROM` is unset (Resend's test sender, which reaches no one else), the page tells the user to message Tristan instead; reset with `npm run user:reset-password`.
+- A password reset, by link or `npm run user:reset-password`, signs the user
+  out on every other device: each session carries the account's
+  `session_version`, and the reset bumps it in the same statement that sets
+  the password. A reset that fails leaves its link usable ("We couldn't reset
+  your password just now. Your link still works, so try again in a moment.").
+- Signed-in visitors to `/login`, `/forgot-password` or `/reset-password` go
+  to `/`.
 - Create invites (no public register):
 
 ```bash
@@ -249,14 +261,16 @@ password line to the command from a protected secret source.
 | `npm run user:create` | Invite a user (`tsx scripts/create-user.ts`) |
 | `npm test` | Run Vitest |
 
-GitHub Actions runs `npm test` and `npm run lint` on main and pull requests.
+GitHub Actions runs `npm ci`, `npx next typegen`, `npx tsc --noEmit`, `npm test`, `npm run lint` and a production build on main and pull requests, on Node 20 with npm 10. Keep `package-lock.json` installable by npm 10: after an install with a newer npm, run `npx npm@10 install --package-lock-only`.
 
 ### Real-app contract checks
 
 `scripts/verify-study-contracts.ts` drives a running dev server over HTTP for
-four contracts: S1a login lockout, S2 which saved modes show, S3a slide pages
-staying unread when the vision key or model is refused, and S5a read-only PDF
-exports. It needs a disposable Neon branch and never calls a real model:
+six contracts: S1a login lockout, S1b reset revocation (older sessions are
+refused after a reset, and a failed reset keeps its link), S2 which saved modes
+show, S2b study data (refused unreadable saves, archived-card writes and stale
+Explain answers), S3a slide pages staying unread when the vision key or model
+is refused, and S5a read-only PDF exports. It needs a disposable Neon branch and never calls a real model:
 
 ```bash
 npx tsx scripts/verify-study-contracts.ts --init-fixtures <fixtures dir>
