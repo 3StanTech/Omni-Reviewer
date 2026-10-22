@@ -9,6 +9,7 @@ import {
 
 import { KirbyDefs } from "@/components/kirby-companion";
 import { LookProvider } from "@/components/look-provider";
+import { TourProvider } from "@/components/tour/tour-provider";
 import { LOOK_THEME_COLOR } from "@/lib/look-theme";
 
 import "./globals.css";
@@ -73,7 +74,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Script id="omni-look" strategy="beforeInteractive">
           {lookBootstrap}
         </Script>
-        <LookProvider>{children}</LookProvider>
+        <LookProvider>
+          <TourProvider>{children}</TourProvider>
+        </LookProvider>
       </body>
     </html>
   );

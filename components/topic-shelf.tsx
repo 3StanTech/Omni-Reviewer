@@ -8,23 +8,29 @@ import {
   useMemo,
   useState,
   useSyncExternalStore,
+  useTransition,
   type ReactNode,
 } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  ArrowCounterClockwise,
   CalendarCheck,
   CircleNotch,
   DotsThreeVertical,
+  GearSix,
   PencilSimple,
   Plus,
   SidebarSimple,
+  SignOut,
   Trash,
 } from "@phosphor-icons/react";
 import { readLocalStorage, writeLocalStorage } from "@/lib/safe-storage";
 import { useIsClient } from "@/lib/use-is-client";
 
 import type { TopicListItem } from "@/components/topic-tabs";
+import { useTour } from "@/components/tour/tour-provider";
+import { TourShelfBridge } from "@/components/tour/tour-shelf-bridge";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelHeader } from "@/components/ui/panel";
 import {
@@ -46,7 +52,7 @@ import { Label } from "@/components/ui/label";
 import { cn, readApiError } from "@/lib/utils";
 
 export const TOPIC_SHELF_ID = "topic-shelf";
-export const TOPIC_SHELF_STORAGE_KEY = "omni-topic-shelf";
+export const TOPIC_SHELF_STORAGE_KEY = "omni-topic-shelf-v2";
 
 type TopicNavValue = {
   optimisticId: string | null;
@@ -59,7 +65,8 @@ const TopicNavContext = createContext<TopicNavValue | null>(null);
 const TOPIC_SHELF_TOGGLE_ID = "topic-shelf-toggle";
 const shelfListeners = new Set<() => void>();
 // Below 768px the shelf is a drawer that starts closed on every load; the
-// stored preference belongs to the desktop shelf only.
+// stored preference belongs to the desktop shelf only, which also starts
+// closed until it is opened once.
 let drawerOpen = false;
 
 /** The shelf total sums both kinds of due card. */
@@ -73,9 +80,7 @@ function isDesktopShelf(): boolean {
 
 function readShelfOpen(): boolean {
   if (!isDesktopShelf()) return drawerOpen;
-  const stored = readLocalStorage(TOPIC_SHELF_STORAGE_KEY);
-  if (stored === "closed") return false;
-  return true;
+  return readLocalStorage(TOPIC_SHELF_STORAGE_KEY) === "open";
 }
 
 function subscribeShelf(listener: () => void) {
@@ -96,7 +101,7 @@ export function TopicNavProvider({ children }: { children: ReactNode }) {
   const shelfOpen = useSyncExternalStore(
     subscribeShelf,
     readShelfOpen,
-    () => true,
+    () => false,
   );
   const setShelfOpen = useCallback((open: boolean) => {
     if (isDesktopShelf()) {
@@ -120,8 +125,11 @@ export function TopicShelfToggle() {
   const topicNav = useTopicNav();
   if (!topicNav) return null;
   return (
+    <>
+    <TourShelfBridge shelfOpen={topicNav.shelfOpen} setShelfOpen={topicNav.setShelfOpen} />
     <Button
       id={TOPIC_SHELF_TOGGLE_ID}
+      data-tour-target="shelf-toggle"
       type="button"
       variant="ghost"
       size="icon-lg"
@@ -133,6 +141,7 @@ export function TopicShelfToggle() {
     >
       <SidebarSimple weight="bold" />
     </Button>
+    </>
   );
 }
 
@@ -145,6 +154,8 @@ type TopicShelfProps = {
   selectedId: string | null;
   dueByTopic?: Record<string, number>;
   dueTodayTotal: number;
+  /** Server action from `lib/sign-out-action.ts`, passed in by the server shell. */
+  signOutAction: () => Promise<void>;
 };
 
 export function TopicShelf({
@@ -152,13 +163,14 @@ export function TopicShelf({
   selectedId,
   dueByTopic,
   dueTodayTotal,
+  signOutAction,
 }: TopicShelfProps) {
   const router = useRouter();
   const topicNav = useTopicNav();
-  // The server snapshot reads the shelf as open (desktop); until hydration the
-  // phone drawer and its backdrop stay out of the render.
+  // The server snapshot reads the shelf as closed; once it opens on the client
+  // the phone drawer and its backdrop still wait for hydration.
   const isClient = useIsClient();
-  const shelfOpen = topicNav?.shelfOpen ?? true;
+  const shelfOpen = topicNav?.shelfOpen ?? false;
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -166,6 +178,23 @@ export function TopicShelf({
   const [activeTopic, setActiveTopic] = useState<TopicListItem | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // The topic just made: the tour keeps step 1b until the desk lists it.
+  const [createdTopicId, setCreatedTopicId] = useState<string | null>(null);
+  const tour = useTour();
+  const tourReport = tour?.report;
+  const tourRunning = tour?.running ?? false;
+
+  useEffect(() => {
+    tourReport?.({ shelfOpen });
+  }, [tourReport, shelfOpen]);
+
+  const topicDialogShown =
+    createOpen || (createdTopicId !== null && !topics.some((topic) => topic.id === createdTopicId));
+  useEffect(() => {
+    if (!tourReport || !topicDialogShown) return;
+    tourReport({ dialog: "topic" });
+    return () => tourReport({ dialog: null });
+  }, [tourReport, topicDialogShown]);
 
   function selectTopic(id: string) {
     if (id === selectedId) return;
@@ -191,6 +220,7 @@ export function TopicShelf({
         return;
       }
       const created = (await res.json()) as TopicListItem;
+      setCreatedTopicId(created.id);
       setCreateOpen(false);
       setName("");
       topicNav?.setOptimisticId(created.id);
@@ -262,7 +292,7 @@ export function TopicShelf({
     if (!shelfOpen) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
-      if (!window.matchMedia("(max-width: 767px)").matches) return;
+      if (isDesktopShelf()) return;
       topicNav?.setShelfOpen(false);
       focusShelfToggle();
     }
@@ -277,6 +307,7 @@ export function TopicShelf({
     {isClient ? (
     <button
       type="button"
+      data-shelf-backdrop
       className="fixed inset-0 z-40 bg-black/40 md:hidden"
       aria-label="Close topics"
       onClick={() => {
@@ -309,7 +340,7 @@ export function TopicShelf({
           </span>
         </Panel>
 
-        <Panel as="div" className="overflow-hidden">
+        <Panel as="div" className="overflow-hidden" data-tour-target="topics">
           <PanelHeader
             className="py-1.5 pr-2"
             label="Topics"
@@ -320,6 +351,7 @@ export function TopicShelf({
                 variant="ghost"
                 className="pointer-coarse:size-11"
                 aria-label="New topic"
+                data-tour-target="new-topic"
                 onClick={() => {
                   setError(null);
                   setName("");
@@ -418,8 +450,16 @@ export function TopicShelf({
         </Panel>
       </div>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+      <ShelfSettings signOutAction={signOutAction} />
+
+      <Dialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        // During the tour, Skip tour beside the dialog stays clickable and an outside press never closes it.
+        modal={tourRunning ? "trap-focus" : undefined}
+        disablePointerDismissal={tourRunning}
+      >
+        <DialogContent data-tour-target="topic-dialog">
           <DialogHeader>
             <DialogTitle>New topic</DialogTitle>
             <DialogDescription>
@@ -567,5 +607,56 @@ export function TopicShelf({
       </Dialog>
     </aside>
     </>
+  );
+}
+
+function ShelfSettings({
+  signOutAction,
+}: {
+  signOutAction: () => Promise<void>;
+}) {
+  const tour = useTour();
+  const [signingOut, startSignOut] = useTransition();
+  return (
+    <div className="mt-auto border-t border-border p-3">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground pointer-coarse:min-h-11"
+            />
+          }
+        >
+          <GearSix weight="bold" />
+          Settings
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="top" align="start" className="min-w-52">
+          {tour?.replayAvailable ? (
+            <DropdownMenuItem
+              className="items-start pointer-coarse:min-h-11"
+              onClick={() => tour.startReplay()}
+            >
+              <ArrowCounterClockwise className="mt-0.5" />
+              <span className="flex flex-col">
+                <span>Replay Kirby&apos;s tour</span>
+                <span className="text-xs text-muted-foreground">
+                  Kirby shows you around again.
+                </span>
+              </span>
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem
+            className="pointer-coarse:min-h-11"
+            disabled={signingOut}
+            onClick={() => startSignOut(() => signOutAction())}
+          >
+            {signingOut ? <CircleNotch className="animate-spin" /> : <SignOut />}
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }

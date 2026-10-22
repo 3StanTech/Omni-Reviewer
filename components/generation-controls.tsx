@@ -54,6 +54,7 @@ export function GenerationControls({
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
+          data-tour-target="generate"
           onClick={resumeAllowed ? onResume : onGenerate}
           disabled={Boolean(busyReason) || (hasCompleteViews && !resumeAllowed) || (!canStart && !resumeAllowed)}
           title={busyReason ?? (resumeAllowed ? "Resume the saved generation" : help)}

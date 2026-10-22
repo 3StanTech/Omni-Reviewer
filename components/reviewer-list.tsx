@@ -1,7 +1,7 @@
 "use client";
 
 import Link, { useLinkStatus } from "next/link";
-import { useId, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   Cards,
@@ -19,6 +19,7 @@ import {
 
 import { EmptyState } from "@/components/empty-state";
 import { MasteryBar } from "@/components/mastery-bar";
+import { useTour } from "@/components/tour/tour-provider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -165,6 +166,18 @@ export function ReviewerList({
   const [active, setActive] = useState<ReviewerListItem | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // A pack was just made and its page is opening: the tour stays on step 2b until it lands
+  // (or the navigation is cut short).
+  const [openingCreated, startOpening] = useTransition();
+  const tour = useTour();
+  const tourReport = tour?.report;
+  const tourRunning = tour?.running ?? false;
+  const packDialogShown = createOpen || openingCreated;
+  useEffect(() => {
+    if (!tourReport || !packDialogShown) return;
+    tourReport({ dialog: "pack" });
+    return () => tourReport({ dialog: null });
+  }, [tourReport, packDialogShown]);
 
   if (loading) {
     // Same frame as the loaded list below, so the topic chips keep their state.
@@ -224,7 +237,7 @@ export function ReviewerList({
       const created = (await res.json()) as ReviewerListItem;
       setCreateOpen(false);
       setName("");
-      startTransition(() => {
+      startOpening(() => {
         router.push(`/topics/${topicId}/reviewers/${created.id}`);
         router.refresh();
       });
@@ -339,6 +352,7 @@ export function ReviewerList({
             ) : null}
             <Button
               type="button"
+              data-tour-target="new-pack"
               className="pointer-fine:h-8 pointer-fine:min-h-8 max-md:flex-1"
               onClick={() => {
                 setError(null);
@@ -470,8 +484,14 @@ export function ReviewerList({
       )}
     </Panel>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+      <Dialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        // During the tour, Skip tour beside the dialog stays clickable and an outside press never closes it.
+        modal={tourRunning ? "trap-focus" : undefined}
+        disablePointerDismissal={tourRunning}
+      >
+        <DialogContent data-tour-target="pack-dialog">
           <DialogHeader>
             <DialogTitle>New pack</DialogTitle>
             <DialogDescription>

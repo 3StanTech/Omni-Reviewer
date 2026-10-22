@@ -6,6 +6,7 @@ import {
   CircleNotch,
   File,
   FilePdf,
+  Files,
   FileText,
   Image as ImageIcon,
   Microphone,
@@ -18,6 +19,7 @@ import {
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Panel, PanelHeader, PanelStepNumber } from "@/components/ui/panel";
 import {
   normalizeSource,
   uploadSourceFile,
@@ -39,6 +41,8 @@ type SourcePanelProps = {
   onSourcesChange?: (sources: SourceListItem[]) => void;
   /** When false, hide upload/paste/list. Parent owns the Sources control. */
   expanded?: boolean;
+  /** Draw as the never-generated page's numbered "1 Sources" card, Upload and Paste in one row. */
+  card?: boolean;
   /**
    * Slide-image reading, hosted by the parent so it keeps running while this
    * panel is hidden or remounted.
@@ -165,6 +169,7 @@ export function SourcePanel({
   initialSources,
   onSourcesChange,
   expanded = true,
+  card = false,
   vision,
 }: SourcePanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -360,82 +365,66 @@ export function SourcePanel({
     setPasteOpen(open);
   }
 
-  return (
-    <section
-      id="sources-panel"
-      className="space-y-3"
-      aria-labelledby="sources-heading"
-      hidden={!expanded}
+  const sourcesLine = "PDFs, slides, documents or photos of pages. One lecture per pack works best.";
+  const uploadControl = (
+    <div>
+      <label
+        htmlFor="source-file-upload"
+        className="sr-only"
+      >
+        Upload source files
+      </label>
+      <input
+        ref={inputRef}
+        id="source-file-upload"
+        name="sourceFiles"
+        type="file"
+        className="sr-only"
+        multiple
+        accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif,.heic,.heif,image/heic,image/heif,.txt,.md,.csv,.html,.mp4,.webm,.mov,.avi,.mkv,.mp3,.wav,.ogg,.m4a,.aac,.flac,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,image/*,text/*,video/*,audio/*"
+        disabled={uploading}
+        onChange={(e) => void handleFiles(e.target.files)}
+      />
+      <Button
+        type="button"
+        variant="default"
+        data-tour-target="upload"
+        disabled={uploading}
+        onClick={() => inputRef.current?.click()}
+      >
+        {uploading ? (
+          <>
+            <CircleNotch className="animate-spin" weight="bold" />
+            {preparing
+              ? `Preparing ${preparing.total} ${preparing.total === 1 ? "photo" : "photos"}… ${preparing.done} of ${preparing.total}`
+              : progress !== null ? `Uploading ${progress}%` : "Uploading"}
+          </>
+        ) : (
+          <>
+            <UploadSimple weight="bold" />
+            Upload
+          </>
+        )}
+      </Button>
+    </div>
+  );
+  const pasteToggle = (
+    <Button
+      ref={pasteToggleRef}
+      data-tour-target="paste"
+      type="button"
+      variant="link"
+      size="sm"
+      aria-expanded={pasteShown}
+      aria-controls="source-paste-form"
+      disabled={hasPasteText}
+      onClick={() => setPasteFormOpen(!pasteShown)}
     >
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2
-            id="sources-heading"
-            className="text-sm font-semibold tracking-tight text-foreground"
-          >
-            Sources
-          </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            PDFs, PowerPoints, documents and photos of pages. Pages that are mostly
-            images are read automatically. One lecture per pack works best. Long
-            multi-lecture packs may not generate yet.
-          </p>
-        </div>
-        <div>
-          <label
-            htmlFor="source-file-upload"
-            className="sr-only"
-          >
-            Upload source files
-          </label>
-          <input
-            ref={inputRef}
-            id="source-file-upload"
-            name="sourceFiles"
-            type="file"
-            className="sr-only"
-            multiple
-            accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif,.heic,.heif,image/heic,image/heif,.txt,.md,.csv,.html,.mp4,.webm,.mov,.avi,.mkv,.mp3,.wav,.ogg,.m4a,.aac,.flac,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,image/*,text/*,video/*,audio/*"
-            disabled={uploading}
-            onChange={(e) => void handleFiles(e.target.files)}
-          />
-          <Button
-            type="button"
-            variant="default"
-            disabled={uploading}
-            onClick={() => inputRef.current?.click()}
-          >
-            {uploading ? (
-              <>
-                <CircleNotch className="animate-spin" weight="bold" />
-                {preparing
-                  ? `Preparing ${preparing.total} ${preparing.total === 1 ? "photo" : "photos"}… ${preparing.done} of ${preparing.total}`
-                  : progress !== null ? `Uploading ${progress}%` : "Uploading"}
-              </>
-            ) : (
-              <>
-                <UploadSimple weight="bold" />
-                Upload
-              </>
-            )}
-          </Button>
-        </div>
-      </div>
-
-      <div>
-        <Button
-          ref={pasteToggleRef}
-          type="button"
-          variant="link"
-          size="sm"
-          aria-expanded={pasteShown}
-          aria-controls="source-paste-form"
-          disabled={hasPasteText}
-          onClick={() => setPasteFormOpen(!pasteShown)}
-        >
-          {pasteShown ? "Hide paste text" : "Paste text instead"}
-        </Button>
-      </div>
+      {pasteShown ? "Hide paste text" : "Paste text instead"}
+    </Button>
+  );
+  const body = (
+    <>
       <div
         id="source-paste-form"
         hidden={!pasteShown}
@@ -502,22 +491,13 @@ export function SourcePanel({
           icon={<UploadSimple weight="duotone" className="size-5" />}
           title="No sources yet"
           description="Upload notes, a PDF or PowerPoint, or paste text. When at least one source is Ready, you can generate the four study modes."
-          action={
-            <Button
-              type="button"
-              disabled={uploading}
-              onClick={() => inputRef.current?.click()}
-            >
-              <UploadSimple weight="bold" />
-              Upload first source
-            </Button>
-          }
         />
       ) : (
         <ul className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border/80 bg-surface/40">
-          {sources.map((source) => (
+          {sources.map((source, index) => (
             <li
               key={source.id}
+              data-tour-target={index === 0 ? "source-row" : undefined}
               className="flex items-start gap-3 px-3 py-3 sm:items-center sm:px-4"
             >
               <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-primary sm:mt-0">
@@ -606,6 +586,62 @@ export function SourcePanel({
           ))}
         </ul>
       )}
+      {sources.length > 0 ? (
+        <p className="text-xs text-muted-foreground">Long multi-lecture packs may not generate yet.</p>
+      ) : null}
+    </>
+  );
+
+  if (card) {
+    return (
+      <Panel id="sources-panel" aria-labelledby="sources-heading" hidden={!expanded} className="min-w-0">
+        <PanelHeader
+          sticker
+          label={<span id="sources-heading">Sources</span>}
+          icon={
+            <>
+              <PanelStepNumber>1</PanelStepNumber>
+              <Files weight="bold" aria-hidden className="size-4 shrink-0" />
+            </>
+          }
+        />
+        <div className="space-y-3 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="min-w-0 flex-1 text-sm text-muted-foreground">{sourcesLine}</p>
+            {/* Upload comes first for keyboard order; wide screens show it rightmost. */}
+            <div className="flex items-center gap-3 max-sm:w-full max-sm:justify-between sm:flex-row-reverse">
+              {uploadControl}
+              {pasteToggle}
+            </div>
+          </div>
+          {body}
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <section
+      id="sources-panel"
+      className="space-y-3"
+      aria-labelledby="sources-heading"
+      hidden={!expanded}
+    >
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2
+            id="sources-heading"
+            className="text-sm font-semibold tracking-tight text-foreground"
+          >
+            Sources
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{sourcesLine}</p>
+        </div>
+        {uploadControl}
+      </div>
+
+      <div>{pasteToggle}</div>
+      {body}
     </section>
   );
 }

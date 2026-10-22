@@ -4,31 +4,19 @@ import { useEffect, useState } from "react";
 
 import { BirthdayCake, GreetingStickers } from "@/components/kirby-art";
 import { cueKirby, KirbyCompanion } from "@/components/kirby-companion";
-import type { DeskKirbyLook } from "@/lib/desk-kirby";
+import { useTour } from "@/components/tour/tour-provider";
+import {
+  markWelcomed,
+  WELCOME_DELAY_MS,
+  WELCOME_SAY_MS,
+  welcomedThisSession,
+  type DeskKirbyLook,
+} from "@/lib/desk-kirby";
+import { cn } from "@/lib/utils";
 
-const WELCOMED_KEY = "omni-kirby-welcomed";
 const WELCOME_SAY = "Poyo! Welcome back";
 const BELATED_SAY = "Happy belated birthday!";
-const WELCOME_DELAY_MS = 300;
-const WELCOME_SAY_MS = 2600;
 const BELATED_SAY_MS = 3400;
-
-function welcomedThisSession(): boolean {
-  try {
-    return window.sessionStorage.getItem(WELCOMED_KEY) !== null;
-  } catch {
-    // Blocked storage: skip the wave rather than repeat it on every visit.
-    return true;
-  }
-}
-
-function markWelcomed() {
-  try {
-    window.sessionStorage.setItem(WELCOMED_KEY, "1");
-  } catch {
-    // Nothing to remember in blocked storage.
-  }
-}
 
 /**
  * The desk title block. Day and Night show the plain title and subtitle; Dream Land wraps
@@ -49,6 +37,8 @@ export function DeskGreeting({
 }) {
   const [say, setSay] = useState<string | null>(null);
   const belated = look?.belated ?? false;
+  // One Kirby on screen: the desk Kirby steps aside while the tour guide holds the desk.
+  const guideHere = useTour()?.guideArea === "desk";
 
   // Once per browser session: a welcome wave, or in a belated birthday first run, a dance.
   useEffect(() => {
@@ -81,7 +71,7 @@ export function DeskGreeting({
         ) : null}
         <GreetingStickers />
       </div>
-      <div className="relative shrink-0 dreamland:mt-3.5">
+      <div data-tour-home="desk" className={cn("relative shrink-0 dreamland:mt-3.5", guideHere && "invisible")}>
         <KirbyCompanion
           size="lg"
           area="desk"

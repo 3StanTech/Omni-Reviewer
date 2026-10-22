@@ -35,7 +35,7 @@ type PanelHeaderProps = {
   actions?: React.ReactNode;
   /** Let the label wrap instead of truncating (the Today card never truncates). */
   wrapLabel?: boolean;
-  /** Dream Land draws the label as a sticker pill over the panel's top edge (desk panels only). */
+  /** Dream Land draws the label as a sticker pill over the panel's top edge (desk panels and the pack page's numbered cards). */
   sticker?: boolean;
   className?: string;
 };
@@ -59,4 +59,16 @@ function PanelHeader({ label, icon, actions, wrapLabel = false, sticker = false,
   );
 }
 
-export { Panel, PanelHeader };
+/** The numbered step badge in a sticker header (the pack page's "1 Sources" and "2 Study pack" cards). */
+function PanelStepNumber({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      aria-hidden
+      className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground tabular-nums dreamland:size-[26px] dreamland:text-[13px]"
+    >
+      {children}
+    </span>
+  );
+}
+
+export { Panel, PanelHeader, PanelStepNumber };

@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import { DeskGreeting } from "@/components/desk-greeting";
 import { MoodControl } from "@/components/mood-control";
 import { SearchPacks } from "@/components/search-packs";
-import { SignOutButton } from "@/components/sign-out-button";
 import {
   TopicNavProvider,
   TopicShelf,
@@ -13,6 +12,7 @@ import {
 } from "@/components/topic-shelf";
 import type { TopicListItem } from "@/components/topic-tabs";
 import type { DeskKirbyLook } from "@/lib/desk-kirby";
+import { signOutAction } from "@/lib/sign-out-action";
 import { cn } from "@/lib/utils";
 
 type AppShellProps = {
@@ -61,6 +61,7 @@ export function AppShell({
               selectedId={selectedTopicId}
               dueByTopic={dueByTopic}
               dueTodayTotal={dueTodayTotal}
+              signOutAction={signOutAction}
             />
           </div>
         ) : null}
@@ -91,7 +92,6 @@ export function AppShell({
                 <SearchPacks />
                 <MoodControl />
                 {actions}
-                <SignOutButton />
               </div>
             </div>
           </header>

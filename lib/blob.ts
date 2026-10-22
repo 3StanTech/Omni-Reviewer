@@ -352,11 +352,34 @@ export async function getPrivateBlob(
   abortSignal?: AbortSignal,
 ) {
   assertNamespacedPathname(pathname);
+  return getTrustedPrivateBlob(pathname, maxBytes, abortSignal);
+}
+
+/** The tour music: a fixed private object, never under `public/` or in the repo. */
+const TOUR_MUSIC_PATHNAME = "app-assets/tour-music.mp3";
+const MAX_TOUR_MUSIC_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Fetch the tour music stream; the pathname is a constant, so no user namespace applies.
+ * `range` is a validated single `bytes=` range (Safari's audio player asks for ranges).
+ */
+export function getTourMusicBlob(abortSignal?: AbortSignal, range?: string) {
+  return getTrustedPrivateBlob(TOUR_MUSIC_PATHNAME, MAX_TOUR_MUSIC_BYTES, abortSignal, range);
+}
+
+/** Callers check the pathname's shape first; this checks the response matches it. */
+async function getTrustedPrivateBlob(
+  pathname: string,
+  maxBytes: number,
+  abortSignal?: AbortSignal,
+  range?: string,
+) {
   const result = await get(pathname, {
     access: "private",
     useCache: false,
     token: process.env.BLOB_READ_WRITE_TOKEN,
     abortSignal,
+    ...(range ? { headers: { Range: range } } : {}),
   });
   const resultStatus = result?.statusCode as number | undefined;
   if (

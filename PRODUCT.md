@@ -31,7 +31,7 @@ Tristan and invited friends studying late at night from notes, PDFs, slides, and
 - `/` - topic tabs, create/rename/delete topic, list of reviewers in the selected topic, create/rename/delete reviewer.
 - `/topics/[topicId]/reviewers/[reviewerId]` - pack workspace: sources behind a drawer once generated, generate/regenerate, four study modes.
 
-The header has a **Search packs** button (see Search packs below). Pack pages also carry a fixed **Ask** pill in all four modes (see Ask this pack below). The desk never shows the pill.
+The topic shelf starts hidden on every width; the toggle opens it and the choice is remembered per device. Its foot holds **Settings**: **Replay Kirby's tour** and **Sign out** (the top bar has no Sign out). The header has a **Search packs** button (see Search packs below). Pack pages also carry a fixed **Ask** pill in all four modes (see Ask this pack below). The desk never shows the pill.
 
 Topic tabs are primary navigation. The reviewer workspace collapses the library while studying and exposes sources through one labelled control. A reviewer is a workspace, not a metrics dashboard.
 
@@ -113,7 +113,9 @@ A one-line bar on the desk sums up the day: cards due, sections that need improv
 
 ### First week
 
-- **Guide.** Until the first pack is generated, the desk shows three steps (topic, pack with a ready handout, Generate) with the current one highlighted.
+- **Kirby's tour.** On the first desk visit of an account with no generated pack, Kirby offers a tour ("Want a quick tour?"). Part 1 lights one real control at a time from the shelf to the first generated pack (topic, pack, handout, Generate); Part 2 lights Locked In, Summary, Test Me, Carded and Ask. Her own clicks move it on; Skip tour is on every step and Escape skips when no dialog or menu is open. Progress is a device record (`omni-tour`), so reloads and the desk-to-pack move resume at the same step, and leaving during Generate resumes Part 2 the next time she opens that pack. Not now or Skip brings back the guide card. Accounts that already have a generated pack are never offered it. The tour creates nothing itself and makes no model calls; Generate stays her click.
+- **Replay.** Settings, **Replay Kirby's tour**: seven show-me stops (Topics, New pack, the four modes and Ask on the newest generated pack) with Back and Next. It creates nothing and never changes the first-visit record. With no generated pack it runs the first-visit tour on an empty desk, and is hidden when neither applies.
+- **Guide.** Until the first pack is generated and while the tour isn't running, the desk shows three steps (topic, pack with a ready handout, Generate) with the current one highlighted.
 - **Greeting.** The desk subtitle follows one order in Manila time: birthday (from `BIRTHDAY_DATES`), belated birthday during first run when the birthday was 1 to 30 days ago, first run, late night (23:00-03:59), cards waiting with minutes, then all caught up. The Dream Land Kirby follows the same order (see DESIGN.md).
 - **Study day.** A Manila calendar date with at least one Test Me answer or saved card rating. Carded practice saves no ratings, so it does not count.
 - **Week row and streak.** The Today card shows Mon-Sun dots for the current week. The streak counts consecutive study days ending today when today has study, else ending yesterday.
@@ -201,6 +203,7 @@ The header button opens a dialog that searches every pack the signed-in user own
 - Every topic/reviewer/source/view/job API is scoped by session user. Cross-user ids return 404 (no existence leak).
 - Unknown or malformed URLs show a friendly not-found page, and unexpected errors show a recovery page (Try again, Back to desk); study data is never touched by either.
 - `OPENROUTER_API_KEY` is server-only. Client never reads it.
+- **Tour music.** The only app asset in private Blob (fixed pathname, never in the repo or `public/`), streamed by `/api/tour-music` to signed-in users only (401 otherwise, `private, no-store`, byte ranges for Safari). It plays only during the tour in Dream Land, starts on Start tour, waits while no step is on screen, and mute is remembered per device (`omni-tour-muted`).
 - Source bytes are private application data. Upload paths, metadata, and
   retrieval are scoped to the signed-in owner and reviewer; clients must not
   depend on public blob URLs. Do not wait on Blob `onUploadCompleted` for source rows.

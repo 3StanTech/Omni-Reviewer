@@ -32,6 +32,14 @@ Each pack also has **Ask this pack**, a tutor that answers only from the pack's
 own sources and cites slide pages, and a header **Search packs** for full-text
 search across every pack. See [Ask this pack and search](#ask-this-pack-and-search).
 
+On an account's first visit, **Kirby's tour** lights one real control at a time
+from the topic shelf to the first generated pack, then through the four modes and
+Ask; it moves on only on the user's own clicks and can be skipped on every step.
+The topic shelf starts hidden; its **Settings** row holds **Replay Kirby's tour**
+and **Sign out**. The tour's music streams from private Blob through the
+signed-in `/api/tour-music` route and plays only in Dream Land. See PRODUCT.md
+(First week).
+
 Locked In and Summary share an explicit Markdown editor with Save changes and
 Cancel. Tables and ordinary Markdown use the formatted editor; documents with
 math or legacy semantic ink use a labelled source-preserving fallback. In

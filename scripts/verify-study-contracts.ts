@@ -329,7 +329,7 @@ function attribute(tag: string, name: string): string | null {
  * The login form's server action id. React renders it into the form for
  * no-JS posts: as `$ACTION_ID_<id>` when the action has no bound arguments, or
  * in the `$ACTION_<n>:0` descriptor `{"id":…}` when it does (useActionState
- * binds the previous state). The page has other forms (the sign-out button),
+ * binds the previous state). The page may carry other actions (sign-out),
  * so the login form is the one with the email and password fields.
  */
 function loginActionId(html: string): string {

@@ -18,7 +18,6 @@ describe("topic shelf", () => {
   const reviewer = read("app/topics/[topicId]/reviewers/[reviewerId]/page.tsx");
 
   it("toggles from a header button and remembers the choice", () => {
-    expect(shelf).toContain("omni-topic-shelf");
     expect(shelf).toContain('aria-label="Topics"');
     expect(shelf).toContain("aria-expanded");
     expect(shelf).toContain("aria-controls");

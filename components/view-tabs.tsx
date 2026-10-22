@@ -45,6 +45,7 @@ import { citationSourcesForMode } from "@/lib/citations";
 import { studyOutline } from "@/lib/study-outline";
 import { SummaryView } from "@/components/summary-view";
 import { TestMeView } from "@/components/test-me-view";
+import { useTour } from "@/components/tour/tour-provider";
 import { cn } from "@/lib/utils";
 import type { StudyViewSavePatch, ViewsPayload } from "@/lib/serialize-view";
 import type { ViewKind } from "@/lib/types";
@@ -225,6 +226,8 @@ export function ViewTabs({
   const tab = value ?? uncontrolledTab;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const { active: focusActive, setAllowed: setFocusAllowed } = useFocusMode();
+  // Kirby's tour moves on when a mode is opened, including the tab that is already selected.
+  const tourEvent = useTour()?.event;
   // The rail shows only with Ask closed and outside Focus mode; container width decides the rest in CSS.
   const railActive = useRailActive() && !focusActive;
   const sectionMastery = useSectionMastery();
@@ -247,6 +250,7 @@ export function ViewTabs({
   useEffect(() => () => setFocusAllowed(false), [setFocusAllowed]);
 
   function selectTab(next: ViewKind) {
+    tourEvent?.("mode-opened", next);
     if (next !== tab && onNavigateRequest && !onNavigateRequest(next)) return;
     if (value === undefined) setUncontrolledTab(next);
     onValueChange?.(next);
@@ -316,6 +320,8 @@ export function ViewTabs({
             <TabsTrigger
               key={item.kind}
               value={item.kind}
+              data-tour-target={`tab-${item.kind}`}
+              onClick={() => tourEvent?.("mode-opened", item.kind)}
               title={item.job}
               className={cn(
                 "min-w-[6.5rem]",
@@ -352,7 +358,8 @@ export function ViewTabs({
         <p data-focus-hide className="print-hide text-xs text-muted-foreground">{copy.jobLine}</p>
       )}
 
-      <div className={cn("grid gap-8", railActive && "@min-[64rem]/pack:grid-cols-[minmax(0,1fr)_17.5rem]")}>
+      {/* Kirby's tour never stands on study content. */}
+      <div data-tour-avoid className={cn("grid gap-8", railActive && "@min-[64rem]/pack:grid-cols-[minmax(0,1fr)_17.5rem]")}>
       <div className="flex min-w-0 flex-col gap-4">
       {views.staleKinds?.includes(tab) && modeHasContent(tab, views) ? (
         <p role="status" data-focus-hide className="print-hide max-w-xl rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">

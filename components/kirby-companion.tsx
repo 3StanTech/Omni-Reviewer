@@ -19,10 +19,11 @@ export type KirbyReaction = { outcome: KirbyOutcome; key: number };
 export type KirbyPose = "idle" | "inhale" | "full" | "puzzled" | "point";
 export type KirbyAccessory = "nightcap" | "headband" | "party";
 
-type KirbyState = KirbyOutcome | "press" | "spit" | "yawn";
+export type KirbyState = KirbyOutcome | "press" | "spit" | "yawn";
 
-/* Class per timed state; `wave` is `k-hello` so it never collides with the hover wave keyframes. */
-const STATE_CLASS: Record<KirbyState, string> = {
+/* Class per timed state; `wave` is `k-hello` so it never collides with the hover wave keyframes.
+   Exported with the durations for Kirby's tour guide, which plays the same states. */
+export const STATE_CLASS: Record<KirbyState, string> = {
   press: "k-press",
   happy: "k-happy",
   sad: "k-sad",
@@ -32,7 +33,7 @@ const STATE_CLASS: Record<KirbyState, string> = {
   spit: "k-spit",
   yawn: "k-yawning",
 };
-const STATE_MS: Record<KirbyState, number> = {
+export const STATE_MS: Record<KirbyState, number> = {
   press: 1000,
   happy: 1300,
   sad: 1500,
@@ -42,7 +43,7 @@ const STATE_MS: Record<KirbyState, number> = {
   spit: 1200,
   yawn: 6_000,
 };
-const ALL_STATE_CLASSES = Object.values(STATE_CLASS);
+export const ALL_STATE_CLASSES = Object.values(STATE_CLASS);
 /* Default idle time before a Kirby falls asleep; `sleepAfterMs={null}` keeps one awake. */
 const SLEEP_AFTER_MS = 120_000;
 /* The first recurring yawn waits for the desk's welcome wave or birthday dance to finish. */
@@ -58,7 +59,7 @@ const SIZE_CLASS = {
   lg: "w-[124px] max-sm:w-[84px]",
 } as const;
 
-const STAR_PATH =
+export const STAR_PATH =
   "M0.00,-7.00 L1.76,-2.43 L6.66,-2.16 L2.85,0.93 L4.11,5.66 L0.00,3.00 L-4.11,5.66 L-2.85,0.93 L-6.66,-2.16 L-1.76,-2.43 Z";
 
 const BURST: { bx: string; by: string }[] = [

@@ -8,6 +8,7 @@ import { WaddleDee } from "@/components/kirby-art";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MAX_ASK_QUESTION_CHARS, type ChatMessageDto } from "@/lib/ask-types";
+import { useTour } from "@/components/tour/tour-provider";
 import { cn } from "@/lib/utils";
 
 /** The counter appears once the draft is within this many characters of the limit. */
@@ -57,6 +58,7 @@ export function AskPanel({
   pillRef,
 }: AskPanelProps) {
   const localPillRef = useRef<HTMLButtonElement | null>(null);
+  const tourEvent = useTour()?.event;
   const pill = pillRef ?? localPillRef;
   const panelRef = useRef<HTMLElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -122,6 +124,7 @@ export function AskPanel({
         ref={pill}
         type="button"
         data-ask-pill=""
+        data-tour-target="ask"
         aria-label="Ask this pack"
         aria-expanded={false}
         className={cn(
@@ -129,7 +132,10 @@ export function AskPanel({
           // On a phone: an icon-only circle at the edge, above Carded's grade buttons, which are left aligned.
           "max-[640px]:right-3 max-[640px]:bottom-[max(6rem,calc(env(safe-area-inset-bottom)_+_5rem))] max-[640px]:w-11 max-[640px]:px-0",
         )}
-        onClick={() => onOpenChange(true)}
+        onClick={() => {
+          tourEvent?.("ask-opened");
+          onOpenChange(true);
+        }}
       >
         <ChatCircleDots weight="bold" className="size-[1.125rem] dreamland:hidden" aria-hidden />
         <WaddleDee className="hidden w-[1.375rem] dreamland:block" />
@@ -162,6 +168,7 @@ export function AskPanel({
     <section
       ref={panelRef}
       data-ask-panel=""
+      data-tour-avoid
       aria-labelledby={titleId}
       className={cn(
         "print-hide fixed z-40 flex flex-col overflow-hidden border-border bg-card text-card-foreground shadow-[0_12px_40px_oklch(0_0_0/45%)]",

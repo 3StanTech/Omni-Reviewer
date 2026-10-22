@@ -15,6 +15,8 @@ import { TodayCard } from "@/components/today-card";
 import { TodayModal, type TodayHrefs } from "@/components/today-modal";
 import { TopicTabs, type TopicListItem } from "@/components/topic-tabs";
 import { useTopicNav } from "@/components/topic-shelf";
+import { useTour } from "@/components/tour/tour-provider";
+import type { TourFacts } from "@/lib/tour";
 import type { StudyWeek } from "@/lib/study-week";
 import { outlineHeadingHref } from "@/lib/study-outline";
 import type { TodayPlan } from "@/lib/today-plan";
@@ -52,6 +54,8 @@ type StudyHomeProps = {
   firstRun?: FirstRunGuideState | null;
   /** The Manila study week for the Today card's row. */
   week?: StudyWeek;
+  /** Desk counts for Kirby's tour, passed on every visit. */
+  tourFacts?: Pick<TourFacts, "topics" | "packs" | "generatedPacks" | "latestGeneratedPackHref">;
 };
 
 export function StudyHome({
@@ -63,14 +67,36 @@ export function StudyHome({
   userId = null,
   firstRun = null,
   week,
+  tourFacts,
 }: StudyHomeProps) {
   const topicNav = useTopicNav();
+  const tour = useTour();
+  const tourReport = tour?.report;
+  const deskTopics = tourFacts?.topics;
+  const deskPacks = tourFacts?.packs;
+  const deskGenerated = tourFacts?.generatedPacks;
+  const deskLatestHref = tourFacts?.latestGeneratedPackHref ?? null;
+  useEffect(() => {
+    if (!tourReport || deskTopics === undefined || deskPacks === undefined || deskGenerated === undefined) return;
+    tourReport({
+      page: "desk",
+      topics: deskTopics,
+      packs: deskPacks,
+      generatedPacks: deskGenerated,
+      latestGeneratedPackHref: deskLatestHref,
+      pack: null,
+    });
+  }, [tourReport, deskTopics, deskPacks, deskGenerated, deskLatestHref]);
+  useEffect(() => {
+    if (!tourReport) return;
+    return () => tourReport({ page: "other", pack: null });
+  }, [tourReport]);
   const queue = useGenerationQueue({ userId });
   const firstPack = useFirstCelebration("pack", queue.packsReady > 0);
   const [todayOpen, setTodayOpen] = useState(false);
   const packTopicIds = today?.packTopicIds;
   const hrefs = useMemo(() => todayHrefs(packTopicIds ?? {}), [packTopicIds]);
-  const shelfOpen = topicNav?.shelfOpen ?? true;
+  const shelfOpen = topicNav?.shelfOpen ?? false;
   const [localOptimisticId, setLocalOptimisticId] = useState<string | null>(
     null,
   );
@@ -89,7 +115,7 @@ export function StudyHome({
 
   return (
     <div className="flex flex-1 flex-col gap-5">
-      {firstRun ? <FirstRunGuide state={firstRun} /> : null}
+      {firstRun && !tour?.running ? <FirstRunGuide state={firstRun} /> : null}
       {firstPack.show ? (
         <FirstCelebration kind="pack" onDone={firstPack.dismiss} onShow={() => cueKirby("desk", "dance")} />
       ) : null}

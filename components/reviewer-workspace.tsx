@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarBlank, CaretRight, Files } from "@phosphor-icons/react";
+import { CalendarBlank, CaretRight, Files, Sparkle } from "@phosphor-icons/react";
 
 import type { ViewsPayload } from "@/lib/serialize-view";
 import {
@@ -16,16 +16,16 @@ import { ScrollJump } from "@/components/scroll-jump";
 import { useSectionMastery } from "@/components/study-side-panel";
 import { ViewTabs } from "@/components/view-tabs";
 import { GenerationControls } from "@/components/generation-controls";
-import type { FreeRequestState } from "@/lib/generation-queue";
+import { freeRequestsUsedUp, type FreeRequestState } from "@/lib/generation-queue";
 import { GenerationStatus } from "@/components/generation-status";
 import { MODE_KIT_ITEMS } from "@/components/mode-kit";
 import { RAIL_HEADER_CLASS, type ModeMenuItem } from "@/components/mode-toolbar";
 import { FirstCelebration, useFirstCelebration } from "@/components/first-celebration";
 import { cueKirby, KirbyCompanion, type KirbyPose } from "@/components/kirby-companion";
 import { PackReadyNotice } from "@/components/pack-ready-notice";
+import { useTour } from "@/components/tour/tour-provider";
 import { Button } from "@/components/ui/button";
-import { Panel, PanelHeader } from "@/components/ui/panel";
-import { Separator } from "@/components/ui/separator";
+import { Panel, PanelHeader, PanelStepNumber } from "@/components/ui/panel";
 import {
   Dialog,
   DialogContent,
@@ -209,13 +209,14 @@ export function ReviewerWorkspace({
   const documentDraftControllerRef = useRef<LockedInDraftController | null>(null);
   const router = useRouter();
   const isClient = useIsClient();
+  const tour = useTour();
 
   const hasReadySource = useMemo(
     () => sources.some((s) => s.ingestStatus === "ready"),
     [sources],
   );
 
-  const hasViews = useMemo(() => viewsExist(views), [views]);
+  const viewsSaved = useMemo(() => viewsExist(views), [views]);
   const hasCompleteViews = useMemo(
     () =>
       (["locked_in", "summary", "test_me", "carded"] as const).every(
@@ -308,6 +309,15 @@ export function ReviewerWorkspace({
   // A run saves each mode as it goes; the header keeps the stamp it had when
   // the run started (or says Generating) until the run ends.
   const generationBusy = generation.state.busy;
+  // A first run keeps the never-generated layout (numbered cards, Study pack Kirby on the left)
+  // until it finishes, so the page does not jump when the first mode lands mid-run.
+  const runActive =
+    generation.state.busy || generation.state.status === "queued" || generation.state.status === "running";
+  const [firstRunLayout, setFirstRunLayout] = useState(false);
+  if (!firstRunLayout && !viewsSaved && runActive) setFirstRunLayout(true);
+  if (firstRunLayout && !runActive) setFirstRunLayout(false);
+  // The page reads as generated once a run that started without views has finished.
+  const hasViews = viewsSaved && !firstRunLayout;
   const [stampHold, setStampHold] = useState({ busy: generationBusy, stamp: generatedAt });
   if (stampHold.busy !== generationBusy) setStampHold({ busy: generationBusy, stamp: generatedAt });
   const headerStamp = generationBusy ? stampHold.stamp : generatedAt;
@@ -574,6 +584,7 @@ export function ReviewerWorkspace({
       initialSources={sources}
       onSourcesChange={setSources}
       expanded
+      card={!hasViews}
       vision={vision}
     />
     </div>
@@ -582,11 +593,34 @@ export function ReviewerWorkspace({
   // The section's Kirby inhales while a job is queued or running and is puzzled when the
   // server reports it failed or partial; no Kirby otherwise (one per area).
   const generationPose: KirbyPose | null =
-    generation.state.status === "queued" || generation.state.status === "running" || generation.state.busy
+    runActive
       ? "inhale"
       : (generation.state.status === "failed" || generation.state.status === "partial") && !generation.state.dismissed
         ? "puzzled"
         : null;
+
+  // The Generate button and its status, shared by the compact section and the numbered card.
+  const generationControls = (fullKirby: boolean) => (
+    <>
+      <GenerationControls
+        state={generation.state}
+        hasReadySource={hasReadySource}
+        hasViews={hasViews}
+        hasCompleteViews={hasCompleteViews}
+        sourcesAreMediaOnly={sourcesAreMediaOnly}
+        busyReason={busyReason}
+        quota={quota}
+        fullKirby={fullKirby}
+        onGenerate={() => void generation.start({ intent: "generate_missing" })}
+        onResume={() => void generation.resume()}
+      />
+      <GenerationStatus
+        state={generation.state}
+        onDismiss={generation.dismiss}
+        onResume={() => void generation.resume()}
+      />
+    </>
+  );
 
   const generateSection = (
     <section data-focus-hide className="print-hide space-y-3" aria-labelledby="generate-heading">
@@ -605,26 +639,49 @@ export function ReviewerWorkspace({
               : "Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources."}
           </p>
         </div>
-        {generationPose ? <KirbyCompanion size="sm" pose={generationPose} className="shrink-0" /> : null}
+        {generationPose ? (
+          <KirbyCompanion size="sm" pose={generationPose} className="shrink-0" />
+        ) : null}
       </div>
-      <GenerationControls
-        state={generation.state}
-        hasReadySource={hasReadySource}
-        hasViews={hasViews}
-        hasCompleteViews={hasCompleteViews}
-        sourcesAreMediaOnly={sourcesAreMediaOnly}
-        busyReason={busyReason}
-        quota={quota}
-        fullKirby={generationPose === null}
-        onGenerate={() => void generation.start({ intent: "generate_missing" })}
-        onResume={() => void generation.resume()}
-      />
-      <GenerationStatus
-        state={generation.state}
-        onDismiss={generation.dismiss}
-        onResume={() => void generation.resume()}
-      />
+      {generationControls(generationPose === null)}
     </section>
+  );
+
+  // The never-generated page's numbered Study pack card keeps one Kirby beside its text:
+  // idle, inhaling or puzzled. When the free requests are used up and nothing runs or
+  // failed, he moves to the limit line with a full tummy instead (one Kirby per area).
+  const studyPackKirbyHidden = generationPose === null && freeRequestsUsedUp(quota);
+  const studyPackCard = (
+    <Panel data-focus-hide className="print-hide min-w-0" aria-labelledby="generate-heading">
+      <PanelHeader
+        sticker
+        label={<span id="generate-heading">Study pack</span>}
+        icon={
+          <>
+            <PanelStepNumber>2</PanelStepNumber>
+            <Sparkle weight="fill" aria-hidden className="size-4 shrink-0" />
+          </>
+        }
+      />
+      <div className="flex items-start p-4">
+        {studyPackKirbyHidden ? null : (
+          <div data-study-pack-kirby data-tour-target="study-pack-kirby" className="shrink-0">
+            <KirbyCompanion
+              size="md"
+              area="study-pack"
+              pose={generationPose ?? "idle"}
+              className="mr-4 max-sm:w-[72px] max-sm:mr-3"
+            />
+          </div>
+        )}
+        <div className="min-w-0 flex-1 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Generate writes Locked In, Summary, Test Me, and Carded from your ingested sources.
+          </p>
+          {generationControls(studyPackKirbyHidden)}
+        </div>
+      </div>
+    </Panel>
   );
 
   const studySection = (
@@ -693,10 +750,36 @@ export function ReviewerWorkspace({
   // The first-pack cheer fires only on a run this visit watched finish (never on a
   // restored job), and not for a single-mode redo.
   const [sawRun, setSawRun] = useState(false);
-  if (!sawRun && (generationState.busy || generationState.status === "queued" || generationState.status === "running")) {
+  if (!sawRun && runActive) {
     setSawRun(true);
   }
   const firstPack = useFirstCelebration("pack", sawRun && finishedJob && finishedRedoKind === null);
+
+  // Kirby's tour reads this page's own state; nothing is fetched for it. The interlude covers
+  // the Pack ready ride as well as the first-pack cheer, so the tour never flashes Part 2 while
+  // the cheer is still being decided, and returns once both have cleared.
+  const tourReport = tour?.report;
+  const liveSources = sources.filter((source) => source.ingestStatus !== "failed").length;
+  const readySources = sources.filter((source) => source.ingestStatus === "ready").length;
+  const cheerActive = firstPack.show || (sawRun && finishedJob && finishedRedoKind === null);
+  useEffect(() => {
+    tourReport?.({
+      page: "pack",
+      pack: {
+        id: reviewerId,
+        isTourPack: false,
+        liveSources,
+        readySources,
+        generating: runActive,
+        hasViews,
+        cheerActive,
+      },
+    });
+  }, [tourReport, reviewerId, liveSources, readySources, runActive, hasViews, cheerActive]);
+  useEffect(() => {
+    if (!tourReport) return;
+    return () => tourReport({ page: "other", pack: null });
+  }, [tourReport]);
   const readyLabel = finishedRedoKind
     ? `${MODE_KIT_ITEMS.find((item) => item.kind === finishedRedoKind)?.label ?? "Pack"} ready`
     : "Pack ready";
@@ -838,8 +921,7 @@ export function ReviewerWorkspace({
       ) : (
         <>
           {sourcePanel}
-          {generateSection}
-          <Separator />
+          {studyPackCard}
           {studySection}
         </>
       )}

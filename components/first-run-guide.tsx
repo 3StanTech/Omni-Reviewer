@@ -13,7 +13,7 @@ const STEPS = [
   {
     key: "topic",
     title: "Make a topic",
-    hint: "Use New topic in the shelf for a course or subject.",
+    hint: "Use New topic for a course or subject.",
   },
   {
     key: "pack",

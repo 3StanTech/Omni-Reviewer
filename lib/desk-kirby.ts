@@ -22,6 +22,28 @@ export type DeskKirbyLook = {
 
 const LATE_NIGHT_YAWN_EVERY_MS = 180_000;
 
+/* The desk Kirby's welcome wave, once per browser session. Kirby's tour waits it out before offering. */
+const WELCOMED_KEY = "omni-kirby-welcomed";
+export const WELCOME_DELAY_MS = 300;
+export const WELCOME_SAY_MS = 2600;
+
+export function welcomedThisSession(): boolean {
+  try {
+    return window.sessionStorage.getItem(WELCOMED_KEY) !== null;
+  } catch {
+    // Blocked storage: skip the wave rather than repeat it on every visit.
+    return true;
+  }
+}
+
+export function markWelcomed() {
+  try {
+    window.sessionStorage.setItem(WELCOMED_KEY, "1");
+  } catch {
+    // Nothing to remember in blocked storage.
+  }
+}
+
 /**
  * The desk Kirby's pose and accessory: the first rule that applies, in the same order as
  * the desk subtitle (birthday, belated birthday on first run, first run, late night, nothing

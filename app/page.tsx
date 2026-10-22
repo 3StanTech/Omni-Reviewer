@@ -10,6 +10,7 @@ import { deskSubtitle, parseBirthdayDates } from "@/lib/desk-subtitle";
 import { greetingFor } from "@/lib/greeting";
 import {
   getFirstRunState,
+  getLatestGeneratedPack,
   getStudyDays,
   getTodayPlan,
   listActiveUntimedReviewerIds,
@@ -52,13 +53,14 @@ export default async function HomePage({ searchParams }: HomeProps) {
     topics.find((t) => t.id === selectedId) ?? null;
 
   const now = new Date();
-  const [reviewers, activeUntimed, today, dueCounts, firstRun, studyDays] = await Promise.all([
+  const [reviewers, activeUntimed, today, dueCounts, firstRun, studyDays, latestPack] = await Promise.all([
     selectedId ? listReviewersByTopic(selectedId, userId) : [],
     selectedId ? listActiveUntimedReviewerIds(userId) : [],
     getTodayPlan(userId),
     listDueByTopic(userId),
     getFirstRunState(userId),
     getStudyDays(userId, now),
+    getLatestGeneratedPack(userId),
   ]);
   const activeUntimedIds = new Set(activeUntimed);
 
@@ -116,6 +118,14 @@ export default async function HomePage({ searchParams }: HomeProps) {
         reviewers={serializedReviewers}
         today={today ? { plan: today.plan, packTopicIds: today.packTopicIds } : null}
         firstRun={firstRun.generatedPacks === 0 ? firstRun : null}
+        tourFacts={{
+          topics: firstRun.topics,
+          packs: firstRun.packs,
+          generatedPacks: firstRun.generatedPacks,
+          latestGeneratedPackHref: latestPack
+            ? `/topics/${latestPack.topicId}/reviewers/${latestPack.id}`
+            : null,
+        }}
         week={studyWeek(studyDays, now)}
         userId={userId}
       />

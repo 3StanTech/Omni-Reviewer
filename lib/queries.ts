@@ -667,6 +667,27 @@ export async function getFirstRunState(userId: string): Promise<FirstRunState> {
   };
 }
 
+/** The owner's most recently generated live pack (for Kirby's tour replay), or null. */
+export async function getLatestGeneratedPack(
+  userId: string,
+): Promise<{ id: string; topicId: string } | null> {
+  const [row] = await db
+    .select({ id: reviewers.id, topicId: reviewers.topicId })
+    .from(reviewers)
+    .innerJoin(topics, eq(reviewers.topicId, topics.id))
+    .where(
+      and(
+        eq(topics.userId, userId),
+        isNull(topics.deletingAt),
+        isNull(reviewers.deletingAt),
+        isNotNull(reviewers.lastGeneratedAt),
+      ),
+    )
+    .orderBy(desc(reviewers.lastGeneratedAt))
+    .limit(1);
+  return row ?? null;
+}
+
 /**
  * Manila dates (`YYYY-MM-DD`) in the last 60 days on which this owner answered
  * a Test Me question or rated a card. Carded practice saves no reviews, so it
