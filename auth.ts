@@ -1,8 +1,11 @@
 import NextAuth from "next-auth";
+import type { JWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { CredentialsSignin } from "next-auth";
 import { eq } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
+import { redirect } from "next/navigation";
+import { cache } from "react";
 
 import { authConfig } from "./auth.config";
 import { verifyPassword } from "./lib/auth-utils";
@@ -97,12 +100,63 @@ export async function authorizeCredentials(
     id: user.id,
     email: user.email,
     name: user.name,
+    sessionVersion: user.sessionVersion,
   };
 }
+
+/**
+ * The server authentication boundary for every `auth()` call (pages, routes,
+ * server actions). A token whose session version is below the account's
+ * current one was issued before a password reset and is refused, as is a
+ * token whose account no longer exists. A token minted before session
+ * versions existed counts as version 0, so it stays valid until the first
+ * reset. A failed lookup throws, which Auth.js treats as no session.
+ */
+async function currentSessionToken(token: JWT): Promise<JWT | null> {
+  if (typeof token.sub !== "string" || token.sub.length === 0) return null;
+  const currentVersion = await accountSessionVersion(token.sub);
+  if (currentVersion === null) return null;
+  const tokenVersion =
+    typeof token.sessionVersion === "number" ? token.sessionVersion : 0;
+  return tokenVersion < currentVersion ? null : token;
+}
+
+/**
+ * The account's current session version, or null when it no longer exists.
+ * React `cache` dedupes the lookup only within one server render pass (a
+ * rejected lookup is shared too, so it still fails closed). Route handlers,
+ * server actions and code outside a render each query again.
+ */
+const accountSessionVersion = cache(
+  async (userId: string): Promise<number | null> => {
+    const [row] = await db
+      .select({ sessionVersion: users.sessionVersion })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return row ? row.sessionVersion : null;
+  },
+);
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   secret: nextAuthSecret,
+  callbacks: {
+    ...authConfig.callbacks,
+    // proxy.ts keeps the edge-safe callback (no database read per request);
+    // the version check runs here, where pages and routes resolve the session.
+    async jwt(params) {
+      const token = authConfig.callbacks.jwt(params);
+      if (params.user) {
+        token.sessionVersion =
+          typeof params.user.sessionVersion === "number"
+            ? params.user.sessionVersion
+            : 0;
+        return token;
+      }
+      return currentSessionToken(token);
+    },
+  },
   providers: [
     Credentials({
       id: "credentials",
@@ -115,3 +169,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
 });
+
+/**
+ * Sends a signed-in visitor from a public auth page to "/". `auth()` applies
+ * the session-version check, so a revoked cookie renders the page instead of
+ * looping between "/" and the page (proxy.ts lets public auth pages through).
+ */
+export async function redirectIfSignedIn(): Promise<void> {
+  const session = await auth();
+  if (session?.user?.id) redirect("/");
+}

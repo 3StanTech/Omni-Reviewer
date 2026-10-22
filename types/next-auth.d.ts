@@ -13,6 +13,7 @@ declare module "next-auth" {
     id: string;
     email?: string | null;
     name?: string | null;
+    sessionVersion?: number;
   }
 }
 
@@ -20,6 +21,8 @@ declare module "next-auth/jwt" {
   interface JWT {
     email?: string | null;
     name?: string | null;
+    /** Absent on tokens issued before session versions existed; read as 0. */
+    sessionVersion?: number;
   }
 }
 

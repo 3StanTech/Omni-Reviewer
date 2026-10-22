@@ -3,12 +3,14 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { loadGenerationViews } from "@/lib/generation-jobs";
+import { isPublicError } from "@/lib/public-errors";
 import { getReviewer, listAnnotationPageForReviewer, updateStudyView } from "@/lib/queries";
 import {
   cappedBodyError,
   MAX_MUTATION_BODY_BYTES,
   readCappedJson,
 } from "@/lib/request-body";
+import { studyMarkdownProblem } from "@/lib/study-markdown";
 
 export const dynamic = "force-dynamic";
 
@@ -49,12 +51,22 @@ export async function PATCH(
   if (kind === "summary" && parsed.data.pinned !== undefined) {
     return NextResponse.json({ error: "Summary does not support pinning." }, { status: 400 });
   }
-  const row = await updateStudyView({
-    reviewerId,
-    userId,
-    kind,
-    ...parsed.data,
-  });
+  // The reader refuses content past its render limits, so never save what it cannot show.
+  const renderProblem = parsed.data.content === undefined ? null : studyMarkdownProblem(parsed.data.content);
+  if (renderProblem) return NextResponse.json({ error: renderProblem }, { status: 400 });
+  // The persistence guard re-checks what is stored, which can differ from the body after normalization.
+  let row: Awaited<ReturnType<typeof updateStudyView>>;
+  try {
+    row = await updateStudyView({
+      reviewerId,
+      userId,
+      kind,
+      ...parsed.data,
+    });
+  } catch (error) {
+    if (isPublicError(error)) return NextResponse.json({ error: error.message }, { status: 400 });
+    throw error;
+  }
   if (!row) return NextResponse.json({ error: "View not found" }, { status: 404 });
   if ("stale" in row) {
     return NextResponse.json(

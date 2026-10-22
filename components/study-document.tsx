@@ -39,6 +39,7 @@ import { readReadingPosition, readingPositionKey, writeReadingPosition } from "@
 import { getLocalStorage } from "@/lib/safe-storage";
 import { markWideInlineMath } from "@/lib/wide-math";
 import { clearStudyDraft, readStudyDraft, studyDraftKey, writeStudyDraft, type StudyDraft } from "@/lib/study-draft";
+import { studyMarkdownProblem } from "@/lib/study-markdown";
 
 type StudyDocumentProps = {
   userId?: string;
@@ -252,6 +253,12 @@ export function StudyDocument({ userId, reviewerId, kind, view, onSaved, onDirty
   const save = useCallback(async (content: string): Promise<boolean> => {
     if (draftIsStale) {
       setError("This document changed elsewhere. Reload the latest content before saving.");
+      return false;
+    }
+    // The server refuses this too; checking here keeps the editor and draft open without a request.
+    const renderProblem = studyMarkdownProblem(content.trim());
+    if (renderProblem) {
+      setError(renderProblem);
       return false;
     }
     setBusy(true);

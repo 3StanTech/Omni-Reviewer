@@ -16,5 +16,19 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # tsconfig includes next-env.d.ts and .next/types (both gitignored), so
+      # generate them first; typegen writes types only and runs no build.
+      - run: npx next typegen
+      - run: npx tsc --noEmit
       - run: npm test
       - run: npm run lint
+      - name: Production build
+        run: npm run build
+        env:
+          # Build-only placeholders: the build never connects to a database,
+          # model or Blob store, and these values work nowhere else.
+          NEXT_TELEMETRY_DISABLED: "1"
+          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build
+          AUTH_SECRET: ci-build-only-placeholder-secret-not-used-at-runtime
+          OPENROUTER_API_KEY: ci-build-only-placeholder
+          BLOB_READ_WRITE_TOKEN: vercel_blob_rw_ci_build_only_placeholder

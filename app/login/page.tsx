@@ -2,7 +2,7 @@ import { BookOpen } from "@phosphor-icons/react/dist/ssr";
 import { AuthError } from "next-auth";
 
 import { LoginForm } from "@/components/login-form";
-import { signIn } from "@/auth";
+import { redirectIfSignedIn, signIn } from "@/auth";
 import { isUsableAuthSecret } from "@/lib/auth-secret";
 import {
   LOGIN_THROTTLE_LOCKED_MESSAGE,
@@ -55,7 +55,8 @@ function loginErrorMessage(code: string | undefined): string {
   return "Invalid email or password.";
 }
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  await redirectIfSignedIn();
   return (
     <main className="flex min-h-full flex-1 flex-col items-center justify-center px-4 py-16">
       <div className="w-full max-w-sm space-y-8">

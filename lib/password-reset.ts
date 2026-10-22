@@ -7,6 +7,8 @@ export const PASSWORD_RESET_SUCCESS_MESSAGE =
   "If that email has an invite, we sent a reset link.";
 export const PASSWORD_RESET_INVALID_MESSAGE =
   "This reset link is invalid or has expired.";
+export const PASSWORD_RESET_RETRY_MESSAGE =
+  "We couldn't reset your password just now. Your link still works, so try again in a moment.";
 export const PASSWORD_RESET_THROTTLE_PREFIX = "reset:";
 
 export function createResetToken(): string {

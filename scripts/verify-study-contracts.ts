@@ -1,5 +1,6 @@
 /**
- * Real-app verification of the study contracts S1a, S2, S3a and S5a over HTTP.
+ * Real-app verification of the study contracts S1a, S1b, S2, S2b, S3a and S5a
+ * over HTTP.
  *
  * Drives a running dev server that was started with the controlled-services
  * preload (tests/support/controlled-services.mjs) against a disposable Neon
@@ -10,24 +11,43 @@
  * Usage:
  *   npx tsx scripts/verify-study-contracts.ts --init-fixtures <dir>
  *   npx tsx scripts/verify-study-contracts.ts --origin http://localhost:3218 \
- *     --out <dir outside the repo> --fixtures <dir> --scenario S1a|S2|S3a|S5a|all
+ *     --out <dir outside the repo> --fixtures <dir> --scenario S1a|S1b|S2|S2b|S3a|S5a|all
  *
  * Required environment (refuses to start without it):
  *   DATABASE_URL                 the disposable branch; its host must equal ALLOWED_DB_HOST
  *   ALLOWED_DB_HOST              exact hostname of that branch
  *   CONTROLLED_SERVICES_LOG      the log path the server's preload writes
  *   CONTROLLED_SERVICES_CONTROL  the control file path the server's preload reads
+ *   AUTH_SECRET                  S1b only: the dev server's secret, to mint a
+ *                                pre-session-version cookie; never printed
  *
  * The origin must be http://localhost or http://127.0.0.1. Evidence goes to
  * <out>/<run id>/: one JSON file per scenario (HTTP transcript, database
  * before/after, assertions, timestamps, HEAD) and S5a's PDFs. Cookies, tokens,
- * password hashes and connection strings are redacted.
+ * reset links, password hashes and connection strings are redacted.
  *
  * S1a's login-page attempts replay the hydrated form's fetch action
- * (Next-Action header, React encodeReply body) and read the returned message.
- * S1a ages the synthetic user's login_throttles row by 16 minutes to stand in
- * for the lock expiring. Nothing else is written outside the synthetic users'
- * own rows. Exit code 0 only when every selected scenario passes.
+ * (Next-Action header, React encodeReply body) and read the returned message;
+ * S1b submits the reset page's form the same way. S1a ages the synthetic
+ * user's login_throttles row by 16 minutes to stand in for the lock expiring.
+ *
+ * S1b writes outside the HTTP routes in three ways, all scoped to its own
+ * synthetic user: it inserts a password_reset_tokens row for a token it knows
+ * (no reset email is sent in a dev run); to inject a failure before the
+ * password write it adds a temporary NOT VALID CHECK constraint on users that
+ * rejects only that user's session_version leaving 0, and drops it in a
+ * finally block; and it runs scripts/reset-password.ts as a child process
+ * with the same environment (so the same disposable DATABASE_URL) for the
+ * operator path. The pre-deploy cookie is encoded with Auth.js's own `encode`
+ * and AUTH_SECRET.
+ *
+ * S2b archives one synthetic card by setting archived_at alone (revision kept),
+ * so the archived predicate, not the revision check, is what must refuse the
+ * edit and the rating. Its Explain calls are answered by the preload's
+ * controlled model; the app's own free-request ledger (free_request_days) may
+ * count them on the disposable branch. Nothing else is written outside the
+ * synthetic users' own rows. Exit code 0 only when every selected scenario
+ * passes.
  */
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -42,11 +62,15 @@ import {
 import path from "node:path";
 
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import { encode } from "next-auth/jwt";
 
+import { contextForRange, renderedStudyText } from "../lib/annotations";
 import { hashPassword } from "../lib/auth-utils";
+import { hashResetToken, PASSWORD_RESET_INVALID_MESSAGE, PASSWORD_RESET_RETRY_MESSAGE } from "../lib/password-reset";
+import { MAX_STUDY_MARKDOWN_CHARS, MAX_STUDY_MATH_BLOCKS, studyMarkdownProblem } from "../lib/study-markdown";
 
 const REPO_ROOT = path.resolve(__dirname, "..");
-const SCENARIOS = ["S1a", "S2", "S3a", "S5a"] as const;
+const SCENARIOS = ["S1a", "S1b", "S2", "S2b", "S3a", "S5a"] as const;
 type ScenarioName = (typeof SCENARIOS)[number];
 
 // User-facing copy the contracts promise, kept here so a copy change is caught.
@@ -149,7 +173,8 @@ function redactString(value: string): string {
   return value
     .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[redacted-connection-string]")
     .replace(/scrypt\$[^\s"']+/g, "[redacted-hash]")
-    .replace(/(authjs\.[\w.-]+=)[^;\s"']+/g, "$1[redacted]");
+    .replace(/(authjs\.[\w.-]+=)[^;\s"']+/g, "$1[redacted]")
+    .replace(/([?&]token=)[^&\s"']+/g, "$1[redacted]");
 }
 
 function redact(value: unknown): unknown {
@@ -241,6 +266,14 @@ class CookieJar {
   has(prefix: string): boolean {
     return [...this.cookies.keys()].some((name) => name.startsWith(prefix));
   }
+
+  value(name: string): string | undefined {
+    return this.cookies.get(name);
+  }
+
+  set(name: string, value: string): void {
+    this.cookies.set(name, value);
+  }
 }
 
 type HttpOptions = {
@@ -255,7 +288,7 @@ type HttpOptions = {
 
 class Http {
   constructor(
-    private readonly origin: string,
+    readonly origin: string,
     private readonly evidence: Evidence,
     readonly jar = new CookieJar(),
   ) {}
@@ -326,17 +359,17 @@ function attribute(tag: string, name: string): string | null {
 }
 
 /**
- * The login form's server action id. React renders it into the form for
- * no-JS posts: as `$ACTION_ID_<id>` when the action has no bound arguments, or
- * in the `$ACTION_<n>:0` descriptor `{"id":…}` when it does (useActionState
- * binds the previous state). The page may carry other actions (sign-out),
- * so the login form is the one with the email and password fields.
+ * A form's server action id. React renders it into the form for no-JS posts:
+ * as `$ACTION_ID_<id>` when the action has no bound arguments, or in the
+ * `$ACTION_<n>:0` descriptor `{"id":…}` when it does (useActionState binds the
+ * previous state). A page may carry other actions (sign-out), so the form is
+ * the one holding every named field.
  */
-function loginActionId(html: string): string {
-  const form = (html.match(/<form\b[\s\S]*?<\/form>/g) ?? []).find(
-    (candidate) => /\sname="email"/.test(candidate) && /\sname="password"/.test(candidate),
+function formActionId(html: string, fields: string[], what: string): string {
+  const form = (html.match(/<form\b[\s\S]*?<\/form>/g) ?? []).find((candidate) =>
+    fields.every((field) => new RegExp(`\\sname="${field}"`).test(candidate)),
   );
-  if (!form) throw new Error("the login page rendered no form with email and password fields");
+  if (!form) throw new Error(`the ${what} page rendered no form with ${fields.join(", ")} fields`);
   for (const tag of form.match(/<input\b[^>]*>/g) ?? []) {
     const name = attribute(tag, "name") ?? "";
     let id: unknown = null;
@@ -344,7 +377,11 @@ function loginActionId(html: string): string {
     else if (/^\$ACTION_[^:]+:0$/.test(name)) id = (safeJson(attribute(tag, "value") ?? "") as { id?: unknown }).id;
     if (typeof id === "string" && /^[0-9a-f]{42}$/.test(id)) return id;
   }
-  throw new Error("the login form carries no server action id");
+  throw new Error(`the ${what} form carries no server action id`);
+}
+
+function loginActionId(html: string): string {
+  return formActionId(html, ["email", "password"], "login");
 }
 
 /**
@@ -365,7 +402,8 @@ function flightActionResult(flight: string): unknown {
     }
   }
   let result = (rows.get("0") as { a?: unknown } | undefined)?.a;
-  const reference = typeof result === "string" ? /^\$@([0-9a-f]+)$/.exec(result) : null;
+  // `$@<row>` (a promise) or `$<row>` (an outlined object) points at the row holding the value.
+  const reference = typeof result === "string" ? /^\$@?([0-9a-f]+)$/.exec(result) : null;
   if (reference) result = rows.get(reference[1]!);
   return typeof result === "string" && result.startsWith("$$") ? result.slice(1) : result;
 }
@@ -623,7 +661,9 @@ const BOUNDARY_SERVICES = new Set(["model", "vision", "openrouter-quota", "openr
 /** Boundary services a scenario may be served by; everything else must stay unreached. */
 const SERVED_BY_SCENARIO: Record<ScenarioName, Set<string>> = {
   S1a: new Set(),
+  S1b: new Set(),
   S2: new Set(),
+  S2b: new Set(["model"]),
   S3a: new Set(["vision", "openrouter-quota"]),
   S5a: new Set(),
 };
@@ -786,6 +826,277 @@ async function scenarioS1a(ctx: Synthetic, origin: string, evidence: Evidence): 
     "the login page session belongs to the synthetic user",
     (await sessionEmail(pageHttp, "after page sign-in")) === user.email,
   );
+}
+
+// ---------------------------------------------------------------- S1b
+
+const SESSION_COOKIE = "authjs.session-token";
+
+type ResetPage = { form: boolean; invalidShown: boolean; actionId: string | null };
+
+/** The reset page for a token: its form (and action id) when the token is usable. */
+async function resetPage(http: Http, pagePath: string, label: string): Promise<ResetPage> {
+  const read = (html: string) => ({ form: /\sname="confirm"/.test(html), invalidShown: html.includes(PASSWORD_RESET_INVALID_MESSAGE) });
+  let shown = { form: false, invalidShown: false };
+  const page = await http.request(pagePath, { label: `${label}: reset page`, keep: (html) => (shown = read(html)) });
+  return { ...shown, actionId: shown.form ? formActionId(page.text, ["token", "password", "confirm"], "reset") : null };
+}
+
+type ResetResult = { error: string | null; done: boolean };
+
+/**
+ * Submits the reset form the way the hydrated page does (see signInViaLoginPage):
+ * the action's arguments are `[previous state, FormData]` and it answers with
+ * `{error, done}`.
+ */
+async function submitResetForm(http: Http, token: string, password: string, label: string): Promise<ResetResult> {
+  const pagePath = `/reset-password?token=${encodeURIComponent(token)}`;
+  const page = await resetPage(http, pagePath, label);
+  if (!page.actionId) throw new Error(`${label}: the reset page showed no form for a usable token`);
+  const form = new FormData();
+  form.append("_1_token", token);
+  form.append("_1_password", password);
+  form.append("_1_confirm", password);
+  form.append("0", JSON.stringify([null, "$K1"]));
+  const { response, text } = await http.request(pagePath, {
+    method: "POST",
+    label: `${label}: reset page action`,
+    headers: { origin: http.origin, accept: "text/x-component", "next-action": page.actionId },
+    body: form,
+    keep: (flight, res) => ({
+      contentType: res.headers.get("content-type"),
+      actionRedirect: res.headers.get("x-action-redirect"),
+      result: flightActionResult(flight),
+    }),
+  });
+  if (
+    response.headers.get("x-nextjs-action-not-found") === "1" ||
+    !(response.headers.get("content-type") ?? "").startsWith("text/x-component")
+  ) {
+    throw new Error(`${label}: the reset action answered ${response.status} without a Flight result`);
+  }
+  const result = flightActionResult(text) as Partial<ResetResult> | null;
+  if (!result || typeof result !== "object") throw new Error(`${label}: the reset action returned no state`);
+  return { error: typeof result.error === "string" ? result.error : null, done: result.done === true };
+}
+
+/** An HTTP client holding only the given session cookie value. */
+function withSession(origin: string, evidence: Evidence, value: string): Http {
+  const http = new Http(origin, evidence);
+  http.jar.set(SESSION_COOKIE, value);
+  return http;
+}
+
+function sessionCookie(http: Http, label: string): string {
+  const value = http.jar.value(SESSION_COOKIE);
+  if (!value) throw new Error(`${label}: no ${SESSION_COOKIE} cookie`);
+  return value;
+}
+
+type CookieProbe = { session: string | null; api: number; home: number; homeToLogin: boolean; login: number };
+
+/**
+ * What one cookie gets from the app: the session endpoint's email, an owned
+ * API's status, the desk's status and redirect, and the login page's status.
+ * Each probe starts from the same cookie value, so a cleared cookie from one
+ * answer never hides the next.
+ */
+async function probeCookie(origin: string, evidence: Evidence, value: string, reviewerId: string, label: string): Promise<CookieProbe> {
+  const api = await withSession(origin, evidence, value).request(`/api/reviewers/${reviewerId}/views`, {
+    label: `${label}: owned API`,
+    keep: (text) => ({ length: text.length }),
+  });
+  const home = await withSession(origin, evidence, value).request("/", {
+    label: `${label}: desk`,
+    keep: (html) => ({ length: html.length }),
+  });
+  const location = home.response.headers.get("location");
+  // A redirect before streaming is a 307; after a flush Next embeds it in the page.
+  const homeToLogin =
+    (home.response.status >= 300 && home.response.status < 400 && new URL(location ?? "/", "http://localhost").pathname === "/login") ||
+    (home.response.status === 200 && home.text.includes("NEXT_REDIRECT") && home.text.includes("/login"));
+  const login = await withSession(origin, evidence, value).request("/login", {
+    label: `${label}: login page`,
+    keep: () => ({ html: true }),
+  });
+  const session = await sessionEmail(withSession(origin, evidence, value), label);
+  return {
+    session,
+    api: api.response.status,
+    home: home.response.status,
+    homeToLogin,
+    login: login.response.status,
+  };
+}
+
+function acceptedProbe(probe: CookieProbe, email: string): boolean {
+  return probe.session === email && probe.api === 200 && probe.home === 200 && !probe.homeToLogin;
+}
+
+function rejectedProbe(probe: CookieProbe): boolean {
+  // The login page must render (200) for a refused cookie rather than loop to "/".
+  return probe.session === null && probe.api === 401 && probe.homeToLogin && probe.login === 200;
+}
+
+async function mintLegacyCookie(user: { id: string; email: string; name: string }): Promise<string> {
+  const secret = process.env.AUTH_SECRET?.trim();
+  if (!secret) throw new Error("AUTH_SECRET is required for S1b");
+  // The claims auth.config.ts's jwt callback writes, without sessionVersion:
+  // a cookie issued before session versions existed.
+  return encode({ token: { sub: user.id, email: user.email, name: user.name }, secret, salt: SESSION_COOKIE });
+}
+
+async function userAuthState(sql: Sql, userId: string, label: string, evidence: Evidence) {
+  const [row] = await query<{ session_version: number; credential_digest: string }>(
+    sql,
+    "SELECT session_version, md5(password_hash) AS credential_digest FROM users WHERE id = $1",
+    [userId],
+  );
+  const resets = await query<{ consumed_at: Date | null; expires_at: Date }>(
+    sql,
+    "SELECT consumed_at, expires_at FROM password_reset_tokens WHERE user_id = $1 ORDER BY created_at",
+    [userId],
+  );
+  // The digest only compares before and after; it is never written to evidence.
+  evidence.db(label, { session_version: row?.session_version, resetRows: resets });
+  return { sessionVersion: row?.session_version ?? null, digest: row?.credential_digest ?? null, resets };
+}
+
+function runOperatorReset(email: string, newPassword: string): { status: number; output: string } {
+  const tsx = path.join(REPO_ROOT, "node_modules", ".bin", "tsx");
+  try {
+    const output = execFileSync(tsx, [path.join(REPO_ROOT, "scripts", "reset-password.ts"), email], {
+      cwd: REPO_ROOT,
+      env: process.env,
+      input: `${newPassword}\n`,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 120_000,
+    });
+    return { status: 0, output: redactString(output.trim()) };
+  } catch (caught) {
+    const failure = caught as { status?: number; stdout?: string; stderr?: string };
+    return { status: failure.status ?? 1, output: redactString(`${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim()) };
+  }
+}
+
+async function scenarioS1b(ctx: Synthetic, origin: string, evidence: Evidence): Promise<void> {
+  const user = await createUser(ctx, "s1b");
+  const name = "Synthetic s1b";
+  const pack = await createPack(ctx, user.id, "Synthetic S1b pack");
+  const firstReset = randomBytes(18).toString("base64url");
+  const secondReset = randomBytes(18).toString("base64url");
+
+  const initial = await userAuthState(ctx.sql, user.id, "account at start", evidence);
+  evidence.must("a new account starts at session version 0", initial.sessionVersion === 0, { sessionVersion: initial.sessionVersion });
+
+  // A cookie issued before session versions existed stays valid until a reset.
+  const legacy = await mintLegacyCookie({ id: user.id, email: user.email, name });
+  const legacyBefore = await probeCookie(origin, evidence, legacy, pack.reviewerId, "pre-deploy cookie before reset");
+  evidence.check("a cookie minted without sessionVersion stays valid", acceptedProbe(legacyBefore, user.email), legacyBefore);
+
+  // Context A: signed in before the reset.
+  const contextA = new Http(origin, evidence);
+  evidence.must("context A signs in", (await signInViaCallback(contextA, user.email, user.password, "context A")).outcome === "signed_in");
+  evidence.check("context A's session belongs to the user", (await sessionEmail(contextA, "context A")) === user.email);
+  const cookieA = sessionCookie(contextA, "context A");
+  const acceptedA = await probeCookie(origin, evidence, cookieA, pack.reviewerId, "context A before reset");
+  evidence.check("context A's cookie is accepted before the reset", acceptedProbe(acceptedA, user.email), acceptedA);
+
+  // A reset link for this user (the dev run sends no email), as issuePasswordResetToken stores it.
+  const resetToken = randomBytes(32).toString("base64url");
+  await query(
+    ctx.sql,
+    "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 hour')",
+    [user.id, hashResetToken(resetToken)],
+  );
+  evidence.notes.push("S1b inserted one reset token row for its synthetic user.");
+
+  // Inject a failure before the password write: this user's row refuses any
+  // session version above 0, so the one-statement reset fails as a whole.
+  if (!/^[0-9a-f-]{36}$/.test(user.id)) throw new Error("unexpected user id shape");
+  const constraint = `verify_s1b_${ctx.runId.replace(/[^a-z0-9]/g, "_")}`.slice(0, 60);
+  const contextB = new Http(origin, evidence);
+  await query(ctx.sql, `ALTER TABLE users ADD CONSTRAINT ${constraint} CHECK (id <> '${user.id}' OR session_version = 0) NOT VALID`);
+  evidence.notes.push(`S1b added the temporary constraint ${constraint} (scoped to its user) and dropped it after the injected failure.`);
+  let failed: ResetResult;
+  try {
+    failed = await submitResetForm(contextB, resetToken, firstReset, "reset with injected failure");
+  } finally {
+    await query(ctx.sql, `ALTER TABLE users DROP CONSTRAINT IF EXISTS ${constraint}`);
+  }
+  evidence.check(
+    "a failed password write shows the retry message and is not done",
+    failed.done === false && failed.error === PASSWORD_RESET_RETRY_MESSAGE,
+    failed,
+  );
+  const afterFailure = await userAuthState(ctx.sql, user.id, "account after injected failure", evidence);
+  evidence.check(
+    "after the failure the reset link is still unused and the account is unchanged",
+    afterFailure.resets.length === 1 &&
+      afterFailure.resets[0]!.consumed_at === null &&
+      afterFailure.sessionVersion === 0 &&
+      afterFailure.digest === initial.digest,
+    { sessionVersion: afterFailure.sessionVersion, unchangedCredential: afterFailure.digest === initial.digest },
+  );
+  const oldStillWorks = new Http(origin, evidence);
+  evidence.check(
+    "the old password still signs in after the failure",
+    (await signInViaCallback(oldStillWorks, user.email, user.password, "old password after failure")).outcome === "signed_in",
+  );
+  const stillA = await probeCookie(origin, evidence, cookieA, pack.reviewerId, "context A after failed reset");
+  evidence.check("context A's cookie is still accepted after the failed reset", acceptedProbe(stillA, user.email), stillA);
+
+  // The web token flow, signed out, with the same link.
+  const done = await submitResetForm(contextB, resetToken, firstReset, "web reset");
+  evidence.check("the web reset succeeds with the same link", done.done === true && done.error === null, done);
+  const afterWeb = await userAuthState(ctx.sql, user.id, "account after web reset", evidence);
+  evidence.check(
+    "the web reset consumed the link and raised the session version to 1",
+    afterWeb.resets[0]?.consumed_at !== null && afterWeb.sessionVersion === 1 && afterWeb.digest !== initial.digest,
+    { sessionVersion: afterWeb.sessionVersion },
+  );
+  const reused = await resetPage(new Http(origin, evidence), `/reset-password?token=${encodeURIComponent(resetToken)}`, "used link");
+  evidence.check("a used link shows the invalid message and no form", !reused.form && reused.invalidShown, reused);
+
+  const revokedA = await probeCookie(origin, evidence, cookieA, pack.reviewerId, "context A after web reset");
+  evidence.check("context A's cookie is refused after the web reset (401, redirect to /login)", rejectedProbe(revokedA), revokedA);
+  const revokedPage = await probeCookie(origin, evidence, sessionCookie(oldStillWorks, "old password session"), pack.reviewerId, "post-failure session after web reset");
+  evidence.check("the session signed in after the failure is refused too", rejectedProbe(revokedPage), revokedPage);
+  const legacyAfter = await probeCookie(origin, evidence, legacy, pack.reviewerId, "pre-deploy cookie after reset");
+  evidence.check("the pre-deploy cookie is refused after the first reset", rejectedProbe(legacyAfter), legacyAfter);
+
+  const oldRefused = await signInViaCallback(new Http(origin, evidence), user.email, user.password, "old password after web reset");
+  evidence.check("the old password is refused after the web reset", oldRefused.outcome === "refused", oldRefused);
+  const contextC = new Http(origin, evidence);
+  evidence.check(
+    "the new password signs in after the web reset",
+    (await signInViaCallback(contextC, user.email, firstReset, "new password after web reset")).outcome === "signed_in" &&
+      (await sessionEmail(contextC, "context C")) === user.email,
+  );
+  const cookieC = sessionCookie(contextC, "context C");
+  const acceptedC = await probeCookie(origin, evidence, cookieC, pack.reviewerId, "context C before operator reset");
+  evidence.check("the new session is accepted", acceptedProbe(acceptedC, user.email), acceptedC);
+
+  // The operator path against the same disposable branch.
+  const operator = runOperatorReset(user.email, secondReset);
+  evidence.check("the operator reset script succeeds", operator.status === 0 && operator.output.includes(`Password reset for ${user.email}`), operator);
+  const afterOperator = await userAuthState(ctx.sql, user.id, "account after operator reset", evidence);
+  evidence.check("the operator reset raised the session version to 2", afterOperator.sessionVersion === 2, {
+    sessionVersion: afterOperator.sessionVersion,
+  });
+  const revokedC = await probeCookie(origin, evidence, cookieC, pack.reviewerId, "context C after operator reset");
+  evidence.check("context C's cookie is refused after the operator reset (401, redirect to /login)", rejectedProbe(revokedC), revokedC);
+  const firstRefused = await signInViaCallback(new Http(origin, evidence), user.email, firstReset, "web-reset password after operator reset");
+  evidence.check("the web-reset password is refused after the operator reset", firstRefused.outcome === "refused", firstRefused);
+  const contextD = new Http(origin, evidence);
+  evidence.check(
+    "the operator-set password signs in",
+    (await signInViaCallback(contextD, user.email, secondReset, "operator password")).outcome === "signed_in" &&
+      (await sessionEmail(contextD, "context D")) === user.email,
+  );
+  const acceptedD = await probeCookie(origin, evidence, sessionCookie(contextD, "context D"), pack.reviewerId, "context D");
+  evidence.check("the session after the operator reset is accepted", acceptedProbe(acceptedD, user.email), acceptedD);
 }
 
 // ---------------------------------------------------------------- S2
@@ -978,7 +1289,11 @@ async function scenarioS2(ctx: Synthetic, origin: string, evidence: Evidence): P
 function viewContent(kind: Kind, token: string): string {
   if (kind === "locked_in") return `## Synthetic section\n\nSynthetic Locked In ${token} for verification.`;
   if (kind === "summary") return `## Synthetic summary\n\nSynthetic Summary ${token}.`;
-  if (kind === "test_me") return JSON.stringify([{ id: "q1", question: `Synthetic question ${token}?`, choices: ["A", "B", "C", "D"], answer: "A" }]);
+  if (kind === "test_me") {
+    return JSON.stringify([
+      { id: "q1", question: `Synthetic question ${token}?`, choices: ["A", "B", "C", "D"], answer: "A", explanation: `Synthetic explanation for ${token}.` },
+    ]);
+  }
   return JSON.stringify([{ id: "c1", front: `Synthetic front ${token}`, back: "Synthetic back" }]);
 }
 
@@ -1001,6 +1316,204 @@ function summarizeViews(body: ViewsPayload | null): Record<string, unknown> {
     ),
     staleKinds: body.staleKinds,
   };
+}
+
+// ---------------------------------------------------------------- S2b
+
+type CardDto = { id: string; sourceKey: string; front: string; back: string; revision: number };
+type AskAnswer = { messages?: Array<{ role: string; content: string }>; reused?: boolean; error?: string };
+
+/** Over the reader's limits: one inline formula past the formula cap, and one character past the length cap. */
+const OVER_LIMIT_CONTENT = {
+  math: `## Synthetic section\n\n${Array.from({ length: MAX_STUDY_MATH_BLOCKS + 1 }, (_, index) => `$x_{${index}}$`).join(" ")}`,
+  length: "## Synthetic section\n\n".padEnd(MAX_STUDY_MARKDOWN_CHARS + 1, "zqs2blongtext "),
+} as const;
+
+async function cardRow(sql: Sql, cardId: string) {
+  const [row] = await query<{ digest: string; revision: number; archived: boolean }>(
+    sql,
+    "SELECT md5(row_to_json(c)::text) AS digest, c.revision, c.archived_at IS NOT NULL AS archived FROM cards c WHERE c.id = $1",
+    [cardId],
+  );
+  return row;
+}
+
+async function reviewCount(sql: Sql, reviewerId: string, cardId?: string): Promise<number> {
+  const [row] = await query<{ count: number }>(
+    sql,
+    `SELECT COUNT(*)::int AS count FROM card_reviews WHERE reviewer_id = $1${cardId ? " AND card_id = $2" : ""}`,
+    cardId ? [reviewerId, cardId] : [reviewerId],
+  );
+  return row!.count;
+}
+
+async function scenarioS2b(ctx: Synthetic, origin: string, evidence: Evidence, services: Services): Promise<void> {
+  const owner = await createUser(ctx, "s2b-owner");
+  const http = new Http(origin, evidence);
+  evidence.must("owner signs in", (await signInViaCallback(http, owner.email, owner.password, "owner")).outcome === "signed_in");
+
+  const pack = await createPack(ctx, owner.id, "Synthetic S2b pack");
+  const runId = randomUUID();
+  await insertJob(ctx.sql, owner.id, pack.reviewerId, {
+    runId, minutesAgo: 30, status: "succeeded", mode: "full", intent: "redo", step: "carded", targetKinds: KINDS, completedKinds: KINDS,
+  });
+  for (const kind of ["locked_in", "summary", "test_me"] as const) {
+    await insertView(ctx.sql, pack.reviewerId, {
+      kind,
+      runId,
+      content: viewContent(kind, `zqs2b${kind.replace("_", "")}`),
+      contentJson: viewJson(kind, `zqs2b${kind.replace("_", "")}`),
+      minutesAgo: 30,
+    });
+  }
+  const cardItems = [
+    { id: "c1", front: "zqs2bcardfront one", back: "Synthetic back one" },
+    { id: "c2", front: "zqs2bcardfront two", back: "Synthetic back two" },
+  ];
+  await insertView(ctx.sql, pack.reviewerId, { kind: "carded", runId, content: JSON.stringify(cardItems), contentJson: cardItems, minutesAgo: 30 });
+  await seedScannedSource(ctx, pack.reviewerId, "s2b");
+
+  // F05: a save the reader cannot render is refused and the row is kept.
+  const viewsBefore = await snapshot(ctx.sql, pack.reviewerId, ["views"]);
+  evidence.db("views before over-limit saves", viewsBefore);
+  for (const kind of ["locked_in", "summary"] as const) {
+    for (const [reason, content] of Object.entries(OVER_LIMIT_CONTENT)) {
+      const expected = studyMarkdownProblem(content);
+      const answer = await http.json<{ error?: string }>(`/api/reviewers/${pack.reviewerId}/views/${kind}`, {
+        method: "PATCH",
+        label: `over-limit ${reason} save to ${kind}`,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedRevision: 1, content }),
+      });
+      evidence.check(
+        `over-limit ${reason} save to ${kind} is refused with the reader's reason`,
+        expected !== null && answer.status === 400 && answer.body.error === expected,
+        { status: answer.status, error: answer.body.error, expected },
+      );
+    }
+  }
+  const viewsAfter = await snapshot(ctx.sql, pack.reviewerId, ["views"]);
+  evidence.db("views after over-limit saves", viewsAfter);
+  evidence.check("over-limit saves changed no view row", JSON.stringify(viewsAfter) === JSON.stringify(viewsBefore));
+  const accepted = await http.json<{ view?: { revision?: number } }>(`/api/reviewers/${pack.reviewerId}/views/locked_in`, {
+    method: "PATCH",
+    label: "renderable save to locked_in",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision: 1, content: "## Synthetic section\n\nA renderable zqs2bsaved edit with $v = d/t$." }),
+  });
+  evidence.check("a renderable save with the same request shape is accepted", accepted.status === 200 && accepted.body.view?.revision === 2, accepted.body);
+
+  // F06: a card archived between load and edit or rate takes neither write.
+  const listed = await http.json<{ cards?: CardDto[] }>(`/api/reviewers/${pack.reviewerId}/cards`, { label: "load cards" });
+  const loaded = listed.body.cards ?? [];
+  evidence.must("the pack's two cards load", listed.status === 200 && loaded.length === 2, { count: loaded.length });
+  const archivedCard = loaded.find((card) => card.sourceKey === "c1")!;
+  const liveCard = loaded.find((card) => card.sourceKey === "c2")!;
+  evidence.must("both seeded cards are present", Boolean(archivedCard && liveCard));
+
+  // Stand-in for a Redo archiving the card after the page loaded it. Only
+  // archived_at changes, so the refusal must come from the archived predicate.
+  await query(ctx.sql, "UPDATE cards SET archived_at = NOW() WHERE id = $1 AND reviewer_id = $2", [archivedCard.id, pack.reviewerId]);
+  evidence.notes.push("S2b set archived_at on one synthetic card, keeping its revision.");
+  const archivedBefore = await cardRow(ctx.sql, archivedCard.id);
+  const reviewsBefore = await reviewCount(ctx.sql, pack.reviewerId);
+  evidence.db("archived card before writes", { card: archivedBefore, reviews: reviewsBefore });
+  evidence.check("the archived card kept the revision the page loaded", archivedBefore?.revision === archivedCard.revision && archivedBefore.archived);
+
+  const edit = await http.json<{ error?: string; stale?: boolean }>(`/api/reviewers/${pack.reviewerId}/cards/${archivedCard.id}`, {
+    method: "PATCH",
+    label: "edit archived card",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision: archivedCard.revision, back: "Synthetic edited back zqs2barchived" }),
+  });
+  evidence.check("editing the archived card is refused", edit.status === 409 && edit.body.stale === true, { status: edit.status, body: edit.body });
+  for (const withRequestId of [false, true]) {
+    const rate = await http.json<{ error?: string; stale?: boolean }>(`/api/reviewers/${pack.reviewerId}/cards/${archivedCard.id}/review`, {
+      method: "POST",
+      label: `rate archived card${withRequestId ? " with a request id" : ""}`,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedRevision: archivedCard.revision,
+        rating: "good",
+        ...(withRequestId ? { clientRequestId: randomUUID() } : {}),
+      }),
+    });
+    evidence.check(
+      `rating the archived card${withRequestId ? " with a request id" : ""} is refused`,
+      rate.status === 409 && rate.body.stale === true,
+      { status: rate.status, body: rate.body },
+    );
+  }
+  const archivedAfter = await cardRow(ctx.sql, archivedCard.id);
+  const reviewsAfter = await reviewCount(ctx.sql, pack.reviewerId);
+  evidence.db("archived card after writes", { card: archivedAfter, reviews: reviewsAfter });
+  evidence.check("the archived card row is unchanged", archivedAfter?.digest === archivedBefore?.digest);
+  evidence.check("no review row was written", reviewsAfter === reviewsBefore, { before: reviewsBefore, after: reviewsAfter });
+
+  const liveRate = await http.json<{ card?: CardDto }>(`/api/reviewers/${pack.reviewerId}/cards/${liveCard.id}/review`, {
+    method: "POST",
+    label: "rate live card",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision: liveCard.revision, rating: "good" }),
+  });
+  evidence.check(
+    "rating a live card with the same request shape is saved",
+    liveRate.status === 200 && (await reviewCount(ctx.sql, pack.reviewerId, liveCard.id)) === 1,
+    { status: liveRate.status },
+  );
+  const liveRevision = liveRate.body.card?.revision ?? liveCard.revision + 1;
+
+  // F07: Explain reuses only an unchanged target.
+  const explain = async (label: string, target: Record<string, unknown>, answerToken: string | null) => {
+    const offset = services.offset();
+    if (answerToken) {
+      services.set({ model: { status: 200, text: `Synthetic explanation ${answerToken} restates the first page of the source [S1 p.1].` } });
+    } else {
+      services.set({});
+    }
+    const answer = await http.json<AskAnswer>(`/api/reviewers/${pack.reviewerId}/ask`, {
+      method: "POST",
+      label,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "explain", target }),
+      timeoutMs: 150_000,
+    });
+    const calls = services.externalSince(offset).filter((line) => line.service === "model");
+    const text = (answer.body.messages ?? []).filter((message) => message.role === "assistant").map((message) => message.content).join("\n");
+    return { status: answer.status, reused: answer.body.reused, text, calls: calls.length, served: calls.every((line) => line.outcome === "served") };
+  };
+  const fresh = (result: Awaited<ReturnType<typeof explain>>, token: string) =>
+    result.status === 200 && result.reused === false && result.calls === 1 && result.served && result.text.includes(token);
+  const reusedSame = (result: Awaited<ReturnType<typeof explain>>, token: string) =>
+    result.status === 200 && result.reused === true && result.calls === 0 && result.text.includes(token);
+
+  const cardTarget = { type: "card", cardId: liveCard.id };
+  const cardFirst = await explain("explain card", cardTarget, "zqs2bexplaincardone");
+  evidence.check("Explain on a card answers from the controlled provider", fresh(cardFirst, "zqs2bexplaincardone"), cardFirst);
+  const cardRepeat = await explain("explain card again", cardTarget, null);
+  evidence.check("an unchanged repeat reuses the answer with no provider call", reusedSame(cardRepeat, "zqs2bexplaincardone"), cardRepeat);
+
+  const edited = await http.json<{ card?: CardDto }>(`/api/reviewers/${pack.reviewerId}/cards/${liveCard.id}`, {
+    method: "PATCH",
+    label: "edit live card",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision: liveRevision, back: "Synthetic edited back zqs2bedited" }),
+  });
+  evidence.check("the live card edit is saved", edited.status === 200, { status: edited.status });
+  const cardAfterEdit = await explain("explain edited card", cardTarget, "zqs2bexplaincardtwo");
+  evidence.check("Explain after a card edit returns a fresh answer", fresh(cardAfterEdit, "zqs2bexplaincardtwo"), cardAfterEdit);
+  const cardAfterEditRepeat = await explain("explain edited card again", cardTarget, null);
+  evidence.check("the edited card's repeat reuses its new answer", reusedSame(cardAfterEditRepeat, "zqs2bexplaincardtwo"), cardAfterEditRepeat);
+
+  const testFirst = await explain("explain test item, chose B", { type: "test_item", itemId: "q1", chosen: "B" }, "zqs2bexplaintestone");
+  evidence.check("Explain on a Test Me answer answers from the controlled provider", fresh(testFirst, "zqs2bexplaintestone"), testFirst);
+  const testRepeat = await explain("explain test item, chose B again", { type: "test_item", itemId: "q1", chosen: "B" }, null);
+  evidence.check("the same chosen answer reuses with no provider call", reusedSame(testRepeat, "zqs2bexplaintestone"), testRepeat);
+  const testChanged = await explain("explain test item, chose C", { type: "test_item", itemId: "q1", chosen: "C" }, "zqs2bexplaintesttwo");
+  evidence.check("a changed chosen answer returns a fresh answer", fresh(testChanged, "zqs2bexplaintesttwo"), testChanged);
+  const testChangedRepeat = await explain("explain test item, chose C again", { type: "test_item", itemId: "q1", chosen: "C" }, null);
+  evidence.check("the changed answer's repeat reuses with no provider call", reusedSame(testChangedRepeat, "zqs2bexplaintesttwo"), testChangedRepeat);
+  services.set({});
 }
 
 // ---------------------------------------------------------------- S3a
@@ -1212,13 +1725,18 @@ async function scenarioS5a(ctx: Synthetic, origin: string, evidence: Evidence, s
     { id: "c2", front: "zqs5acardfront two", back: "Synthetic back two [S1 p.1]" },
   ];
   await insertView(ctx.sql, pack.reviewerId, { kind: "carded", runId, content: JSON.stringify(cardItems), contentJson: cardItems, minutesAgo: 30 });
+  // Offsets live in the rendered text the reader anchors to (lib/annotations),
+  // not in the raw Markdown.
   const quote = "zqs5alockedintoken is the first claim";
-  const start = lockedIn.indexOf(quote);
+  const rendered = renderedStudyText(lockedIn);
+  const start = rendered.indexOf(quote);
+  evidence.must("the annotation quote is in the rendered Locked In text", start >= 0 && rendered.indexOf(quote, start + 1) === -1);
+  const around = contextForRange(rendered, start, start + quote.length);
   await query(
     ctx.sql,
-    `INSERT INTO study_annotations (user_id, reviewer_id, view_id, kind, content_revision, start_offset, end_offset, quote, note)
-     VALUES ($1, $2, $3, 'locked_in', 1, $4, $5, $6, 'zqs5anotetoken')`,
-    [owner.id, pack.reviewerId, lockedInId, start, start + quote.length, quote],
+    `INSERT INTO study_annotations (user_id, reviewer_id, view_id, kind, content_revision, start_offset, end_offset, quote, prefix, suffix, note)
+     VALUES ($1, $2, $3, 'locked_in', 1, $4, $5, $6, $7, $8, 'zqs5anotetoken')`,
+    [owner.id, pack.reviewerId, lockedInId, start, start + quote.length, quote, around.prefix, around.suffix],
   );
   const source = await seedScannedSource(ctx, pack.reviewerId, "s5a");
 
@@ -1333,6 +1851,7 @@ async function main(): Promise<void> {
   }
   if (dbHost !== allowedHost) die("DATABASE_URL host does not equal ALLOWED_DB_HOST; refusing");
 
+  if (args.scenarios.includes("S1b")) requiredEnv("AUTH_SECRET");
   const services = new Services(requiredEnv("CONTROLLED_SERVICES_LOG"), requiredEnv("CONTROLLED_SERVICES_CONTROL"));
   const ready = services.linesSince(0).filter((line) => line.event === "preload_ready");
   if (!ready.some((line) => line.dbHost === allowedHost)) {
@@ -1361,7 +1880,9 @@ async function main(): Promise<void> {
     let error: string | null = null;
     try {
       if (name === "S1a") await scenarioS1a(ctx, args.origin, evidence);
+      if (name === "S1b") await scenarioS1b(ctx, args.origin, evidence);
       if (name === "S2") await scenarioS2(ctx, args.origin, evidence);
+      if (name === "S2b") await scenarioS2b(ctx, args.origin, evidence, services);
       if (name === "S3a") await scenarioS3a(ctx, args.origin, evidence, services, jpeg);
       if (name === "S5a") await scenarioS5a(ctx, args.origin, evidence, services, outDir);
       const traffic = services.externalSince(offset);

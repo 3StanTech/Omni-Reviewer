@@ -122,6 +122,7 @@ beforeEach(() => {
   mock(listThread).mockResolvedValue([]);
   mock(listSavedAnswers).mockResolvedValue([]);
   mock(findReusableAnswer).mockResolvedValue(null);
+  mock(loadExplainTarget).mockResolvedValue(null);
   mock(clearThread).mockResolvedValue(0);
   mock(loadAskSources).mockResolvedValue([
     { sourceId: "source-1", filename: "pharm.pdf", text: "<<<page 2>>>\nBeta blockers block beta receptors." },
@@ -253,25 +254,119 @@ describe("POST /api/reviewers/[id]/ask", () => {
     expect(mock(answerFromPack)).not.toHaveBeenCalled();
   });
 
-  it("reuses an earlier Explain answer with no model call", async () => {
-    const explainOrigin = { kind: "explain", key: "test:q1" };
-    const reusedQuestion = row({ content: "Explain: What is X?", contentJson: { origin: explainOrigin }, originKey: "test:q1" });
-    const reusedAnswer = { ...answerRow, contentJson: { citationSources, refused: false, origin: explainOrigin }, originKey: "test:q1" };
-    mock(findReusableAnswer).mockResolvedValueOnce({ question: reusedQuestion, answer: reusedAnswer });
+  const askSources = [
+    { sourceId: "source-1", filename: "pharm.pdf", text: "<<<page 2>>>\nBeta blockers block beta receptors." },
+  ];
+  const quizItem = {
+    id: "q1",
+    question: "Which drug blocks beta receptors?",
+    choices: ["Propranolol", "Atropine"],
+    answer: "Propranolol",
+    explanation: "It is a beta blocker [S1 p.2].",
+  };
+  const liveCard = { id: "44444444-4444-4444-8444-444444444444", sourceKey: "gen:1", front: "Propranolol blocks?", back: "Beta receptors" };
+  const quizKey = (chosen: string, item = quizItem, sources = askSources) => originKeyFor({
+    kind: "explain",
+    target: { type: "test_item", itemId: item.id, question: item.question, choices: item.choices, answer: item.answer, explanation: item.explanation, chosen },
+    sources,
+  });
+  const cardKey = (card = liveCard, sources = askSources) => originKeyFor({
+    kind: "explain",
+    target: { type: "card", cardId: card.id, front: card.front, back: card.back },
+    sources,
+  });
+  /** A saved answer that only the given key finds, like the real lookup. */
+  function savedAnswerFor(key: string) {
+    const explainOrigin = { kind: "explain", key };
+    const reusedQuestion = row({ content: "Explain: Which drug blocks beta receptors?", contentJson: { origin: explainOrigin }, originKey: key });
+    const reusedAnswer = { ...answerRow, contentJson: { citationSources, refused: false, origin: explainOrigin }, originKey: key };
+    mock(findReusableAnswer).mockImplementation(async (_reviewerId: string, _userId: string, wanted: string) =>
+      wanted === key ? { question: reusedQuestion, answer: reusedAnswer } : null);
+    return explainOrigin;
+  }
+  const explainQuiz = (chosen: string) => POST(jsonRequest("POST", {
+    kind: "explain",
+    target: { type: "test_item", itemId: "q1", chosen },
+  }), context);
+  const explainCard = () => POST(jsonRequest("POST", {
+    kind: "explain",
+    target: { type: "card", cardId: liveCard.id },
+  }), context);
 
-    const response = await POST(jsonRequest("POST", {
-      kind: "explain",
-      target: { type: "test_item", itemId: "q1", chosen: "c".repeat(500) },
-    }), context);
+  it("reuses an unchanged Explain answer with no model call, after checking the target and sources", async () => {
+    const chosen = "c".repeat(500);
+    const explainOrigin = savedAnswerFor(quizKey(chosen));
+    mock(loadExplainTarget).mockResolvedValue({ type: "test_item", item: quizItem, viewRevision: 3, citationSources });
+
+    const response = await explainQuiz(chosen);
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.reused).toBe(true);
     expect(body.messages.map((message: { id: string }) => message.id)).toEqual([QUESTION_ID, ANSWER_ID]);
     expect(body.messages[1].origin).toEqual(explainOrigin);
-    expect(mock(findReusableAnswer)).toHaveBeenCalledWith(REVIEWER_ID, "user-1", "test:q1");
+    expect(mock(loadExplainTarget)).toHaveBeenCalledTimes(1);
+    expect(mock(loadAskSources)).toHaveBeenCalledTimes(1);
+    expect(mock(findReusableAnswer)).toHaveBeenCalledWith(REVIEWER_ID, "user-1", quizKey(chosen));
     expect(mock(answerFromPack)).not.toHaveBeenCalled();
-    expect(mock(loadAskSources)).not.toHaveBeenCalled();
     expect(mock(insertExchange)).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse an Explain answer for a different chosen Test Me answer", async () => {
+    savedAnswerFor(quizKey("Propranolol"));
+    mock(loadExplainTarget).mockResolvedValue({ type: "test_item", item: quizItem, viewRevision: 3, citationSources });
+
+    const response = await explainQuiz("Atropine");
+    expect(response.status).toBe(200);
+    expect((await response.json()).reused).toBe(false);
+    expect(mock(answerFromPack)).toHaveBeenCalledTimes(1);
+    expect(mock(answerFromPack).mock.calls[0][0].question).toContain("I chose: Atropine (incorrect)");
+    expect(mock(insertExchange)).toHaveBeenCalledWith(expect.objectContaining({ originKey: quizKey("Atropine") }));
+  });
+
+  it("does not reuse an Explain answer after the card is edited", async () => {
+    savedAnswerFor(cardKey());
+    const edited = { ...liveCard, back: "Beta-1 and beta-2 receptors" };
+    mock(loadExplainTarget).mockResolvedValue({ type: "card", card: edited, citationSources });
+
+    const response = await explainCard();
+    expect(response.status).toBe(200);
+    expect((await response.json()).reused).toBe(false);
+    expect(mock(answerFromPack).mock.calls[0][0].question).toContain("Back: Beta-1 and beta-2 receptors");
+    expect(mock(insertExchange)).toHaveBeenCalledWith(expect.objectContaining({ originKey: cardKey(edited) }));
+  });
+
+  it("does not reuse an Explain answer after the pack's Ready sources change", async () => {
+    savedAnswerFor(cardKey());
+    mock(loadExplainTarget).mockResolvedValue({ type: "card", card: liveCard, citationSources });
+    const changed = [askSources[0], { sourceId: "source-2", filename: "more.pdf", text: "Atropine blocks muscarinic receptors." }];
+    mock(loadAskSources).mockResolvedValue(changed);
+
+    const response = await explainCard();
+    expect((await response.json()).reused).toBe(false);
+    expect(mock(answerFromPack)).toHaveBeenCalledTimes(1);
+    expect(mock(insertExchange)).toHaveBeenCalledWith(expect.objectContaining({ originKey: cardKey(liveCard, changed) }));
+  });
+
+  it("returns 404 for a missing or archived target even when an old answer is saved", async () => {
+    savedAnswerFor(cardKey());
+    mock(loadExplainTarget).mockResolvedValue(null);
+
+    const response = await explainCard();
+    expect(response.status).toBe(404);
+    expect(mock(findReusableAnswer)).not.toHaveBeenCalled();
+    expect(mock(answerFromPack)).not.toHaveBeenCalled();
+    expect(mock(insertExchange)).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 before any reuse when the pack has no Ready source text", async () => {
+    savedAnswerFor(cardKey());
+    mock(loadExplainTarget).mockResolvedValue({ type: "card", card: liveCard, citationSources });
+    mock(loadAskSources).mockResolvedValue([]);
+
+    const response = await explainCard();
+    expect(response.status).toBe(409);
+    expect(mock(findReusableAnswer)).not.toHaveBeenCalled();
+    expect(mock(answerFromPack)).not.toHaveBeenCalled();
   });
 
   it("explains a quiz item single-turn with the short visible question", async () => {
@@ -297,8 +392,8 @@ describe("POST /api/reviewers/[id]/ask", () => {
     expect(call.question).toContain("I chose: Atropine (incorrect)");
     expect(mock(insertExchange)).toHaveBeenCalledWith(expect.objectContaining({
       question: "Explain: Which drug blocks beta receptors?",
-      originKey: "test:q1",
-      answerJson: expect.objectContaining({ origin: { kind: "explain", key: "test:q1" } }),
+      originKey: quizKey("Atropine"),
+      answerJson: expect.objectContaining({ origin: { kind: "explain", key: quizKey("Atropine") } }),
     }));
   });
 
@@ -317,7 +412,7 @@ describe("POST /api/reviewers/[id]/ask", () => {
     const sentence = "Beta blockers cure asthma [S1 p.4].";
     const response = await POST(jsonRequest("POST", { kind: "ask_why", sentence }), context);
     expect(response.status).toBe(200);
-    const key = originKeyFor({ kind: "ask_why", sentence });
+    const key = originKeyFor({ kind: "ask_why", sentence, sources: askSources });
     expect(mock(findReusableAnswer)).toHaveBeenCalledWith(REVIEWER_ID, "user-1", key);
     expect(mock(listThread)).not.toHaveBeenCalled();
     expect(mock(answerFromPack).mock.calls[0][0].history).toEqual([]);

@@ -5,15 +5,16 @@
  *   printf '%s\n' '<password>' | npx tsx scripts/reset-password.ts <email>
  *   npx tsx scripts/reset-password.ts <email>   (on a TTY: hidden prompt)
  *
- * Sets the user's password, then mirrors the web reset success path: clears the
- * sign-in and reset throttles for that email and deletes its unused reset tokens.
+ * Sets the user's password and signs out its existing sessions in one statement,
+ * then mirrors the web reset success path: clears the sign-in and reset
+ * throttles for that email and deletes its unused reset tokens.
  * Needs DATABASE_URL. Never prints the password or its hash.
  */
 
 import { fileURLToPath } from "node:url";
 
 import { neon } from "@neondatabase/serverless";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/neon-http";
 
 import { hashPassword } from "../lib/auth-utils";
@@ -68,7 +69,9 @@ async function main() {
 
   const [user] = await db
     .update(users)
-    .set({ passwordHash })
+    // Raising the session version in the same statement signs out every
+    // session issued before this reset.
+    .set({ passwordHash, sessionVersion: sql`${users.sessionVersion} + 1` })
     .where(eq(users.email, email))
     .returning({ id: users.id });
   if (!user) {

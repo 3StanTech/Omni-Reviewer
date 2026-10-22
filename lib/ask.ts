@@ -7,7 +7,6 @@
 import { createHash } from "node:crypto";
 
 import type { StudyPackSourceText } from "@/lib/ai";
-import type { AskRequest } from "@/lib/ask-types";
 import {
   claimSentences,
   dropUnknownSourceCitations,
@@ -383,16 +382,57 @@ export function buildAskWhyQuestion(sentence: string): AskQuestion {
   };
 }
 
-/** Reuse key for Explain and Ask why; null for a plain question (never reused). */
-export function originKeyFor(request: AskRequest): string | null {
-  switch (request.kind) {
-    case "ask":
-      return null;
-    case "explain":
-      return request.target.type === "test_item" ? `test:${request.target.itemId}` : `card:${request.target.cardId}`;
-    case "ask_why": {
-      const normalized = normalizedWhySentence(request.sentence).normalize("NFC").toLowerCase();
-      return `why:${createHash("sha1").update(normalized).digest("hex")}`;
+/** Bump when the reuse key's inputs change; earlier keys then simply miss. */
+export const ORIGIN_KEY_VERSION = 2;
+
+/** A Ready source as the reuse key sees it: its id and its current text. */
+type OriginKeySource = { sourceId: string; text: string };
+
+/** A live Explain target: the prompt fields plus the id the reuse key carries. */
+export type ExplainKeyTarget =
+  | ({ type: "test_item"; itemId: string } & ExplainTestItem)
+  | ({ type: "card"; cardId: string } & ExplainCard);
+
+/**
+ * What an Explain or Ask why answer depends on, read from the live target and
+ * the pack's current Ready sources (in S1..Sn order). Only answer-affecting
+ * fields: a card's general revision is left out because ratings and pins
+ * advance it.
+ */
+export type OriginKeyContext =
+  | {
+      kind: "explain";
+      target: ExplainKeyTarget;
+      sources: readonly OriginKeySource[];
     }
+  | { kind: "ask_why"; sentence: string; sources: readonly OriginKeySource[] };
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/**
+ * Reuse key for Explain and Ask why: a versioned SHA-256 over the target's
+ * answer-affecting content, the chosen Test Me answer, and the ordered Ready
+ * source ids with a hash of each source's text. Any change to these misses
+ * the saved answer; an unchanged repeat hits it.
+ */
+export function originKeyFor(context: OriginKeyContext): string {
+  const sources = context.sources.map((source) => [source.sourceId, sha256(source.text)]);
+  let prefix: string;
+  let target: unknown[];
+  if (context.kind === "ask_why") {
+    prefix = "why";
+    target = [normalizedWhySentence(context.sentence).normalize("NFC").toLowerCase()];
+  } else if (context.target.type === "test_item") {
+    const item = context.target;
+    prefix = "test";
+    target = [item.itemId, item.question, item.choices ?? null, item.answer, item.explanation ?? "", item.chosen];
+  } else {
+    const card = context.target;
+    prefix = "card";
+    target = [card.cardId, card.front, card.back];
   }
+  const digest = sha256(JSON.stringify([ORIGIN_KEY_VERSION, prefix, target, sources]));
+  return `${prefix}:v${ORIGIN_KEY_VERSION}:${digest}`;
 }

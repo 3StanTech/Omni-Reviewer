@@ -36,6 +36,13 @@
       "when": 1792127389359,
       "tag": "0004_free_request_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792671201605,
+      "tag": "0005_session_version",
+      "breakpoints": true
     }
   ]
 }

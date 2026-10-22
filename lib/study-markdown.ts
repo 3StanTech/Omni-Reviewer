@@ -114,3 +114,16 @@ export function prepareStudyMarkdown(
 
   return { source, mathBlocks: math.blocks, mathChars: math.chars };
 }
+
+/**
+ * The one renderability contract for save, generate and render: null when the
+ * reader can display `content`, otherwise a plain reason to show the writer.
+ * It applies the reader's own limits through prepareStudyMarkdown.
+ */
+export function studyMarkdownProblem(content: string): string | null {
+  if (prepareStudyMarkdown(content)) return null;
+  if (content.length > MAX_STUDY_MARKDOWN_CHARS) {
+    return `This study content is too long to display (over ${MAX_STUDY_MARKDOWN_CHARS.toLocaleString("en-US")} characters).`;
+  }
+  return `This study content has too much math to display safely (over ${MAX_STUDY_MATH_BLOCKS} formulas or ${MAX_STUDY_MATH_CHARS.toLocaleString("en-US")} characters of math).`;
+}

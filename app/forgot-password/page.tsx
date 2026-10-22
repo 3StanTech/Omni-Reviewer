@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import Link from "next/link";
 
+import { redirectIfSignedIn } from "@/auth";
 import { AuthPageShell } from "@/components/auth-page-shell";
 import {
   ForgotPasswordForm,
@@ -97,7 +98,8 @@ async function requestResetAction(
   return { error: null, sent: true };
 }
 
-export default function ForgotPasswordPage() {
+export default async function ForgotPasswordPage() {
+  await redirectIfSignedIn();
   if (!canEmailAnyAccount()) {
     return (
       <AuthPageShell title="Forgot password" subtitle={RESET_UNAVAILABLE_NOTICE}>

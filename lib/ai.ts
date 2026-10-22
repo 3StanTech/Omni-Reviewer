@@ -83,6 +83,7 @@ import { hasPageMarkers, splitPages } from "@/lib/source-markers";
 import { itemPages, sectionPages, uncoveredSections } from "@/lib/study-coverage";
 import { stripDocumentFraming, stripSelfReference } from "@/lib/study-framing";
 import { demoteShiftedHeadings, sanitizeStudyHeadings } from "@/lib/study-headings";
+import { studyMarkdownProblem } from "@/lib/study-markdown";
 import { allocateItems, balancedHalves, splitSections } from "@/lib/study-sections";
 import { capSummarySections } from "@/lib/summary-cap";
 import { withFallbackCitations } from "@/lib/test-me-citations";
@@ -931,6 +932,15 @@ export type GeneratedStudyPackStep = {
 
 export type StudyPackSourceText = { filename: string; text: string; sourceId?: string };
 
+/**
+ * Generated Locked In or Summary the reader cannot display fails the step like
+ * an over-long answer (not retried), so it is never saved as a document.
+ */
+function assertRenderableStudyDocument(markdown: string, mode: "Locked In" | "Summary"): void {
+  const problem = studyMarkdownProblem(markdown);
+  if (problem) throw new GenerationError("render_limit", `${mode} can't be displayed. ${problem}`, false);
+}
+
 /** Framing removal left nothing: a failed attempt, never an empty saved document. */
 function emptyStudyContentError(): GenerationError {
   return new GenerationError("unavailable", "The model returned no study content. Try again.", true);
@@ -1055,12 +1065,15 @@ export async function generateStudyPackStep(input: {
       // The free model sometimes writes the outline as "#" headings; sections must be "##".
       const lockedIn = demoteShiftedHeadings(stripDocumentFraming(result.text));
       if (!lockedIn.trim()) throw emptyStudyContentError();
+      // Checked before grounding too, so an unusable draft spends no verifier request.
+      assertRenderableStudyDocument(lockedIn, "Locked In");
       const grounded = await groundGeneratedDocument({
         markdown: lockedIn,
         sources: input.extractedTexts.map((source, i) => ({ index: i + 1, text: source.text })),
         citationSources: input.citationSources ?? citationSourcesFor(input.extractedTexts),
         stepStartedAt,
       });
+      assertRenderableStudyDocument(grounded.markdown, "Locked In");
       return {
         step: "locked_in",
         payload: { kind: "locked_in", content: grounded.markdown },
@@ -1072,12 +1085,14 @@ export async function generateStudyPackStep(input: {
       const lockedIn = input.lockedIn?.trim();
       if (!lockedIn) throw new Error("summary generation requires Locked In");
       const result = await summarizeLockedIn(lockedIn, stepStartedAt);
+      assertRenderableStudyDocument(result.text, "Summary");
       const grounded = await groundGeneratedDocument({
         markdown: result.text,
         sources: input.groundingSources ?? [],
         citationSources: input.citationSources ?? [],
         stepStartedAt,
       });
+      assertRenderableStudyDocument(grounded.markdown, "Summary");
       return {
         step: "summary",
         payload: { kind: "summary", content: grounded.markdown },

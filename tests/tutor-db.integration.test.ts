@@ -5,6 +5,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 
 vi.mock("server-only", () => ({}));
 
+import { originKeyFor } from "@/lib/ask";
 import { db } from "@/lib/db";
 import { cards, reviewers, sources, topics, users, views } from "@/lib/schema";
 import { searchPacks } from "@/lib/search-queries";
@@ -357,6 +358,41 @@ describeDb("Neon tutor integration", () => {
     expect(await loadExplainTarget({
       reviewerId, userId: otherUserId, target: { type: "card", cardId: liveCardId },
     })).toBeNull();
+  });
+
+  it("reuses an Explain answer only while the live card and Ready sources are unchanged", async () => {
+    const cardKey = async () => {
+      const target = await loadExplainTarget({ reviewerId, userId, target: { type: "card", cardId: liveCardId } });
+      if (target?.type !== "card") throw new Error("live card not found");
+      const ready = await loadAskSources(reviewerId, userId);
+      return originKeyFor({
+        kind: "explain",
+        target: { type: "card", cardId: target.card.id, front: target.card.front, back: target.card.back },
+        sources: ready,
+      });
+    };
+    const key = await cardKey();
+    await insertExchange({
+      reviewerId, userId, question: "Explain: Statin target?",
+      answer: "HMG-CoA reductase [S2 p.2].",
+      answerJson: answerJson({ origin: { kind: "explain", key } }), modelId: "model/free", originKey: key,
+    });
+    try {
+      expect(await cardKey()).toBe(key);
+      expect(await findReusableAnswer(reviewerId, userId, await cardKey())).not.toBeNull();
+
+      // A rating or pin advances the card's revision but not the key.
+      await db.update(cards).set({ isPinned: true, revision: sql`${cards.revision} + 1` }).where(eq(cards.id, liveCardId));
+      expect(await cardKey()).toBe(key);
+
+      await db.update(cards).set({ back: "HMG-CoA reductase in the liver" }).where(eq(cards.id, liveCardId));
+      const editedKey = await cardKey();
+      expect(editedKey).not.toBe(key);
+      expect(await findReusableAnswer(reviewerId, userId, editedKey)).toBeNull();
+    } finally {
+      await db.update(cards).set({ back: "HMG-CoA reductase", isPinned: false }).where(eq(cards.id, liveCardId));
+      await clearThread(reviewerId, userId);
+    }
   });
 
   it("stems English: inhibiting, inhibition and inhibitors find their forms", async () => {

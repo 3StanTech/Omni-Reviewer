@@ -13,7 +13,8 @@ import {
 import { LOGIN_THROTTLE_LOCKED_MESSAGE } from "@/lib/login-throttle";
 
 const signIn = vi.hoisted(() => vi.fn());
-vi.mock("@/auth", () => ({ signIn }));
+const redirectIfSignedIn = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@/auth", () => ({ redirectIfSignedIn, signIn }));
 vi.mock("@/components/login-form", () => ({ LoginForm: () => null }));
 vi.mock("next-auth", async () => {
   const errors = await import("@auth/core/errors");
@@ -40,7 +41,7 @@ function findAction(node: ReactNode): LoginAction | null {
 
 async function loadLoginAction(): Promise<LoginAction> {
   const { default: LoginPage } = await import("@/app/login/page");
-  const action = findAction(LoginPage());
+  const action = findAction(await LoginPage());
   if (!action) throw new Error("login action not found");
   return action;
 }
@@ -94,6 +95,18 @@ describe("login page action", () => {
     await expect(action(null, loginForm("yana@example.com", "pw"))).rejects.toBe(
       redirect,
     );
+  });
+});
+
+describe("login page with a session", () => {
+  it("sends a signed-in visitor home and renders otherwise", async () => {
+    const { default: LoginPage } = await import("@/app/login/page");
+    const { redirect } = await import("next/navigation");
+    redirectIfSignedIn.mockImplementationOnce(async () => redirect("/"));
+    await expect(LoginPage()).rejects.toMatchObject({
+      digest: expect.stringContaining("NEXT_REDIRECT"),
+    });
+    await expect(LoginPage()).resolves.toBeTruthy();
   });
 });
 

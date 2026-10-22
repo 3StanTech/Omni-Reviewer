@@ -7,6 +7,7 @@ import {
   buildExplainQuestion,
   groundAnswer,
   MAX_ASK_WHY_SENTENCE_CHARS,
+  ORIGIN_KEY_VERSION,
   originKeyFor,
   parseAskAnswer,
   REFUSAL_MARKER,
@@ -309,14 +310,62 @@ describe("buildAskWhyQuestion and originKeyFor", () => {
     expect(displayText.startsWith("Ask why: ")).toBe(true);
   });
 
-  it("builds stable origin keys", () => {
-    expect(originKeyFor({ kind: "ask", question: "hi" })).toBeNull();
-    expect(originKeyFor({ kind: "explain", target: { type: "test_item", itemId: "q1", chosen: "A" } })).toBe("test:q1");
-    expect(originKeyFor({ kind: "explain", target: { type: "card", cardId: "c1" } })).toBe("card:c1");
-    const a = originKeyFor({ kind: "ask_why", sentence: "  Gentamicin binds 30S. [S1 p.1] " });
-    const b = originKeyFor({ kind: "ask_why", sentence: "gentamicin   binds 30S." });
-    expect(a).toMatch(/^why:[0-9a-f]{40}$/);
+  const sources = [
+    { sourceId: "s1", text: "<<<page 1>>>\nGentamicin binds the 30S subunit." },
+    { sourceId: "s2", text: "Statins inhibit HMG-CoA reductase." },
+  ];
+  const item = {
+    type: "test_item" as const,
+    itemId: "q1",
+    question: "What does gentamicin bind?",
+    choices: ["30S", "50S"],
+    answer: "30S",
+    explanation: "Aminoglycosides bind 30S. [S1 p.1]",
+    chosen: "50S",
+  };
+  const card = { type: "card" as const, cardId: "c1", front: "Gentamicin binds?", back: "30S" };
+  const explainItem = (overrides: Partial<typeof item> = {}, from = sources) =>
+    originKeyFor({ kind: "explain", target: { ...item, ...overrides }, sources: from });
+  const explainCard = (overrides: Partial<typeof card> = {}, from = sources) =>
+    originKeyFor({ kind: "explain", target: { ...card, ...overrides }, sources: from });
+
+  it("builds versioned SHA-256 keys that repeat for an unchanged request", () => {
+    expect(explainItem()).toMatch(new RegExp(`^test:v${ORIGIN_KEY_VERSION}:[0-9a-f]{64}$`));
+    expect(explainCard()).toMatch(new RegExp(`^card:v${ORIGIN_KEY_VERSION}:[0-9a-f]{64}$`));
+    expect(explainItem()).toBe(explainItem());
+    expect(explainCard()).toBe(explainCard());
+    const a = originKeyFor({ kind: "ask_why", sentence: "  Gentamicin binds 30S. [S1 p.1] ", sources });
+    const b = originKeyFor({ kind: "ask_why", sentence: "gentamicin   binds 30S.", sources });
+    expect(a).toMatch(new RegExp(`^why:v${ORIGIN_KEY_VERSION}:[0-9a-f]{64}$`));
     expect(a).toBe(b);
-    expect(originKeyFor({ kind: "ask_why", sentence: "different sentence" })).not.toBe(a);
+    expect(originKeyFor({ kind: "ask_why", sentence: "different sentence", sources })).not.toBe(a);
+  });
+
+  it("changes the Explain key when the chosen Test Me answer changes", () => {
+    expect(explainItem({ chosen: "30S" })).not.toBe(explainItem({ chosen: "50S" }));
+  });
+
+  it("changes the key when the target's answer-affecting content changes", () => {
+    const base = explainItem();
+    expect(explainItem({ question: "What does tobramycin bind?" })).not.toBe(base);
+    expect(explainItem({ choices: ["30S", "70S"] })).not.toBe(base);
+    expect(explainItem({ answer: "50S" })).not.toBe(base);
+    expect(explainItem({ explanation: "Edited explanation." })).not.toBe(base);
+    expect(explainItem({ itemId: "q2" })).not.toBe(base);
+    expect(explainCard({ front: "Tobramycin binds?" })).not.toBe(explainCard());
+    expect(explainCard({ back: "50S" })).not.toBe(explainCard());
+    expect(explainCard({ cardId: "c2" })).not.toBe(explainCard());
+  });
+
+  it("changes the key when the Ready sources, their order or their text change", () => {
+    const why = (from: typeof sources) => originKeyFor({ kind: "ask_why", sentence: "Gentamicin binds 30S.", sources: from });
+    const edited = [sources[0], { ...sources[1], text: "Statins inhibit HMG-CoA reductase in the liver." }];
+    for (const key of [explainItem, explainCard, (_: object, from: typeof sources) => why(from)] as const) {
+      const base = key({}, sources);
+      expect(key({}, [...sources].reverse())).not.toBe(base);
+      expect(key({}, sources.slice(0, 1))).not.toBe(base);
+      expect(key({}, edited)).not.toBe(base);
+      expect(key({}, [...sources, { sourceId: "s3", text: "New lecture." }])).not.toBe(base);
+    }
   });
 });

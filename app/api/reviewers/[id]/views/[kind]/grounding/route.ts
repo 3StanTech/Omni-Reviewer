@@ -6,7 +6,7 @@ import { regroundStudyDocument } from "@/lib/ai";
 import { readStudyDocumentMeta } from "@/lib/citations";
 import { classifyGenerationError } from "@/lib/generation-errors";
 import { loadGenerationViews } from "@/lib/generation-jobs";
-import { logRedactedError } from "@/lib/public-errors";
+import { isPublicError, logRedactedError } from "@/lib/public-errors";
 import {
   getReviewer,
   getViewForReviewer,
@@ -96,14 +96,21 @@ export async function POST(
     );
   }
 
-  const row = await updateStudyView({
-    reviewerId,
-    userId,
-    kind,
-    expectedRevision: parsed.data.expectedRevision,
-    content: regrounded.markdown,
-    grounding: regrounded.report,
-  });
+  // Added tags can push a near-limit document past what the reader renders.
+  let row: Awaited<ReturnType<typeof updateStudyView>>;
+  try {
+    row = await updateStudyView({
+      reviewerId,
+      userId,
+      kind,
+      expectedRevision: parsed.data.expectedRevision,
+      content: regrounded.markdown,
+      grounding: regrounded.report,
+    });
+  } catch (error) {
+    if (isPublicError(error)) return NextResponse.json({ error: error.message }, { status: 400 });
+    throw error;
+  }
   if (!row) return NextResponse.json({ error: "View not found" }, { status: 404 });
   if ("stale" in row) {
     return NextResponse.json(

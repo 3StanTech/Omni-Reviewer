@@ -12,6 +12,7 @@ import {
   originKeyFor,
   type AskHistoryMessage,
   type AskQuestion,
+  type ExplainKeyTarget,
 } from "@/lib/ask";
 import {
   MAX_ASK_QUESTION_CHARS,
@@ -139,21 +140,12 @@ export async function POST(request: Request, context: Context) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
   }
   const body: AskRequest = parsed.data;
-  const originKey = originKeyFor(body);
-  const origin: AskOrigin = body.kind === "ask" || !originKey
-    ? { kind: "ask" }
-    : { kind: body.kind, key: originKey };
 
-  // A repeat Explain or Ask why returns the earlier answer with no model call.
-  if (originKey) {
-    const existing = await findReusableAnswer(reviewerId, userId, originKey);
-    if (existing) {
-      const response: AskResponse = { messages: exchangeMessages(existing), reused: true };
-      return NextResponse.json(response);
-    }
-  }
-
+  // Validate the live target and read the current Ready sources before any
+  // reuse, so a missing or archived target is never revived by an old answer
+  // and an edited target or changed source never reuses a stale one.
   let question: AskQuestion;
+  let explainTarget: ExplainKeyTarget | null = null;
   if (body.kind === "ask") {
     question = { prompt: body.question, displayText: body.question };
   } else if (body.kind === "ask_why") {
@@ -167,20 +159,41 @@ export async function POST(request: Request, context: Context) {
         : { type: "card", cardId: body.target.cardId },
     });
     if (!target) return NextResponse.json({ error: "That item was not found in this pack." }, { status: 404 });
-    question = target.type === "test_item"
-      ? buildExplainQuestion({
-        question: target.item.question,
-        choices: target.item.choices,
-        answer: target.item.answer,
-        explanation: target.item.explanation,
-        chosen: body.target.type === "test_item" ? body.target.chosen : "",
-      })
-      : buildExplainQuestion({ front: target.card.front, back: target.card.back });
+    explainTarget = target.type === "test_item"
+      ? {
+          type: "test_item",
+          itemId: target.item.id,
+          question: target.item.question,
+          choices: target.item.choices,
+          answer: target.item.answer,
+          explanation: target.item.explanation,
+          chosen: body.target.type === "test_item" ? body.target.chosen : "",
+        }
+      : { type: "card", cardId: target.card.id, front: target.card.front, back: target.card.back };
+    question = buildExplainQuestion(explainTarget);
   }
 
   const sources = await loadAskSources(reviewerId, userId);
   if (sources.length === 0) {
     return NextResponse.json({ error: "Add a source with text first." }, { status: 409 });
+  }
+
+  const originKey = body.kind === "ask_why"
+    ? originKeyFor({ kind: "ask_why", sentence: body.sentence, sources })
+    : explainTarget
+      ? originKeyFor({ kind: "explain", target: explainTarget, sources })
+      : null;
+  const origin: AskOrigin = body.kind === "ask" || !originKey
+    ? { kind: "ask" }
+    : { kind: body.kind, key: originKey };
+
+  // An unchanged repeat Explain or Ask why returns the earlier answer with no model call.
+  if (originKey) {
+    const existing = await findReusableAnswer(reviewerId, userId, originKey);
+    if (existing) {
+      const response: AskResponse = { messages: exchangeMessages(existing), reused: true };
+      return NextResponse.json(response);
+    }
   }
 
   // Plain questions carry the recent thread, minus refused exchanges; Explain

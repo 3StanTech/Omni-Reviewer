@@ -16,7 +16,8 @@
  * --threshold <T> (0.30-0.55) tries another second-look threshold on a dry
  * run; it is refused with --apply, which always uses the code constant.
  * Dry run by default: no writes. --apply saves each changed document through
- * updateStudyView with its read revision and skips one that changed since.
+ * updateStudyView with its read revision and skips one that changed since or
+ * that the reader could not display, counting each in the summary.
  * No model calls; no other writes.
  */
 
@@ -24,6 +25,7 @@ import { and, eq, inArray, isNull, like } from "drizzle-orm";
 
 import { readStudyDocumentMeta, UNSOURCED_TOKEN } from "@/lib/citations";
 import { db } from "@/lib/db";
+import { isPublicError } from "@/lib/public-errors";
 import { getViewForReviewer, loadGroundingSources, updateStudyView } from "@/lib/queries";
 import { recheckDocument } from "@/lib/recheck-tags";
 import { reviewers, topics, views } from "@/lib/schema";
@@ -93,6 +95,7 @@ async function main() {
   const termTotals: Record<string, number> = {};
   let applied = 0;
   let skipped = 0;
+  let unrenderable = 0;
   let secondLookClears = 0;
   let overlapClears = 0;
   let termFlagTagsKept = 0;
@@ -127,20 +130,28 @@ async function main() {
 
     let outcome = result.changed ? "would change" : "unchanged";
     if (apply && result.changed) {
-      const row = await updateStudyView({
-        reviewerId: document.reviewerId,
-        userId: document.userId,
-        kind,
-        expectedRevision: view.revision,
-        content: result.markdown,
-        grounding: result.report,
-      });
-      if (!row || "stale" in row) {
-        skipped++;
-        outcome = "skipped (changed)";
-      } else {
-        applied++;
-        outcome = "applied";
+      try {
+        const row = await updateStudyView({
+          reviewerId: document.reviewerId,
+          userId: document.userId,
+          kind,
+          expectedRevision: view.revision,
+          content: result.markdown,
+          grounding: result.report,
+        });
+        if (!row || "stale" in row) {
+          skipped++;
+          outcome = "skipped (changed)";
+        } else {
+          applied++;
+          outcome = "applied";
+        }
+      } catch (error) {
+        // One stored document the reader cannot render must not stop the batch.
+        if (!isPublicError(error)) throw error;
+        unrenderable++;
+        outcome = "skipped (can't be displayed)";
+        console.log(`  not saved: ${error.message}`);
       }
     }
     rows.push({
@@ -162,7 +173,7 @@ async function main() {
   console.log(
     `second-look clears: ${secondLookClears}, overlap clears: ${overlapClears}, term-flag tags kept: ${termFlagTagsKept}`,
   );
-  if (apply) console.log(`applied ${applied} documents, skipped ${skipped} (changed)`);
+  if (apply) console.log(`applied ${applied} documents, skipped ${skipped} (changed), skipped ${unrenderable} (can't be displayed)`);
   else console.log("Dry run: nothing saved. Re-run with --apply to save.");
 }
 

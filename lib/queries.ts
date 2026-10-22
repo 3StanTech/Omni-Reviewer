@@ -82,6 +82,7 @@ import {
   MAX_TEST_ATTEMPT_SELECTED_ANSWER_CHARS,
 } from "@/lib/learning-limits";
 import { publicSourceErrorMessage, PublicError } from "@/lib/public-errors";
+import { studyMarkdownProblem } from "@/lib/study-markdown";
 import {
   examCap,
   fsrsNext,
@@ -2790,6 +2791,10 @@ export async function updateStudyView(args: {
   if (!reviewer) return null;
   if (args.content !== undefined) {
     const normalizedContent = normalizeDocumentText(args.content);
+    if (args.kind === "locked_in" || args.kind === "summary") {
+      const problem = studyMarkdownProblem(normalizedContent);
+      if (problem) throw new PublicError(problem);
+    }
     const current = await getViewForReviewer(args.reviewerId, args.userId, args.kind);
     if (!current || current.revision !== args.expectedRevision) return { stale: true as const };
     const activeAnnotations = args.kind === "locked_in" || args.kind === "summary"
@@ -3123,6 +3128,7 @@ export async function updateCard(args: {
         eq(cards.id, args.cardId),
         eq(cards.reviewerId, args.reviewerId),
         eq(cards.revision, args.expectedRevision),
+        isNull(cards.archivedAt),
       ),
     )
     .returning();
@@ -3315,7 +3321,7 @@ export async function syncGeneratedCards(args: {
       RETURNING id
     ), archived AS (
       UPDATE cards c
-      SET archived_at = NOW(), updated_at = NOW()
+      SET archived_at = NOW(), revision = c.revision + 1, updated_at = NOW()
       FROM valid
       WHERE c.reviewer_id = ${args.reviewerId}
         AND NOT EXISTS (SELECT 1 FROM input WHERE input.id = c.source_key)
@@ -3515,6 +3521,7 @@ export async function reviewCard(args: {
         WHERE id = ${args.cardId}
           AND reviewer_id = ${args.reviewerId}
           AND revision = ${args.expectedRevision}
+        AND archived_at IS NULL
         RETURNING ${returningCard}
       ), inserted AS (
         INSERT INTO card_reviews (
@@ -3570,6 +3577,7 @@ export async function reviewCard(args: {
       WHERE id = ${args.cardId}
         AND reviewer_id = ${args.reviewerId}
         AND revision = ${args.expectedRevision}
+        AND archived_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM existing_request)
       RETURNING ${returningCard}
     ), inserted AS (
@@ -4635,6 +4643,10 @@ export async function persistViewForActiveClaim(args: {
   if (args.content.length > MAX_GENERATED_MARKDOWN_CHARS) {
     throw new Error("Generated text exceeds the safe output limit");
   }
+  if (kind === "locked_in" || kind === "summary") {
+    const problem = studyMarkdownProblem(args.content);
+    if (problem) throw new PublicError(problem);
+  }
   if (kind === "test_me" || kind === "carded") {
     if (!Array.isArray(args.contentJson)) {
       throw new Error("Generated structured output is invalid");
@@ -4914,7 +4926,7 @@ export async function persistViewForActiveClaim(args: {
       RETURNING id
     ), archived_cards AS (
       UPDATE cards existing_card
-      SET archived_at = NOW(), updated_at = NOW()
+      SET archived_at = NOW(), revision = existing_card.revision + 1, updated_at = NOW()
       FROM valid_claim valid
       CROSS JOIN view_gate
       WHERE valid.step = 'carded'::generation_job_step
@@ -5176,21 +5188,28 @@ export async function consumePasswordResetAndSetPassword(
 ): Promise<string | null> {
   const tokenHash = hashResetToken(token);
   const passwordHash = await hashPassword(password);
+  // One statement: the token is consumed only if the password and session
+  // version update in the same statement succeeds. A failure rolls both back
+  // and leaves the token usable (neon-http has no callback transactions).
   const result = await db.execute(sql`
-    UPDATE password_reset_tokens
-    SET consumed_at = NOW()
-    WHERE token_hash = ${tokenHash}
-      AND consumed_at IS NULL
-      AND expires_at > NOW()
-    RETURNING user_id
+    WITH consumed AS (
+      UPDATE password_reset_tokens
+      SET consumed_at = NOW()
+      WHERE token_hash = ${tokenHash}
+        AND consumed_at IS NULL
+        AND expires_at > NOW()
+      RETURNING user_id
+    )
+    UPDATE users
+    SET password_hash = ${passwordHash},
+        session_version = users.session_version + 1
+    FROM consumed
+    WHERE users.id = consumed.user_id
+    RETURNING users.id AS user_id
   `);
   const userId = result.rows[0]?.user_id;
   if (typeof userId !== "string" || userId.length === 0) {
     return null;
   }
-  await db
-    .update(users)
-    .set({ passwordHash })
-    .where(eq(users.id, userId));
   return userId;
 }

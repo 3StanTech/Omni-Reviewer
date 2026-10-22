@@ -7,6 +7,7 @@ export type GenerationErrorCode =
   | "daily_limit"
   | "unavailable"
   | "token_limit"
+  | "render_limit"
   | "json_parse"
   | "timeout"
   | "unknown";
@@ -35,6 +36,7 @@ const PUBLIC_GENERATION_MESSAGES: Record<string, string> = {
   unavailable: "The model provider is temporarily unavailable. Try again shortly.",
   token_limit:
     "The source material is too long for this model. Split sources or shorten Locked In content.",
+  render_limit: "This came out too long or too math-heavy to display. Try generating it again.",
   timeout: "Generation timed out. Try again in a moment.",
   json_parse: "The model returned invalid structured data after repair. Try generating again.",
   unknown: UNKNOWN_GENERATION_MESSAGE,

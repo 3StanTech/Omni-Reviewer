@@ -1,3 +1,4 @@
+import { redirectIfSignedIn } from "@/auth";
 import { AuthPageShell } from "@/components/auth-page-shell";
 import {
   ResetPasswordForm,
@@ -7,9 +8,11 @@ import { isUsableAuthSecret } from "@/lib/auth-secret";
 import { normalizeLoginEmail } from "@/lib/login-throttle";
 import {
   PASSWORD_RESET_INVALID_MESSAGE,
+  PASSWORD_RESET_RETRY_MESSAGE,
   passwordValidationError,
   resetThrottleKey,
 } from "@/lib/password-reset";
+import { logRedactedError } from "@/lib/public-errors";
 import {
   clearLoginThrottle,
   consumePasswordResetAndSetPassword,
@@ -46,9 +49,15 @@ async function resetPasswordAction(
     return { error: passwordError, done: false };
   }
 
-  const userId = await consumePasswordResetAndSetPassword(tokenRaw, password).catch(
-    () => null,
-  );
+  let userId: string | null;
+  try {
+    userId = await consumePasswordResetAndSetPassword(tokenRaw, password);
+  } catch (error) {
+    // The token is only consumed when the new password is saved, so the link
+    // still works on retry.
+    logRedactedError("Password reset failed", error);
+    return { error: PASSWORD_RESET_RETRY_MESSAGE, done: false };
+  }
   if (!userId) {
     return { error: PASSWORD_RESET_INVALID_MESSAGE, done: false };
   }
@@ -72,6 +81,7 @@ export default async function ResetPasswordPage({
 }: {
   searchParams: Promise<{ token?: string }>;
 }) {
+  await redirectIfSignedIn();
   const { token } = await searchParams;
   const usable =
     typeof token === "string" && token.trim().length > 0

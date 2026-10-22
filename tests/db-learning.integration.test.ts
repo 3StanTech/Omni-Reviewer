@@ -33,14 +33,20 @@ import {
   listReviewersByTopic,
   reviewCard,
   serializeCard,
+  consumePasswordResetAndSetPassword,
+  updateCard,
   updateStudyView,
 } from "@/lib/queries";
+import { hashResetToken } from "@/lib/password-reset";
+import { hashPassword, verifyPassword } from "@/lib/auth-utils";
+import { MAX_STUDY_MARKDOWN_CHARS } from "@/lib/study-markdown";
 import { fsrsNext, fsrsStateFromHistory } from "@/lib/fsrs";
 import { selectTodayCards } from "@/lib/pacing";
 import {
   blobReservations,
   cardReviews,
   cards,
+  passwordResetTokens,
   reviewers,
   sources,
   testAttempts,
@@ -834,6 +840,89 @@ describeDb("Neon FSRS integration", () => {
     await backfillFsrs();
     expect(await snapshot()).toEqual(first);
   }, 60_000);
+
+  it("rejects edits and fresh ratings on an archived card but keeps a saved rating's replay", async () => {
+    const reviewerId = await seedReviewer(null);
+    const cardId = await seedCard(reviewerId, { fsrsState: 0 });
+    const requestId = randomUUID();
+    const first = await reviewCard({ reviewerId, userId, cardId, expectedRevision: 1, rating: "good", clientRequestId: requestId });
+    expect(first).not.toMatchObject({ stale: true });
+    // Archive without touching the revision, so the active-card predicate alone must refuse.
+    await db.update(cards).set({ archivedAt: new Date() }).where(eq(cards.id, cardId));
+
+    await expect(updateCard({ reviewerId, userId, cardId, expectedRevision: 2, back: "Hidden edit" }))
+      .resolves.toEqual({ stale: true });
+    await expect(reviewCard({ reviewerId, userId, cardId, expectedRevision: 2, rating: "again" }))
+      .resolves.toEqual({ stale: true });
+    await expect(reviewCard({ reviewerId, userId, cardId, expectedRevision: 2, rating: "again", clientRequestId: randomUUID() }))
+      .resolves.toEqual({ stale: true });
+    const replay = await reviewCard({ reviewerId, userId, cardId, expectedRevision: 1, rating: "good", clientRequestId: requestId });
+    expect(replay).toMatchObject({ replayed: true, savedRating: "good" });
+
+    const history = await db.select().from(cardReviews).where(eq(cardReviews.cardId, cardId));
+    expect(history).toHaveLength(1);
+    const [stored] = await db.select().from(cards).where(eq(cards.id, cardId));
+    expect(stored).toMatchObject({ back: "Back", revision: 2 });
+  }, 30_000);
+
+  it("consumes a reset token only together with the password and session version", async () => {
+    const resetUserId = randomUUID();
+    await db.insert(users).values({
+      id: resetUserId,
+      email: `reset-integration-${resetUserId}@example.invalid`,
+      passwordHash: await hashPassword("integration-password-0"),
+    });
+    const constraint = `reset_fault_${resetUserId.replaceAll("-", "")}`;
+    try {
+      const token = `integration-token-${resetUserId}`;
+      await db.insert(passwordResetTokens).values({
+        userId: resetUserId,
+        tokenHash: hashResetToken(token),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+
+      // Fault injection: this user's row refuses any session version above 0,
+      // so the password half of the statement fails.
+      await db.execute(sql.raw(
+        `ALTER TABLE users ADD CONSTRAINT ${constraint} CHECK (id <> '${resetUserId}' OR session_version = 0) NOT VALID`,
+      ));
+      try {
+        await expect(consumePasswordResetAndSetPassword(token, "integration-password-1")).rejects.toThrow();
+      } finally {
+        await db.execute(sql.raw(`ALTER TABLE users DROP CONSTRAINT IF EXISTS ${constraint}`));
+      }
+      const [unconsumed] = await db.select().from(passwordResetTokens).where(eq(passwordResetTokens.userId, resetUserId));
+      expect(unconsumed?.consumedAt).toBeNull();
+      const [unchanged] = await db.select().from(users).where(eq(users.id, resetUserId));
+      expect(await verifyPassword("integration-password-0", unchanged!.passwordHash)).toBe(true);
+
+      await expect(consumePasswordResetAndSetPassword(token, "integration-password-2")).resolves.toBe(resetUserId);
+      const [updated] = await db.select().from(users).where(eq(users.id, resetUserId));
+      expect(updated?.sessionVersion).toBe(1);
+      expect(await verifyPassword("integration-password-2", updated!.passwordHash)).toBe(true);
+      await expect(consumePasswordResetAndSetPassword(token, "integration-password-3")).resolves.toBeNull();
+      const [after] = await db.select().from(users).where(eq(users.id, resetUserId));
+      expect(after?.sessionVersion).toBe(1);
+    } finally {
+      await db.delete(users).where(eq(users.id, resetUserId));
+    }
+  }, 30_000);
+
+  it("refuses to save a study document the reader cannot render and keeps the boundary size", async () => {
+    const reviewerId = await seedReviewer(null);
+    await db.insert(views).values({ reviewerId, kind: "locked_in", content: "Start", revision: 1 });
+    const tooLong = "a".repeat(MAX_STUDY_MARKDOWN_CHARS + 1);
+    await expect(updateStudyView({ reviewerId, userId, kind: "locked_in", expectedRevision: 1, content: tooLong }))
+      .rejects.toThrow(/too long to display/);
+    const [unchanged] = await db.select().from(views).where(eq(views.reviewerId, reviewerId));
+    expect(unchanged).toMatchObject({ content: "Start", revision: 1 });
+
+    const boundary = "a".repeat(MAX_STUDY_MARKDOWN_CHARS);
+    const saved = await updateStudyView({ reviewerId, userId, kind: "locked_in", expectedRevision: 1, content: boundary });
+    expect(saved).not.toMatchObject({ stale: true });
+    const [stored] = await db.select().from(views).where(eq(views.reviewerId, reviewerId));
+    expect(stored?.content).toHaveLength(MAX_STUDY_MARKDOWN_CHARS);
+  }, 30_000);
 });
 
 describeDb("Neon mastery and Today owner scoping", () => {

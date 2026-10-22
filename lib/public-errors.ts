@@ -119,6 +119,7 @@ const SAFE_LOG_CONTEXTS = new Set([
   "Blob verification failed",
   "Could not save source",
   "Password reset email failed",
+  "Password reset failed",
   "PDF export failed",
   "Free request ledger failed",
 ]);
@@ -166,6 +167,7 @@ const SAFE_PROVIDER_CODES = new Map(
     "daily_limit",
     "unavailable",
     "token_limit",
+    "render_limit",
     "json_parse",
     "timeout",
     "unknown",

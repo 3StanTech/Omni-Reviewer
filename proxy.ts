@@ -11,6 +11,10 @@
  *   which verifies Blob's own token. t4 owns that route; source rows are
  *   created later via a session-gated POST, not from the callback.
  * - All other /api/* → 401 JSON (not a redirect), for fetch callers
+ *
+ * This gate only checks that a session cookie decodes. Revocation after a
+ * password reset (session version) is enforced by auth() in auth.ts, which
+ * pages, routes and server actions call; it would cost a database read here.
  */
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
@@ -88,10 +92,7 @@ export default auth((req) => {
     return NextResponse.next();
   }
 
-  if (isPublicAuthPage(pathname)) {
-    return NextResponse.redirect(new URL("/", req.nextUrl.origin));
-  }
-
+  // Public auth pages render for any cookie; see redirectIfSignedIn in auth.ts.
   return NextResponse.next();
 });
 

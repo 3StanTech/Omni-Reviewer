@@ -123,6 +123,8 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  /** Raised by every password reset; JWTs carrying a lower version are refused. */
+  sessionVersion: integer("session_version").notNull().default(0),
 });
 
 export const loginThrottles = pgTable("login_throttles", {
@@ -571,7 +573,7 @@ export const packChatMessages = pgTable("pack_chat_messages", {
   replyToId: uuid("reply_to_id").references((): AnyPgColumn => packChatMessages.id, {
     onDelete: "set null",
   }),
-  /** Explain / Ask why reuse key, for example `test:<itemId>` or `card:<cardId>`. */
+  /** Explain / Ask why reuse key: a versioned origin kind plus a content hash (see lib/ask.ts). */
   originKey: text("origin_key"),
   savedAt: timestamp("saved_at", { withTimezone: true }),
   clearedAt: timestamp("cleared_at", { withTimezone: true }),
