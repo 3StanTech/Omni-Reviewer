@@ -100,6 +100,21 @@ function visibleTargets(name: string): HTMLElement[] {
  * open). In 4b the Study pack Kirby's spot is empty outside Dream Land (and absent once the
  * free requests are used up), so the bubble sits by Generate instead.
  */
+/**
+ * Scrolls a sideways-scrolling strip just enough to show a lit control it clips (the mode tabs
+ * on a narrow laptop, once Locked In or Summary adds its tools). The page itself never moves.
+ */
+function revealSideways(el: HTMLElement) {
+  for (let strip = el.parentElement; strip; strip = strip.parentElement) {
+    if (strip.scrollWidth <= strip.clientWidth || !/auto|scroll/.test(getComputedStyle(strip).overflowX)) continue;
+    const box = strip.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    if (rect.left < box.left) strip.scrollLeft -= box.left - rect.left;
+    else if (rect.right > box.right) strip.scrollLeft += rect.right - box.right;
+    return;
+  }
+}
+
 function viewElements(view: View): HTMLElement[] {
   if (!view.target) return [];
   if (view.kind === "step" && view.step === "upload") {
@@ -216,6 +231,8 @@ export function TourLayer() {
   const relayout = useCallback(() => {
     const current = viewRef.current;
     if (!current) return;
+    const first = viewElements(current)[0];
+    if (first) revealSideways(first);
     const layout = measure(current);
     if (!layout) return;
     const previous = placedRef.current;
