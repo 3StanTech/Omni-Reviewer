@@ -15,7 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const WELCOME_SAY = "Poyo! Welcome back";
-const BELATED_SAY = "Happy belated birthday!";
+const BELATED_SAY = "Belated Happy Birthday!";
 const BELATED_SAY_MS = 3400;
 
 /**

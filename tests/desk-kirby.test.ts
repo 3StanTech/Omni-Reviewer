@@ -64,11 +64,13 @@ describe("deskKirbyLook due cards", () => {
 
 describe("deskKirbyLook belated birthday", () => {
   const birthday = "09-26";
-  it("parties on first run 1 to 30 days after the birthday, Manila time", () => {
+  it("parties on any first run after the birthday, Manila time", () => {
     const belated = { pose: "idle", accessory: "party", cake: true, belated: true };
     expect(deskKirbyLook({ ...at("2026-09-26T16:00:00Z"), birthday, firstRun: true })).toEqual(belated); // Sept 27 00:00
     expect(deskKirbyLook({ ...at("2026-10-26T15:59:00Z"), birthday, firstRun: true })).toEqual(belated); // Oct 26 23:59, day 30
-    expect(deskKirbyLook({ ...at("2026-10-26T16:00:00Z"), birthday, firstRun: true }).pose).toBe("point"); // Oct 27, day 31
+    expect(deskKirbyLook({ ...at("2026-10-26T16:00:00Z"), birthday, firstRun: true })).toEqual(belated); // Oct 27, day 31
+    expect(deskKirbyLook({ ...at("2027-09-25T15:59:00Z"), birthday, firstRun: true })).toEqual(belated); // Sept 25 23:59, day 364
+    expect(deskKirbyLook({ ...at("2027-09-25T16:00:00Z"), birthday, firstRun: true }).belated).toBe(false); // Sept 26, the next birthday
     expect(deskKirbyLook({ ...at("2026-09-26T04:00:00Z"), birthday, firstRun: true }).belated).toBe(false); // the day itself
   });
 

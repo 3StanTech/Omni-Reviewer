@@ -26,7 +26,7 @@ export function deskSubtitle(input: DeskSubtitleInput): string {
   // The heading above already greets by name, so these lines don't repeat it.
   if (input.birthday && input.birthday === monthDay) return "Happy birthday 🎉 Study light today.";
   if (input.firstRun && isBelatedBirthday(input.now, input.birthday, timeZone)) {
-    return "Happy belated birthday 🎉 Let's set up your first study pack.";
+    return "Belated Happy Birthday 🎉 Let's set up your first study pack.";
   }
   if (input.firstRun) return "Let's set up your first study pack.";
   if (hour >= 23 || hour <= 3) return "It's late. A short session, then sleep.";
@@ -37,9 +37,6 @@ export function deskSubtitle(input: DeskSubtitleInput): string {
   }
   return "All caught up! Nothing due today.";
 }
-
-/** How many days after a birthday counts as belated (first run only). */
-export const BELATED_BIRTHDAY_DAYS = 30;
 
 /** Days since the most recent birthday ("MM-DD") in the given zone; 0 on the day itself. */
 export function daysSinceBirthday(now: Date, birthday: string, timeZone = "Asia/Manila"): number {
@@ -52,11 +49,10 @@ export function daysSinceBirthday(now: Date, birthday: string, timeZone = "Asia/
   return Math.round((today - last) / 86_400_000);
 }
 
-/** A birthday 1 to 30 days ago (the day itself is a plain birthday). */
+/** Any day after the birthday until the next one (the day itself is a plain birthday). First run only, so it ends with the first pack. */
 export function isBelatedBirthday(now: Date, birthday: string | null, timeZone = "Asia/Manila"): boolean {
   if (!birthday) return false;
-  const days = daysSinceBirthday(now, birthday, timeZone);
-  return days >= 1 && days <= BELATED_BIRTHDAY_DAYS;
+  return daysSinceBirthday(now, birthday, timeZone) >= 1;
 }
 
 const MONTH_DAY = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;

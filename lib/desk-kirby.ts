@@ -14,7 +14,7 @@ export type DeskKirbyLook = {
   /** "nightcap" is worn late at night (23:00-03:59) and when nothing is due. */
   accessory: "party" | "nightcap" | null;
   cake: boolean;
-  /** First run within 30 days after the birthday: the desk greets with a belated birthday dance. */
+  /** First run on any day after the birthday: the desk greets with a belated birthday dance. */
   belated: boolean;
   /** Late night (23:00-03:59), when he also wears the nightcap: a one-shot yawn on this interval, eyes open between yawns. */
   yawnEveryMs?: number;
