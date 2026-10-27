@@ -261,7 +261,7 @@ password line to the command from a protected secret source.
 | `npm run user:create` | Invite a user (`tsx scripts/create-user.ts`) |
 | `npm test` | Run Vitest |
 
-GitHub Actions runs `npm ci`, `npx next typegen`, `npx tsc --noEmit`, `npm test`, `npm run lint` and a production build on main and pull requests, on Node 20 with npm 10. Keep `package-lock.json` installable by npm 10: after an install with a newer npm, run `npx npm@10 install --package-lock-only`.
+GitHub Actions runs `npm ci`, `npx next typegen`, `npx tsc --noEmit`, `npm test`, `npm run lint` and a production build on main and pull requests, on Node 24 with npm 11.
 
 ### Real-app contract checks
 
